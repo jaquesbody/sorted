@@ -128,6 +128,18 @@ function readFileAsJSON(file) {
   });
 }
 
+function setDateFieldToToday() {
+  const today = new Date().toISOString().slice(0, 10);
+  const dateField = document.getElementById('date');
+  const dueDateField = document.getElementById('dueDate');
+  if (dateField) dateField.value = today;
+  if (dueDateField) dueDateField.value = today;
+}
+
+function clearStatusAfterDelay(status, delay = 3000) {
+  setTimeout(() => { status.textContent = ''; }, delay);
+}
+
 async function handleCameraCapture(file) {
   const cameraBtn = document.getElementById('camera-btn');
   const status = document.getElementById('ocr-status');
@@ -141,9 +153,11 @@ async function handleCameraCapture(file) {
 
   try {
     const text = await runOCRWithTimeout(file, (msg) => { status.textContent = msg; });
-    document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
+    document.getElementById('title').value = guessTitleFromText(text);
     document.getElementById('amount').value = guessAmountFromText(text);
+    setDateFieldToToday();
     status.textContent = 'Done — check the fields above.';
+    clearStatusAfterDelay(status);
   } catch (err) {
     console.error('OCR failed:', err);
     document.getElementById('title').value = `OCR failed: ${err.message || err} — enter manually`;
@@ -187,10 +201,14 @@ async function importCaptureFiles(fileList) {
     const status = document.getElementById('ocr-status');
     try {
       const text = await runOCRWithTimeout(imageFile, (msg) => { if (status) status.textContent = msg; });
-      document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
+      document.getElementById('title').value = guessTitleFromText(text);
       document.getElementById('amount').value = guessAmountFromText(text);
       if (data.category) document.getElementById('category').value = data.category;
-      if (status) status.textContent = 'Done — check the fields above.';
+      setDateFieldToToday();
+      if (status) {
+        status.textContent = 'Done — check the fields above.';
+        clearStatusAfterDelay(status);
+      }
     } catch (err) {
       console.error('OCR failed:', err);
       alert(`OCR failed: ${err.message || err} — enter details manually.`);
