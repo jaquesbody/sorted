@@ -12,16 +12,28 @@
    the confirm step is not optional.
    ============================================================================= */
 
-async function runOCR(imageFile) {
+async function runOCR(imageFile, onProgress) {
   const worker = await Tesseract.createWorker('eng', 1, {
     workerPath: 'static/vendor/tesseract/worker.min.js',
     corePath: 'static/vendor/tesseract/core/tesseract-core-lstm.js',
     langPath: 'static/vendor/tesseract/lang/',
+    logger: (m) => {
+      if (onProgress) onProgress(`${m.status}${m.progress !== undefined ? ' ' + Math.round(m.progress * 100) + '%' : ''}`);
+    },
   });
 
   const { data: { text } } = await worker.recognize(imageFile);
   await worker.terminate();
   return text;
+}
+
+function runOCRWithTimeout(imageFile, onProgress, timeoutMs = 25000) {
+  return Promise.race([
+    runOCR(imageFile, onProgress),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Timed out after 25s — likely a file failed to load')), timeoutMs)
+    ),
+  ]);
 }
 
 function guessAmountFromText(text) {

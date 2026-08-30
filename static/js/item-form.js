@@ -130,6 +130,7 @@ function readFileAsJSON(file) {
 
 async function handleCameraCapture(file) {
   const cameraBtn = document.getElementById('camera-btn');
+  const status = document.getElementById('ocr-status');
   cameraBtn.disabled = true;
   const originalHTML = cameraBtn.innerHTML;
   cameraBtn.innerHTML = '...';
@@ -139,12 +140,14 @@ async function handleCameraCapture(file) {
   triggerDownload(file, `SortedCaptures/receipt-${timestamp}.${ext}`);
 
   try {
-    const text = await runOCR(file);
+    const text = await runOCRWithTimeout(file, (msg) => { status.textContent = msg; });
     document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
     document.getElementById('amount').value = guessAmountFromText(text);
+    status.textContent = 'Done — check the fields above.';
   } catch (err) {
     console.error('OCR failed:', err);
     document.getElementById('title').value = `OCR failed: ${err.message || err} — enter manually`;
+    status.textContent = `Failed: ${err.message || err}`;
   } finally {
     cameraBtn.disabled = false;
     cameraBtn.innerHTML = originalHTML;
@@ -181,13 +184,17 @@ async function importCaptureFiles(fileList) {
       alert('This is a receipt capture — also select its matching image file to run OCR.');
       return;
     }
+    const status = document.getElementById('ocr-status');
     try {
-      const text = await runOCR(imageFile);
+      const text = await runOCRWithTimeout(imageFile, (msg) => { if (status) status.textContent = msg; });
       document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
       document.getElementById('amount').value = guessAmountFromText(text);
       if (data.category) document.getElementById('category').value = data.category;
+      if (status) status.textContent = 'Done — check the fields above.';
     } catch (err) {
-      alert('OCR failed on that image — enter details manually.');
+      console.error('OCR failed:', err);
+      alert(`OCR failed: ${err.message || err} — enter details manually.`);
+      if (status) status.textContent = `Failed: ${err.message || err}`;
     }
     return;
   }
