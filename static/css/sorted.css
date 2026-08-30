@@ -1,0 +1,533 @@
+/* =============================================================================
+   sorted.css
+   Extends main.css — do not duplicate tokens or reset rules here.
+   Accent: blue, chosen to sit apart from Know's orange (#ff5c00) and the
+   portfolio's identity green (#0EDA29). Distinct per protocol.md 4.3.
+   ============================================================================= */
+
+:root {
+  --accent: #3d8bfd;
+  --accent-hover: #2a76e0;
+  --accent-muted: rgba(61, 139, 253, 0.12);
+}
+
+/* -----------------------------------------------------------------------------
+   Header — wordmark + tagline, matches Know's top-left/top-right pattern
+   ----------------------------------------------------------------------------- */
+
+.app-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-1);
+}
+
+.dashboard-header {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-bold);
+}
+
+.tagline {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* -----------------------------------------------------------------------------
+   Dashboard — the single no-scroll screen on open (project.md 3)
+   Order: Spend, Due, Savings. Equal size, compact.
+   ----------------------------------------------------------------------------- */
+
+.dashboard {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3);
+  gap: var(--space-3);
+}
+
+.summary-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Metric card — one of the three headline numbers, all equal size */
+.metric-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  position: relative;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.metric-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+
+.metric-card:hover,
+.metric-card:focus-visible {
+  background-color: var(--accent-muted);
+}
+
+/* -----------------------------------------------------------------------------
+   Metric header — value and label on one line
+   ----------------------------------------------------------------------------- */
+
+.metric-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.metric-value {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-heading);
+  color: var(--accent);
+}
+
+.metric-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.metric-sub {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+/* -----------------------------------------------------------------------------
+   Category breakdown — mini bar visualisation, no icons (non-goal 8)
+   ----------------------------------------------------------------------------- */
+
+.category-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: var(--space-1);
+}
+
+.category-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.category-name {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  width: 5rem;
+  flex-shrink: 0;
+}
+
+.category-info-btn {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--text-secondary);
+  background: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+
+.category-info-btn:hover,
+.category-info-btn:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.category-bar-track {
+  flex: 1;
+  height: 6px;
+  background-color: var(--accent-muted);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.category-bar-fill {
+  height: 100%;
+  background-color: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.category-amount {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  width: 3.5rem;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.category-empty {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-style: normal;
+}
+
+/* -----------------------------------------------------------------------------
+   Savings progress bar
+   ----------------------------------------------------------------------------- */
+
+.savings-progress-track {
+  height: 8px;
+  background-color: var(--accent-muted);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin-top: var(--space-1);
+}
+
+.savings-progress-fill {
+  height: 100%;
+  background-color: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+/* -----------------------------------------------------------------------------
+   Item list — spend / savings / due pages
+   ----------------------------------------------------------------------------- */
+
+.item-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.item-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) 0;
+  cursor: pointer;
+}
+
+.item-row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.item-progress-track {
+  height: 4px;
+  background-color: var(--accent-muted);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.item-progress-fill {
+  height: 100%;
+  background-color: var(--accent);
+  border-radius: var(--radius-pill);
+}
+
+.item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+}
+
+.item-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.item-amount {
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+}
+
+.item-status {
+  display: inline-block;
+  font-size: var(--text-xs);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.item-status--confirmed {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.item-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: none;
+  border: none;
+  appearance: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.icon-btn--confirm {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.icon-btn--confirm svg {
+  opacity: 0;
+}
+
+.icon-btn--confirm.is-confirmed {
+  background-color: var(--accent);
+  color: var(--color-black);
+}
+
+.icon-btn--confirm.is-confirmed svg {
+  opacity: 1;
+}
+
+.icon-btn--recurring {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.icon-btn--edit {
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn--edit:hover,
+.icon-btn--edit:focus-visible {
+  color: var(--accent);
+}
+
+.icon-btn--back {
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
+}
+
+.icon-btn--nav {
+  color: var(--accent);
+}
+
+.month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+.month-nav-label {
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+  color: var(--text-primary);
+  min-width: 9.5rem;
+  text-align: center;
+}
+
+.icon-btn--pay {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+
+.icon-btn--pay svg {
+  opacity: 0;
+}
+
+.icon-btn--pay.is-paid {
+  background-color: var(--accent);
+  color: var(--color-black);
+}
+
+.icon-btn--pay.is-paid svg {
+  opacity: 1;
+}
+
+.paid-label {
+  font-size: var(--text-xs);
+  color: var(--accent);
+  font-weight: var(--weight-bold);
+}
+
+.btn-accent--square {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+
+/* -----------------------------------------------------------------------------
+   Add/edit form — shared across Spend, Due, Savings
+   ----------------------------------------------------------------------------- */
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--space-2);
+}
+
+.form-label {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.form-input,
+.form-select {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  width: 100%;
+}
+
+.form-input:focus,
+.form-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.form-checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.form-checkbox-row .form-label {
+  color: var(--text-primary);
+}
+
+.form-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.btn-danger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) var(--space-3);
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-weight: var(--weight-bold);
+  font-size: var(--text-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.btn-danger:hover {
+  border-color: var(--text-secondary);
+}
+
+.mode-toggle {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+}
+
+.mode-toggle-btn {
+  flex: 1;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  cursor: pointer;
+}
+
+.mode-toggle-btn.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background-color: var(--accent-muted);
+}
+
+.capture-btn {
+  width: 100%;
+  padding: var(--space-4);
+  background-color: var(--bg-surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  cursor: pointer;
+  margin-bottom: var(--space-2);
+}
+
+.capture-preview {
+  width: 100%;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+  display: none;
+}
+
+.card-add-btn {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: 30px;
+  height: 30px;
+  background-color: var(--accent);
+  color: var(--color-black);
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-base);
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.save-toast {
+  position: fixed;
+  bottom: var(--space-3);
+  left: var(--space-3);
+  right: var(--space-3);
+  background-color: var(--accent);
+  color: var(--color-black);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  text-align: center;
+  display: none;
+}

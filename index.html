@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#3d8bfd">
+<title>Sorted</title>
+<link rel="stylesheet" href="static/css/main.css">
+<link rel="stylesheet" href="static/css/sorted.css">
+</head>
+<body>
+
+<main class="dashboard">
+
+  <div class="app-header">
+    <h1 class="dashboard-header">Sorted</h1>
+    <span class="tagline">easily track your spending</span>
+  </div>
+
+  <div class="summary-grid">
+
+    <div class="metric-card">
+      <button type="button" class="card-add-btn" data-add-type="spend" aria-label="Add spend">+</button>
+      <div class="metric-card-body" data-nav="spend.html">
+        <span class="metric-line"><span class="metric-value" id="spend-total">£333.70</span><span class="metric-label">spent this month</span></span>
+        <span class="metric-sub" id="spend-annual">£333.70 this year</span>
+        <div class="category-breakdown" id="spend-categories">
+          <div class="category-row">
+            <span class="category-name">Utilities</span>
+            <div class="category-bar-track"><div class="category-bar-fill" style="width:85%"></div></div>
+            <span class="category-amount">£283.65</span>
+          </div>
+          <div class="category-row">
+            <span class="category-name">Motor</span>
+            <div class="category-bar-track"><div class="category-bar-fill" style="width:12%"></div></div>
+            <span class="category-amount">£40.05</span>
+          </div>
+          <div class="category-row">
+            <span class="category-name">Entertainment</span>
+            <div class="category-bar-track"><div class="category-bar-fill" style="width:3%"></div></div>
+            <span class="category-amount">£10.00</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metric-card">
+      <button type="button" class="card-add-btn" data-add-type="due" aria-label="Add due item">+</button>
+      <div class="metric-card-body" data-nav="due.html">
+        <span class="metric-line"><span class="metric-value" id="due-total">£122.10</span><span class="metric-label">due this month</span></span>
+        <span class="metric-sub" id="due-next">2 items due</span>
+        <div class="category-breakdown" id="due-categories">
+          <div class="category-row">
+            <span class="category-name">Mortgage</span>
+            <button class="category-info-btn" type="button" onclick="event.stopPropagation(); alert('Mortgage payment due 3 Sep 2026')" aria-label="Mortgage due date">i</button>
+            <div class="category-bar-track"><div class="category-bar-fill" style="width:80%"></div></div>
+            <span class="category-amount">£98.00</span>
+          </div>
+          <div class="category-row">
+            <span class="category-name">Utilities</span>
+            <button class="category-info-btn" type="button" onclick="event.stopPropagation(); alert('Electricity payment due 16 Sep 2026')" aria-label="Utilities due date">i</button>
+            <div class="category-bar-track"><div class="category-bar-fill" style="width:20%"></div></div>
+            <span class="category-amount">£24.10</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="metric-card">
+      <div class="metric-card-body" data-nav="savings.html">
+        <span class="metric-line"><span class="metric-value" id="savings-total">£100.00</span><span class="metric-label">Saved</span></span>
+        <span class="metric-sub" id="savings-target">10% of £1,000 target</span>
+        <div class="savings-progress-track">
+          <div class="savings-progress-fill" style="width:10%"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</main>
+
+<script src="static/js/db.js"></script>
+<script src="static/js/utils.js"></script>
+<script src="static/js/dashboard.js"></script>
+
+</body>
+</html>

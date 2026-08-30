@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#3d8bfd">
+<title>Sorted: Due</title>
+<link rel="stylesheet" href="static/css/main.css">
+<link rel="stylesheet" href="static/css/sorted.css">
+</head>
+<body>
+
+<main class="dashboard">
+
+  <div class="flex items-center justify-between mb-1">
+    <a class="icon-btn icon-btn--back" href="index.html" aria-label="Back to dashboard">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </a>
+    <h1 class="dashboard-header" style="margin-bottom:0;">Due</h1>
+    <button class="btn-accent btn-accent--square" id="add-item" aria-label="Add item">+</button>
+  </div>
+
+  <div class="metric-line mb-2">
+    <span class="metric-value" style="font-size:var(--text-base);" id="due-total">£0.00</span>
+    <span class="metric-label">due</span>
+    <span class="metric-label">·</span>
+    <span class="metric-value" style="font-size:var(--text-base);" id="due-count">0</span>
+    <span class="metric-label">items</span>
+  </div>
+
+  <div class="item-list" id="due-list">
+    <!-- Rendered by due.js from IndexedDB -->
+  </div>
+
+</main>
+
+<script src="static/js/db.js"></script>
+<script src="static/js/utils.js"></script>
+<script src="static/js/due.js"></script>
+
+</body>
+</html>
