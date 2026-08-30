@@ -15,7 +15,7 @@
 async function runOCR(imageFile, onProgress) {
   const worker = await Tesseract.createWorker('eng', 1, {
     workerPath: 'static/vendor/tesseract/worker.min.js',
-    corePath: 'static/vendor/tesseract/core/tesseract-core-lstm.js',
+    corePath: 'static/vendor/tesseract/core/tesseract-core-lstm.wasm.js',
     langPath: 'static/vendor/tesseract/lang/',
     logger: (m) => {
       if (onProgress) onProgress(`${m.status}${m.progress !== undefined ? ' ' + Math.round(m.progress * 100) + '%' : ''}`);
