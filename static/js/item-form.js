@@ -128,82 +128,70 @@ function readFileAsJSON(file) {
   });
 }
 
-function handleCameraCapture(file) {
+async function handleCameraCapture(file) {
+  const cameraBtn = document.getElementById('camera-btn');
+  cameraBtn.disabled = true;
+  const originalHTML = cameraBtn.innerHTML;
+  cameraBtn.innerHTML = '...';
+
   const timestamp = Date.now();
   const ext = file.name.split('.').pop() || 'jpg';
-
-  const sidecar = {
-    type: 'receipt-capture',
-    target: type,
-    capturedAt: new Date().toISOString(),
-    imageFile: `receipt-${timestamp}.${ext}`,
-    status: 'pending-ocr',
-  };
-
   triggerDownload(file, `SortedCaptures/receipt-${timestamp}.${ext}`);
-  triggerDownload(new Blob([JSON.stringify(sidecar, null, 2)], { type: 'application/json' }), `SortedCaptures/receipt-${timestamp}.json`);
 
-  alert('Saved to Downloads/SortedCaptures — use the paperclip to import it once synced.');
+  try {
+    const text = await runOCR(file);
+    document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
+    document.getElementById('amount').value = guessAmountFromText(text);
+  } catch (err) {
+    document.getElementById('title').value = 'OCR failed — enter manually';
+  } finally {
+    cameraBtn.disabled = false;
+    cameraBtn.innerHTML = originalHTML;
+  }
 }
 
 async function importCaptureFiles(fileList) {
-  let imported = 0;
-  let skipped = 0;
+  const files = Array.from(fileList);
+  const jsonFile = files.find((f) => f.name.endsWith('.json'));
+  const imageFile = files.find((f) => !f.name.endsWith('.json'));
 
-  for (const file of fileList) {
-    let data;
-    try {
-      data = await readFileAsJSON(file);
-    } catch (err) {
-      skipped++;
-      continue;
-    }
-
-    const targetStore = data.target || 'spend';
-
-    if (data.type === 'manual-capture') {
-      await addItem(targetStore, {
-        title: data.title,
-        amount: data.amount,
-        category: data.category,
-        date: data.date,
-        recurring: data.recurring || false,
-        frequency: data.frequency || null,
-        confirmed: data.confirmed || false,
-        paid: true,
-      });
-      imported++;
-    } else if (data.type === 'receipt-capture') {
-      const captureDate = data.capturedAt ? data.capturedAt.slice(0, 10) : new Date().toISOString().slice(0, 10);
-      if (targetStore === 'due') {
-        await addItem('due', {
-          title: 'Bill (needs review — no OCR yet)',
-          amount: 0,
-          category: data.category || 'Other',
-          dueDate: captureDate,
-          recurring: false,
-          frequency: null,
-        });
-      } else {
-        await addItem('spend', {
-          title: 'Receipt (needs review — no OCR yet)',
-          amount: 0,
-          category: data.category || 'Other',
-          date: captureDate,
-          recurring: false,
-          frequency: null,
-          confirmed: false,
-          paid: true,
-        });
-      }
-      imported++;
-    } else {
-      skipped++;
-    }
+  if (!jsonFile) {
+    alert('Select the .json sidecar file (and its matching image, if it\'s a receipt).');
+    return;
   }
 
-  alert(`Imported ${imported} item(s).${skipped > 0 ? ` Skipped ${skipped} unrecognised file(s).` : ''}`);
-  if (imported > 0) window.location.href = LIST_PAGE[type];
+  let data;
+  try {
+    data = await readFileAsJSON(jsonFile);
+  } catch (err) {
+    alert('Could not read that file — is it a valid Sorted capture file?');
+    return;
+  }
+
+  if (data.type === 'manual-capture') {
+    document.getElementById('title').value = data.title;
+    document.getElementById('amount').value = data.amount;
+    if (data.category) document.getElementById('category').value = data.category;
+    return;
+  }
+
+  if (data.type === 'receipt-capture') {
+    if (!imageFile) {
+      alert('This is a receipt capture — also select its matching image file to run OCR.');
+      return;
+    }
+    try {
+      const text = await runOCR(imageFile);
+      document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
+      document.getElementById('amount').value = guessAmountFromText(text);
+      if (data.category) document.getElementById('category').value = data.category;
+    } catch (err) {
+      alert('OCR failed on that image — enter details manually.');
+    }
+    return;
+  }
+
+  alert('Unrecognised file type.');
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -233,7 +221,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     document.getElementById('import-input').addEventListener('change', (e) => {
       if (e.target.files.length > 0) {
-        importCaptureFiles(e.target.files);
+        importBtn.disabled = true;
+        const originalHTML = importBtn.innerHTML;
+        importBtn.innerHTML = '...';
+        importCaptureFiles(e.target.files).finally(() => {
+          importBtn.disabled = false;
+          importBtn.innerHTML = originalHTML;
+        });
         e.target.value = '';
       }
     });
