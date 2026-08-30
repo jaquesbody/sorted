@@ -143,7 +143,8 @@ async function handleCameraCapture(file) {
     document.getElementById('title').value = `${guessTitleFromText(text)} (OCR guess — please check)`;
     document.getElementById('amount').value = guessAmountFromText(text);
   } catch (err) {
-    document.getElementById('title').value = 'OCR failed — enter manually';
+    console.error('OCR failed:', err);
+    document.getElementById('title').value = `OCR failed: ${err.message || err} — enter manually`;
   } finally {
     cameraBtn.disabled = false;
     cameraBtn.innerHTML = originalHTML;
