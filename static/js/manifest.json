@@ -1,0 +1,22 @@
+{
+  "name": "Sorted",
+  "short_name": "Sorted",
+  "description": "Easily track your spending",
+  "start_url": "index.html",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#0d0d0f",
+  "theme_color": "#3d8bfd",
+  "icons": [
+    {
+      "src": "static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
