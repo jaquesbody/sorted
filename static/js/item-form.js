@@ -168,13 +168,46 @@ async function handleCameraCapture(file) {
   }
 }
 
+async function runDirectImport(file) {
+  const status = document.getElementById('ocr-status');
+
+  try {
+    let imageBlob = file;
+
+    if (isPDF(file)) {
+      if (status) status.textContent = 'Converting PDF page 1...';
+      imageBlob = await pdfFirstPageToImageBlob(file);
+    }
+
+    const text = await runOCRWithTimeout(imageBlob, (msg) => { if (status) status.textContent = msg; });
+    document.getElementById('title').value = guessTitleFromText(text);
+    document.getElementById('amount').value = guessAmountFromText(text);
+    setDateFieldToToday();
+    if (status) {
+      status.textContent = 'Done — check the fields above.';
+      clearStatusAfterDelay(status);
+    }
+  } catch (err) {
+    console.error('Direct import failed:', err);
+    document.getElementById('title').value = `Import failed: ${err.message || err} — enter manually`;
+    if (status) status.textContent = `Failed: ${err.message || err}`;
+  }
+}
+
 async function importCaptureFiles(fileList) {
   const files = Array.from(fileList);
   const jsonFile = files.find((f) => f.name.endsWith('.json'));
   const imageFile = files.find((f) => !f.name.endsWith('.json'));
 
+  // No sidecar present — treat as a direct import of a plain photo,
+  // screenshot, or PDF bill, none of which come from our own capture flow.
+  if (!jsonFile && imageFile) {
+    await runDirectImport(imageFile);
+    return;
+  }
+
   if (!jsonFile) {
-    alert('Select the .json sidecar file (and its matching image, if it\'s a receipt).');
+    alert('Select an image, a PDF, or a .json capture file (with its matching image).');
     return;
   }
 
