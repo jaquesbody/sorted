@@ -17,7 +17,10 @@
 
   <div class="app-header">
     <h1 class="dashboard-header" style="margin-bottom:0;"><img src="static/icons/wordmark-sorted.png" alt="Sorted" style="height:24px;display:block;"></h1>
-    <span class="tagline">easily track your spending</span>
+    <div class="flex items-center gap-2">
+      <span class="tagline">easily track your spending</span>
+      <a class="text-xs text-secondary" href="settings.html" style="text-decoration:underline;">Reminders</a>
+    </div>
   </div>
 
   <div class="summary-grid">
@@ -87,6 +90,7 @@
 <script src="static/js/utils.js"></script>
 <script src="static/js/dashboard.js"></script>
 
+<script src="static/js/notifications.js"></script>
 <script src="static/js/sw-register.js"></script>
 </body>
 </html>
