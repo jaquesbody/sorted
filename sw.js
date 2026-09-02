@@ -5,7 +5,7 @@
    Bump CACHE_NAME when static assets change to force a refresh.
    ============================================================================= */
 
-const CACHE_NAME = 'sorted-v2';
+const CACHE_NAME = 'sorted-v3';
 
 const SHELL_FILES = [
   'index.html',
@@ -14,6 +14,7 @@ const SHELL_FILES = [
   'savings.html',
   'item.html',
   'settings.html',
+  'detail.html',
   'manifest.json',
   'static/css/main.css',
   'static/css/sorted.css',
@@ -28,6 +29,7 @@ const SHELL_FILES = [
   'static/js/ocr.js',
   'static/js/notifications.js',
   'static/js/settings.js',
+  'static/js/detail.js',
   'static/icons/icon-192.png',
   'static/icons/icon-512.png',
 ];

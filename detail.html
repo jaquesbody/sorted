@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#3d8bfd">
+<title>Sorted: Item</title>
+<link rel="stylesheet" href="static/css/main.css">
+<link rel="stylesheet" href="static/css/sorted.css">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="static/icons/favicon-32.png" type="image/png">
+<link rel="apple-touch-icon" href="static/icons/apple-touch-icon.png">
+</head>
+<body>
+
+<main class="dashboard">
+
+  <div class="flex items-center justify-between mb-2">
+    <a class="icon-btn icon-btn--back" id="back-link" href="index.html" aria-label="Back">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </a>
+    <h1 class="dashboard-header" style="margin-bottom:0;" id="page-title">Item</h1>
+    <a class="icon-btn" id="edit-link" aria-label="Edit item" style="width:32px;height:32px;border:1px solid var(--accent);color:var(--accent);">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+    </a>
+  </div>
+
+  <div class="detail-hero">
+    <div class="detail-hero-amount" id="detail-amount">£0.00</div>
+    <div class="detail-hero-title" id="detail-title">Loading...</div>
+  </div>
+
+  <div id="detail-rows"></div>
+
+  <div class="detail-empty-note">
+    No receipt image stored yet — captures are saved to Downloads, not attached to items. See project.md for this known gap.
+  </div>
+
+  <div class="detail-actions">
+    <button type="button" class="btn-accent" id="mark-paid-btn" style="display:none;">Mark as paid</button>
+    <button type="button" class="btn-danger" id="delete-btn">Delete</button>
+  </div>
+
+</main>
+
+<script src="static/js/db.js"></script>
+<script src="static/js/utils.js"></script>
+<script src="static/js/detail.js"></script>
+<script src="static/js/sw-register.js"></script>
+
+</body>
+</html>

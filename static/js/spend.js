@@ -100,7 +100,7 @@ async function renderSpendList() {
         return;
       }
 
-      alert('Item detail view not built yet — coming in a later task.');
+      window.location.href = `detail.html?type=spend&id=${item.id}`;
     });
   });
 }

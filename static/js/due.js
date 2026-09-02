@@ -91,7 +91,7 @@ async function renderDueList() {
         return;
       }
 
-      alert('Item detail view not built yet — coming in a later task.');
+      window.location.href = `detail.html?type=due&id=${item.id}`;
     });
   });
 }

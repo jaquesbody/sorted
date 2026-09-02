@@ -66,7 +66,7 @@ async function renderSavingsList() {
         return;
       }
 
-      alert('Item detail view not built yet — coming in a later task.');
+      window.location.href = `detail.html?type=savings&id=${item.id}`;
     });
   });
 }
