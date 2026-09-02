@@ -24,11 +24,18 @@ function payIconSVG() {
   </button>`;
 }
 
+let viewedDate = new Date();
+viewedDate.setDate(1);
+
 async function renderDueList() {
   await seedIfEmpty();
 
-  const items = await getAll('due');
-  items.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  document.getElementById('month-label').textContent = monthLabel(viewedDate);
+
+  const allItems = await getAll('due');
+  const items = allItems
+    .filter((i) => isSameMonth(i.dueDate, viewedDate))
+    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
 
   const dueTotal = items.reduce((sum, i) => sum + i.amount, 0);
 
@@ -42,7 +49,7 @@ async function renderDueList() {
     const empty = document.createElement('p');
     empty.className = 'text-sm text-secondary';
     empty.style.padding = '1rem 0';
-    empty.textContent = 'Nothing due.';
+    empty.textContent = 'Nothing due this month.';
     listEl.appendChild(empty);
     return;
   }
@@ -98,7 +105,18 @@ async function renderDueList() {
 
 document.addEventListener('DOMContentLoaded', () => {
   renderDueList();
+
   document.getElementById('add-item').addEventListener('click', () => {
     window.location.href = 'item.html?type=due';
+  });
+
+  document.getElementById('prev-month-btn').addEventListener('click', () => {
+    viewedDate.setMonth(viewedDate.getMonth() - 1);
+    renderDueList();
+  });
+
+  document.getElementById('next-month-btn').addEventListener('click', () => {
+    viewedDate.setMonth(viewedDate.getMonth() + 1);
+    renderDueList();
   });
 });

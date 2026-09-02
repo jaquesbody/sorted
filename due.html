@@ -31,6 +31,16 @@
     <span class="metric-label">items</span>
   </div>
 
+  <div class="month-nav mb-2">
+    <button type="button" class="icon-btn icon-btn--nav" id="prev-month-btn" aria-label="Previous month">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+    </button>
+    <span id="month-label" class="month-nav-label"></span>
+    <button type="button" class="icon-btn icon-btn--nav" id="next-month-btn" aria-label="Next month">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+    </button>
+  </div>
+
   <div class="item-list" id="due-list">
     <!-- Rendered by due.js from IndexedDB -->
   </div>
