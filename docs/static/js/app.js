@@ -203,11 +203,32 @@ function renderCategoryBreakdown(totals, grandTotal) {
 function drawTrendChart(spendItems) {
   const canvas = document.getElementById('trend-chart');
   if (!canvas) return;
-  
+  lastTrendItems = spendItems;
+
+  // Size the backing store to the element's CSS box × devicePixelRatio —
+  // the canvas used to sit at its default 300×150 stretched by CSS, which
+  // rendered blurry and made the layout maths use the wrong width.
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+
   const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width;
+  const h = rect.height;
+
+  // Colours follow the theme variables instead of the old hard-coded hexes.
+  const css = getComputedStyle(document.documentElement);
+  const accent = css.getPropertyValue('--accent').trim() || '#3d8bfd';
+  const muted = css.getPropertyValue('--text-secondary').trim() || '#8b8b96';
+  const surface = css.getPropertyValue('--bg-surface').trim() || '#1a1a1f';
+  const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
+
   const months = [];
   const now = new Date();
-  
+
   for (let i = 5; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     months.push({
@@ -217,28 +238,47 @@ function drawTrendChart(spendItems) {
         .reduce((sum, i) => sum + i.amount, 0)
     });
   }
-  
+
   const max = Math.max(...months.map(m => m.total), 100);
-  const barWidth = canvas.width / months.length - 10;
-  
-  ctx.fillStyle = '#2a2a32';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  
+  const barWidth = w / months.length - 10;
+
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, 0, w, h);
+
   months.forEach((m, i) => {
-    const height = (m.total / max) * (canvas.height - 40);
+    const height = (m.total / max) * (h - 40);
     const x = i * (barWidth + 10) + 5;
-    const y = canvas.height - height - 20;
-    
-    ctx.fillStyle = '#3d8bfd';
+    const y = h - height - 20;
+
+    ctx.fillStyle = accent;
     ctx.fillRect(x, y, barWidth, height);
-    
-    ctx.fillStyle = '#8b8b96';
-    ctx.font = '12px sans-serif';
+
+    ctx.fillStyle = muted;
+    ctx.font = `12px ${bodyFont}`;
     ctx.textAlign = 'center';
-    ctx.fillText(m.label, x + barWidth / 2, canvas.height - 5);
-    ctx.fillText(currency(m.total), x + barWidth / 2, y - 5);
+    // Keep labels inside the canvas even when the window is narrow.
+    const clamp = (cx, text) => {
+      const half = ctx.measureText(text).width / 2;
+      return Math.min(Math.max(cx, half + 1), w - half - 1);
+    };
+    ctx.fillText(m.label, clamp(x + barWidth / 2, m.label), h - 5);
+    // Zero months show nothing useful — five stacked £0.00 labels used to
+    // crowd the baseline (and overlap outright in narrow windows).
+    if (m.total > 0) {
+      ctx.fillText(currency(m.total), clamp(x + barWidth / 2, currency(m.total)), y - 5);
+    }
   });
 }
+
+// Redraw the trend chart on window resize (the backing store is sized in
+// device pixels, so a resize would otherwise leave it stretched).
+let lastTrendItems = null;
+let trendResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (currentPage !== 'dashboard' || !lastTrendItems) return;
+  clearTimeout(trendResizeTimer);
+  trendResizeTimer = setTimeout(() => drawTrendChart(lastTrendItems), 150);
+});
 
 // Spend Page
 async function renderSpend(container) {
