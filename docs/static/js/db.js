@@ -99,20 +99,40 @@ async function getAllData() {
   };
 }
 
-async function importData(data) {
-  const db = await openDB();
-  
-  for (const [storeName, items] of Object.entries(data)) {
-    if (STORES.includes(storeName) && Array.isArray(items)) {
-      const tx = db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      
-      items.forEach(item => {
-        const { id, ...rest } = item;
-        store.add(rest);
-      });
-    }
+async function importDataToDB(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error("That file isn't a Sorted backup");
   }
+
+  const stores = STORES.filter(name => Array.isArray(data[name]));
+  if (stores.length === 0) {
+    throw new Error('No Sorted data found in that file');
+  }
+
+  const db = await openDB();
+  let imported = 0;
+
+  for (const storeName of stores) {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+
+    data[storeName].forEach(item => {
+      if (!item || typeof item !== 'object') return;
+      const { id, ...rest } = item; // strip old ids; autoIncrement assigns new ones
+      store.add(rest);
+      imported++;
+    });
+
+    // Wait for the commit so a re-render sees the imported rows.
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+
+  if (imported === 0) throw new Error('Nothing to import in that file');
+  return { imported };
 }
 
 async function seedIfEmpty() {

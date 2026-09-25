@@ -66,11 +66,16 @@ ipcMain.handle('import-data', async () => {
     filters: [{ name: 'JSON', extensions: ['json'] }],
     properties: ['openFile']
   });
-  
-  if (!result.canceled && result.filePaths.length > 0) {
-    const data = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
-    await mainWindow.webContents.executeJavaScript(`importData(${JSON.stringify(data)})`);
-    return { success: true };
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return { success: false };
   }
-  return { success: false };
+
+  try {
+    const data = JSON.parse(fs.readFileSync(result.filePaths[0], 'utf8'));
+    mainWindow.webContents.send('sorted:import', data);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: "That file isn't valid JSON" };
+  }
 });

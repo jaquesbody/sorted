@@ -32,19 +32,23 @@ function openModal(title, content) {
 }
 
 // Export/Import
-document.getElementById('export-btn').addEventListener('click', async () => {
-  if (window.require) {
-    const { ipcRenderer } = window.require('electron');
-    await ipcRenderer.invoke('export-data');
-  }
-});
+if (window.require) {
+  const { ipcRenderer } = window.require('electron');
 
-document.getElementById('import-btn').addEventListener('click', async () => {
-  if (window.require) {
-    const { ipcRenderer } = window.require('electron');
-    await ipcRenderer.invoke('import-data');
-  }
-});
+  document.getElementById('export-btn').addEventListener('click', async () => {
+    await ipcRenderer.invoke('export-data');
+  });
+
+  document.getElementById('import-btn').addEventListener('click', async () => {
+    const res = await ipcRenderer.invoke('import-data');
+    if (res && res.error) showToast(res.error);
+  });
+
+  // Main process sends the parsed backup contents after the file dialog.
+  ipcRenderer.on('sorted:import', (event, data) => {
+    finishImport(data);
+  });
+}
 
 // Page Rendering
 async function renderPage() {
@@ -806,17 +810,44 @@ async function exportData() {
 async function importData() {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.json';
+  input.accept = '.json,application/json';
   input.onchange = async (e) => {
     const file = e.target.files[0];
-    if (file) {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      await importDataToDB(data);
-      renderPage();
-    }
+    e.target.value = '';
+    if (file) await importFromFile(file);
   };
   input.click();
+}
+
+async function importFromFile(file) {
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch (err) {
+    showToast("That file isn't valid JSON");
+    return;
+  }
+  await finishImport(data);
+}
+
+async function finishImport(data) {
+  try {
+    const { imported } = await importDataToDB(data);
+    showToast(`Imported ${imported} item${imported === 1 ? '' : 's'}`);
+    renderPage();
+  } catch (err) {
+    console.error('Import failed:', err);
+    showToast(err.message || 'Import failed');
+  }
+}
+
+function showToast(message) {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
 // Initialize
