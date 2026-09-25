@@ -766,27 +766,55 @@ async function ocrPrefill(file) {
   }
 }
 
+// In-modal validation error — replaces native alert(). Error sits at the
+// top of the form, announced by role="alert", and the offending field
+// gets focus.
+function showFormError(message, fieldId) {
+  let el = document.getElementById('form-error');
+  if (!el) {
+    el = document.createElement('p');
+    el.id = 'form-error';
+    el.className = 'form-error';
+    el.setAttribute('role', 'alert');
+    modalBody.insertBefore(el, modalBody.firstChild);
+  }
+  el.textContent = message;
+  const field = fieldId && document.getElementById(fieldId);
+  if (field) field.focus();
+}
+
 async function saveItem(type, editId = null) {
+  document.getElementById('form-error')?.remove();
   const title = document.getElementById('form-title').value.trim();
   const amount = parseFloat(document.getElementById('form-amount')?.value || document.getElementById('form-current')?.value || 0);
   const target = parseFloat(document.getElementById('form-target')?.value || 0);
   const category = document.getElementById('form-category').value;
   const recurring = document.getElementById('form-recurring')?.value === 'true';
-  
+
   if (!title) {
-    alert('Please enter a title');
+    showFormError('Please enter a title', 'form-title');
     return;
   }
-  
+
   const fields = { title, category };
   if (type !== 'savings') fields.recurring = recurring;
-  
+
+  // A cleared date saved an entry that no list could show (Reports still
+  // counted it) and a cleared bill date rendered "NaN days" — dates and
+  // money are required, errors stay in the modal.
   if (type === 'spend') {
-    Object.assign(fields, { date: document.getElementById('form-date').value, amount });
+    const date = document.getElementById('form-date').value;
+    if (!date) { showFormError('Please enter a date', 'form-date'); return; }
+    if (!(amount > 0)) { showFormError('Please enter an amount greater than 0', 'form-amount'); return; }
+    Object.assign(fields, { date, amount });
   } else if (type === 'due') {
-    Object.assign(fields, { dueDate: document.getElementById('form-dueDate').value, amount });
+    const dueDate = document.getElementById('form-dueDate').value;
+    if (!dueDate) { showFormError('Please enter a due date', 'form-dueDate'); return; }
+    if (!(amount > 0)) { showFormError('Please enter an amount greater than 0', 'form-amount'); return; }
+    Object.assign(fields, { dueDate, amount });
   } else {
-    Object.assign(fields, { current: amount, target });
+    if (!(target > 0)) { showFormError('Please enter a target greater than 0', 'form-target'); return; }
+    Object.assign(fields, { current: Number.isFinite(amount) ? amount : 0, target });
   }
   
   if (editId != null) {

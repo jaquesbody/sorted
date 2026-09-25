@@ -563,6 +563,16 @@ body {
   border-color: var(--accent);
 }
 
+.form-error {
+  color: var(--danger);
+  font-size: 0.875rem;
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  border-radius: var(--radius);
+}
+
 .form-row {
   display: flex;
   gap: 15px;
