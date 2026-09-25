@@ -19,7 +19,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - Reports: spending and bills broken down by category
 - Month navigation and status filters
 - Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
-- Export / import your whole dataset as JSON
+- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed)
 - Sample data seeds on first run so the app isn't empty
 
 ## Run It

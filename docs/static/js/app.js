@@ -56,7 +56,7 @@ document.getElementById('import-btn').addEventListener('click', async () => {
 if (window.require) {
   // Main process sends the parsed backup contents after the file dialog.
   window.require('electron').ipcRenderer.on('sorted:import', (event, data) => {
-    finishImport(data);
+    startImport(data);
   });
 }
 
@@ -867,13 +867,72 @@ async function importFromFile(file) {
     showToast("That file isn't valid JSON");
     return;
   }
-  await finishImport(data);
+  await startImport(data);
 }
 
-async function finishImport(data) {
+// Parsed backup arrives here (web file picker or Electron dialog) — validate
+// it, then let the user choose merge vs replace before anything is written.
+let pendingImport = null;
+
+async function startImport(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    showToast("That file isn't a Sorted backup");
+    return;
+  }
+  const fileStores = STORES.filter((n) => Array.isArray(data[n]));
+  if (fileStores.length === 0) {
+    showToast('No Sorted data found in that file');
+    return;
+  }
+  const fileCount = fileStores.reduce((n, s) => n + data[s].length, 0);
+  if (fileCount === 0) {
+    showToast('Nothing to import in that file');
+    return;
+  }
+
+  const existing = await getAllData();
+  const existingCount = STORES.reduce((n, s) => n + (existing[s] ? existing[s].length : 0), 0);
+  const parts = fileStores
+    .filter((s) => data[s].length > 0)
+    .map((s) => `${data[s].length} ${s}`)
+    .join(', ');
+
+  pendingImport = data;
+  openModal('Import data', `
+      <p class="form-label">File: ${fileCount} item${fileCount === 1 ? '' : 's'} (${escapeHTML(parts)}). Stored: ${existingCount}.</p>
+      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="commitImport('merge')">Merge into existing</button>
+      <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="commitImport('replace', this)">Replace all stored data</button>
+      <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;" onclick="cancelImport()">Cancel</button>`);
+}
+
+function cancelImport() {
+  pendingImport = null;
+  modal.classList.remove('active');
+}
+
+async function commitImport(mode, btn) {
+  // Replace wipes everything — same two-step confirm as delete in-modal.
+  if (mode === 'replace' && btn && btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Really replace everything? Click again';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Replace all stored data';
+    }, 4000);
+    return;
+  }
+  const data = pendingImport;
+  pendingImport = null;
+  modal.classList.remove('active');
+  if (!data) return;
+
   try {
-    const { imported } = await importDataToDB(data);
-    showToast(`Imported ${imported} item${imported === 1 ? '' : 's'}`);
+    const { imported, skipped } = await importDataToDB(data, mode);
+    if (mode === 'replace') {
+      showToast(`Replaced with ${imported} item${imported === 1 ? '' : 's'}`);
+    } else {
+      showToast(`Imported ${imported} new item${imported === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} duplicate${skipped === 1 ? '' : 's'}` : ''}`);
+    }
     renderPage();
   } catch (err) {
     console.error('Import failed:', err);
