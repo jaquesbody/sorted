@@ -32,21 +32,30 @@ function openModal(title, content) {
   modal.classList.add('active');
 }
 
-// Export/Import
-if (window.require) {
-  const { ipcRenderer } = window.require('electron');
-
-  document.getElementById('export-btn').addEventListener('click', async () => {
+// Export/Import — Electron gets native dialogs; web/Android fall back to
+// browser download + file picker.
+document.getElementById('export-btn').addEventListener('click', async () => {
+  if (window.require) {
+    const { ipcRenderer } = window.require('electron');
     await ipcRenderer.invoke('export-data');
-  });
+  } else {
+    await exportData();
+  }
+});
 
-  document.getElementById('import-btn').addEventListener('click', async () => {
+document.getElementById('import-btn').addEventListener('click', async () => {
+  if (window.require) {
+    const { ipcRenderer } = window.require('electron');
     const res = await ipcRenderer.invoke('import-data');
     if (res && res.error) showToast(res.error);
-  });
+  } else {
+    await importData();
+  }
+});
 
+if (window.require) {
   // Main process sends the parsed backup contents after the file dialog.
-  ipcRenderer.on('sorted:import', (event, data) => {
+  window.require('electron').ipcRenderer.on('sorted:import', (event, data) => {
     finishImport(data);
   });
 }
