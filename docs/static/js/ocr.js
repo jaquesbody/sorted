@@ -12,7 +12,7 @@
    the confirm step is not optional.
    ============================================================================= */
 
-async function runOCR(imageFile, onProgress) {
+async function runOCR(imageFile, onProgress, onWorker) {
   const worker = await Tesseract.createWorker('eng', 1, {
     workerPath: 'static/vendor/tesseract/worker.min.js',
     corePath: 'static/vendor/tesseract/core/tesseract-core-lstm.wasm.js',
@@ -21,6 +21,7 @@ async function runOCR(imageFile, onProgress) {
       if (onProgress) onProgress(`${m.status}${m.progress !== undefined ? ' ' + Math.round(m.progress * 100) + '%' : ''}`);
     },
   });
+  if (onWorker) onWorker(worker);
 
   const { data: { text } } = await worker.recognize(imageFile);
   await worker.terminate();
@@ -28,12 +29,34 @@ async function runOCR(imageFile, onProgress) {
 }
 
 function runOCRWithTimeout(imageFile, onProgress, timeoutMs = 25000) {
-  return Promise.race([
-    runOCR(imageFile, onProgress),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Timed out after 25s — likely a file failed to load')), timeoutMs)
-    ),
-  ]);
+  let worker = null;
+  let timedOut = false;
+  let timer = null;
+
+  const killWorker = () => {
+    const w = worker;
+    worker = null;
+    // terminate() can reject if the worker already died — nothing to do.
+    if (w) Promise.resolve(w.terminate()).catch(() => {});
+  };
+
+  const work = runOCR(imageFile, onProgress, (w) => {
+    worker = w;
+    // createWorker may only finish after we gave up — kill it then.
+    if (timedOut) killWorker();
+  }).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      killWorker(); // a timed-out OCR used to leak the worker forever
+      reject(new Error('Timed out after 25s — likely a file failed to load'));
+    }, timeoutMs);
+  });
+
+  return Promise.race([work, timeout]);
 }
 
 function guessAmountFromText(text) {
