@@ -529,16 +529,25 @@ function renderSettings(container) {
 }
 
 // Modal Forms
-function openAddModal(type) {
-  const forms = {
-    spend: `
+function buildForm(type, editId = null) {
+  const saveCall = editId == null
+    ? `saveItem('${type}')`
+    : `saveItem('${type}', ${editId})`;
+  // Receipt capture is add-only: a photo is taken when the entry is created,
+  // not when it's edited (matches v1, which hid the capture link in edit mode).
+  const receiptHtml = editId == null && (type === 'spend' || type === 'due') ? `
       <div class="receipt-row">
         <button type="button" class="btn btn-ghost" id="receipt-camera-btn">Take photo</button>
         <button type="button" class="btn btn-ghost" id="receipt-upload-btn">Upload file</button>
         <input type="file" id="receipt-camera-input" accept="image/*" capture="environment" hidden>
         <input type="file" id="receipt-upload-input" accept="image/*,application/pdf" hidden>
       </div>
-      <p class="ocr-status" id="ocr-status" aria-live="polite"></p>
+      <p class="ocr-status" id="ocr-status" aria-live="polite"></p>` : '';
+  const deleteBtn = editId == null ? '' : `
+      <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${editId}, this)">Delete</button>`;
+  const forms = {
+    spend: `
+      ${receiptHtml}
       <div class="form-group">
         <label class="form-label">Title</label>
         <input type="text" class="form-input" id="form-title" placeholder="e.g., Electricity bill">
@@ -574,16 +583,10 @@ function openAddModal(type) {
           </select>
         </div>
       </div>
-      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveItem('spend')">Save</button>
+      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     due: `
-      <div class="receipt-row">
-        <button type="button" class="btn btn-ghost" id="receipt-camera-btn">Take photo</button>
-        <button type="button" class="btn btn-ghost" id="receipt-upload-btn">Upload file</button>
-        <input type="file" id="receipt-camera-input" accept="image/*" capture="environment" hidden>
-        <input type="file" id="receipt-upload-input" accept="image/*,application/pdf" hidden>
-      </div>
-      <p class="ocr-status" id="ocr-status" aria-live="polite"></p>
+      ${receiptHtml}
       <div class="form-group">
         <label class="form-label">Title</label>
         <input type="text" class="form-input" id="form-title" placeholder="e.g., Mortgage payment">
@@ -617,7 +620,7 @@ function openAddModal(type) {
           </select>
         </div>
       </div>
-      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveItem('due')">Save</button>
+      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     savings: `
       <div class="form-group">
@@ -642,12 +645,39 @@ function openAddModal(type) {
           <option value="General">General</option>
         </select>
       </div>
-      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveItem('savings')">Save</button>
+      <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `
   };
   
-  openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, forms[type]);
+  return forms[type];
+}
+
+function openAddModal(type) {
+  openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type));
   if (type === 'spend' || type === 'due') setupReceiptCapture();
+}
+
+async function openEditModal(type, id) {
+  const item = await getItem(type, id);
+  if (!item) return;
+  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type, id));
+  prefillForm(item);
+}
+
+function prefillForm(item) {
+  const setVal = (elId, val) => {
+    const el = document.getElementById(elId);
+    if (el && val !== undefined && val !== null) el.value = val;
+  };
+  setVal('form-title', item.title);
+  setVal('form-amount', item.amount);
+  setVal('form-date', item.date);
+  setVal('form-dueDate', item.dueDate);
+  setVal('form-category', item.category);
+  setVal('form-current', item.current);
+  setVal('form-target', item.target);
+  const recurring = document.getElementById('form-recurring');
+  if (recurring && item.recurring !== undefined) recurring.value = String(item.recurring);
 }
 
 // Receipt capture — camera or file upload, OCR'd to pre-fill title/amount.
@@ -696,8 +726,8 @@ async function ocrPrefill(file) {
   }
 }
 
-async function saveItem(type) {
-  const title = document.getElementById('form-title').value;
+async function saveItem(type, editId = null) {
+  const title = document.getElementById('form-title').value.trim();
   const amount = parseFloat(document.getElementById('form-amount')?.value || document.getElementById('form-current')?.value || 0);
   const target = parseFloat(document.getElementById('form-target')?.value || 0);
   const category = document.getElementById('form-category').value;
@@ -708,17 +738,45 @@ async function saveItem(type) {
     return;
   }
   
-  let item = { title, category, recurring };
+  const fields = { title, category };
+  if (type !== 'savings') fields.recurring = recurring;
   
   if (type === 'spend') {
-    item = { ...item, date: document.getElementById('form-date').value, amount, confirmed: false, paid: false };
+    Object.assign(fields, { date: document.getElementById('form-date').value, amount });
   } else if (type === 'due') {
-    item = { ...item, dueDate: document.getElementById('form-dueDate').value, amount };
-  } else if (type === 'savings') {
-    item = { ...item, current: amount, target };
+    Object.assign(fields, { dueDate: document.getElementById('form-dueDate').value, amount });
+  } else {
+    Object.assign(fields, { current: amount, target });
   }
   
-  await addItem(type, item);
+  if (editId != null) {
+    // Merge over the existing record so flags the form doesn't own
+    // (confirmed, paid, frequency) survive an edit.
+    const existing = await getItem(type, editId);
+    if (existing) {
+      await updateItem(type, { ...existing, ...fields, id: editId });
+    }
+  } else {
+    if (type === 'spend') Object.assign(fields, { confirmed: false, paid: false });
+    await addItem(type, fields);
+  }
+  
+  modal.classList.remove('active');
+  renderPage();
+}
+
+async function deleteItemFromModal(type, id, btn) {
+  // Two-step confirm: no native dialogs, no accidental deletes.
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Really delete? Click again';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Delete';
+    }, 4000);
+    return;
+  }
+  await deleteItem(type, id);
   modal.classList.remove('active');
   renderPage();
 }
