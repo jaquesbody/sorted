@@ -3,6 +3,7 @@
 let currentPage = 'dashboard';
 let viewedDate = new Date();
 viewedDate.setDate(1);
+let spendFilter = 'all';
 
 // Navigation
 document.querySelectorAll('.nav-item').forEach(item => {
@@ -263,16 +264,35 @@ async function renderSpend(container) {
     </div>
     
     <div class="filter-bar">
-      <span class="filter-chip active" onclick="filterSpend('all', this)">All</span>
-      <span class="filter-chip" onclick="filterSpend('confirmed', this)">Confirmed</span>
-      <span class="filter-chip" onclick="filterSpend('pending', this)">Pending</span>
-      <span class="filter-chip" onclick="filterSpend('recurring', this)">Recurring</span>
+      <span class="filter-chip ${spendFilter === 'all' ? 'active' : ''}" onclick="filterSpend('all')">All</span>
+      <span class="filter-chip ${spendFilter === 'confirmed' ? 'active' : ''}" onclick="filterSpend('confirmed')">Confirmed</span>
+      <span class="filter-chip ${spendFilter === 'pending' ? 'active' : ''}" onclick="filterSpend('pending')">Pending</span>
+      <span class="filter-chip ${spendFilter === 'recurring' ? 'active' : ''}" onclick="filterSpend('recurring')">Recurring</span>
     </div>
     
     <div class="item-list" id="spend-list">
-      ${renderSpendItems(monthItems, monthTotal)}
+      ${renderSpendList(monthItems, monthTotal)}
     </div>
   `;
+}
+
+function applySpendFilter(items) {
+  if (spendFilter === 'confirmed') return items.filter(i => i.confirmed === true);
+  if (spendFilter === 'pending') return items.filter(i => !i.confirmed);
+  if (spendFilter === 'recurring') return items.filter(i => !!i.recurring);
+  return items;
+}
+
+function renderSpendList(monthItems, monthTotal) {
+  const filtered = applySpendFilter(monthItems);
+  if (filtered.length === 0 && monthItems.length > 0) {
+    return `
+      <div class="empty-state">
+        <div class="empty-state-text">No ${spendFilter} items this month</div>
+      </div>
+    `;
+  }
+  return renderSpendItems(filtered, monthTotal);
 }
 
 function renderSpendItems(items, total) {
@@ -309,10 +329,8 @@ function renderSpendItems(items, total) {
   }).join('');
 }
 
-function filterSpend(filter, chip) {
-  document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-  chip.classList.add('active');
-  // Re-render with filter (simplified)
+function filterSpend(filter) {
+  spendFilter = filter;
   renderPage();
 }
 
