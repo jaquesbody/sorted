@@ -238,9 +238,31 @@ async function importDataToDB(data, mode = 'merge') {
   return { imported, skipped };
 }
 
-async function seedIfEmpty() {
-  const existing = await getAll('spend');
-  if (existing.length > 0) return;
+// Seeding runs at most once per page load, shared across callers. The
+// pre-memo version awaited getAll() inside each call, so two renders
+// interleave could both see an empty store and seed the samples twice;
+// the synchronous memo makes that impossible, skips the existence check
+// on every later render, and is dropped on failure so a retry is possible.
+let seedPromise = null;
+
+function seedIfEmpty() {
+  if (!seedPromise) {
+    seedPromise = doSeed().catch((err) => {
+      seedPromise = null;
+      throw err;
+    });
+  }
+  return seedPromise;
+}
+
+async function doSeed() {
+  const [spend, due, savings] = await Promise.all([
+    getAll('spend'), getAll('due'), getAll('savings')
+  ]);
+  // Only a genuinely untouched database gets samples — checking spend
+  // alone used to re-seed everything (duplicate bills included) whenever
+  // only the spend entries had been cleared.
+  if (spend.length > 0 || due.length > 0 || savings.length > 0) return;
 
   // Dates are generated relative to today so a fresh install always looks
   // current: spend lands inside the current month and the bills sit one
