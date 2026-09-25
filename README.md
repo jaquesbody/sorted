@@ -16,6 +16,7 @@ Easily check and track your spending, saving and bills, all local and private.
 - Spend, Bills Due, and Savings lists — add, edit, confirm, and mark-as-paid
 - Reports: spending and bills broken down by category
 - Month navigation and status filters
+- Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title and amount for you to confirm
 - Export / import your whole dataset as JSON
 - Sample data seeds on first run so the app isn't empty
 
@@ -40,7 +41,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.0-debug.apk`](sorted-v2-2.0.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
+Grab [`sorted-v2-2.0.1-debug.apk`](sorted-v2-2.0.1-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
@@ -64,7 +65,7 @@ No backend, no cloud storage, no login. All data stays on your own device and on
 
 ## History
 
-v1 — the original web/PWA with OCR, service worker, and Syncthing sync — lives in the git history and still serves from earlier commits.
+v1 — the original web/PWA with service worker and Syncthing sync — lives in the git history and still serves from earlier commits.
 
 ## Licence
 

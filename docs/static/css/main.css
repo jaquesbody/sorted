@@ -59,6 +59,27 @@ body {
   color: var(--text-secondary);
 }
 
+/* Top bar — keeps the brand visible when the sidebar collapses (narrow/phone) */
+.app-topbar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 60px;
+  right: 0;
+  height: 52px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 15px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  z-index: 90;
+}
+
+.topbar-logo {
+  display: block;
+  height: 24px;
+}
+
 .nav-list {
   list-style: none;
   padding: 10px 0;
@@ -296,6 +317,26 @@ body {
   background: var(--accent-muted);
   color: var(--accent);
   border-color: var(--accent);
+}
+
+/* Receipt capture (camera / file upload with OCR pre-fill) */
+.receipt-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.receipt-row .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.ocr-status {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  min-height: 1.2em;
+  margin-bottom: 12px;
 }
 
 /* Item List */
@@ -608,8 +649,13 @@ body {
     padding: 15px;
   }
   
+  .app-topbar {
+    display: flex;
+  }
+
   .content {
     margin-left: 60px;
+    margin-top: 52px;
     padding: 15px;
   }
   

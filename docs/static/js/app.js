@@ -532,6 +532,13 @@ function renderSettings(container) {
 function openAddModal(type) {
   const forms = {
     spend: `
+      <div class="receipt-row">
+        <button type="button" class="btn btn-ghost" id="receipt-camera-btn">Take photo</button>
+        <button type="button" class="btn btn-ghost" id="receipt-upload-btn">Upload file</button>
+        <input type="file" id="receipt-camera-input" accept="image/*" capture="environment" hidden>
+        <input type="file" id="receipt-upload-input" accept="image/*,application/pdf" hidden>
+      </div>
+      <p class="ocr-status" id="ocr-status" aria-live="polite"></p>
       <div class="form-group">
         <label class="form-label">Title</label>
         <input type="text" class="form-input" id="form-title" placeholder="e.g., Electricity bill">
@@ -570,6 +577,13 @@ function openAddModal(type) {
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveItem('spend')">Save</button>
     `,
     due: `
+      <div class="receipt-row">
+        <button type="button" class="btn btn-ghost" id="receipt-camera-btn">Take photo</button>
+        <button type="button" class="btn btn-ghost" id="receipt-upload-btn">Upload file</button>
+        <input type="file" id="receipt-camera-input" accept="image/*" capture="environment" hidden>
+        <input type="file" id="receipt-upload-input" accept="image/*,application/pdf" hidden>
+      </div>
+      <p class="ocr-status" id="ocr-status" aria-live="polite"></p>
       <div class="form-group">
         <label class="form-label">Title</label>
         <input type="text" class="form-input" id="form-title" placeholder="e.g., Mortgage payment">
@@ -633,6 +647,53 @@ function openAddModal(type) {
   };
   
   openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, forms[type]);
+  if (type === 'spend' || type === 'due') setupReceiptCapture();
+}
+
+// Receipt capture — camera or file upload, OCR'd to pre-fill title/amount.
+function setupReceiptCapture() {
+  const cameraBtn = document.getElementById('receipt-camera-btn');
+  const cameraInput = document.getElementById('receipt-camera-input');
+  const uploadBtn = document.getElementById('receipt-upload-btn');
+  const uploadInput = document.getElementById('receipt-upload-input');
+  if (!cameraBtn) return;
+
+  cameraBtn.addEventListener('click', () => cameraInput.click());
+  uploadBtn.addEventListener('click', () => uploadInput.click());
+
+  const handleChange = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (file) await ocrPrefill(file);
+  };
+  cameraInput.addEventListener('change', handleChange);
+  uploadInput.addEventListener('change', handleChange);
+}
+
+async function ocrPrefill(file) {
+  const status = document.getElementById('ocr-status');
+  const titleEl = document.getElementById('form-title');
+  const amountEl = document.getElementById('form-amount');
+  if (!status) return;
+
+  try {
+    status.textContent = 'Reading receipt…';
+    let image = file;
+    if (typeof isPDF === 'function' && isPDF(file)) {
+      status.textContent = 'Rendering PDF…';
+      image = await pdfFirstPageToImageBlob(file);
+      if (!image) throw new Error('could not render PDF');
+    }
+    const text = await runOCRWithTimeout(image, (msg) => { status.textContent = msg; });
+    const title = guessTitleFromText(text);
+    const amount = guessAmountFromText(text);
+    if (!titleEl.value && title) titleEl.value = title;
+    if (!amountEl.value && amount > 0) amountEl.value = amount;
+    status.textContent = 'Done — check title and amount, then save.';
+  } catch (err) {
+    console.error('OCR failed:', err);
+    status.textContent = 'Could not read that file — enter the details manually.';
+  }
 }
 
 async function saveItem(type) {
