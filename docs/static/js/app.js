@@ -35,19 +35,18 @@ function openModal(title, content) {
 // Export/Import — Electron gets native dialogs; web/Android fall back to
 // browser download + file picker. The sidebar buttons and the Settings
 // buttons share these handlers so both entry points behave identically.
+// Electron exposes a narrow preload bridge (no Node in the renderer).
 async function handleExport() {
-  if (window.require) {
-    const { ipcRenderer } = window.require('electron');
-    await ipcRenderer.invoke('export-data');
+  if (window.sortedBridge) {
+    await window.sortedBridge.exportData();
   } else {
     await exportData();
   }
 }
 
 async function handleImport() {
-  if (window.require) {
-    const { ipcRenderer } = window.require('electron');
-    const res = await ipcRenderer.invoke('import-data');
+  if (window.sortedBridge) {
+    const res = await window.sortedBridge.importData();
     if (res && res.error) showToast(res.error);
   } else {
     await importData();
@@ -57,11 +56,8 @@ async function handleImport() {
 document.getElementById('export-btn').addEventListener('click', handleExport);
 document.getElementById('import-btn').addEventListener('click', handleImport);
 
-if (window.require) {
-  // Main process sends the parsed backup contents after the file dialog.
-  window.require('electron').ipcRenderer.on('sorted:import', (event, data) => {
-    startImport(data);
-  });
+if (window.sortedBridge) {
+  window.sortedBridge.onImport((data) => startImport(data));
 }
 
 // Page Rendering

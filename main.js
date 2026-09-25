@@ -12,8 +12,9 @@ function createWindow() {
     minHeight: 600,
     title: 'Sorted v2',
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true
     },
     backgroundColor: '#0d0d0f',
     show: false
