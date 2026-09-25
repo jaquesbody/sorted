@@ -735,6 +735,9 @@ async function ocrPrefill(file) {
   const status = document.getElementById('ocr-status');
   const titleEl = document.getElementById('form-title');
   const amountEl = document.getElementById('form-amount');
+  // Spend has form-date (pre-filled with today), bills have form-dueDate
+  // (starts empty) — whichever the open form owns gets the receipt date.
+  const dateEl = document.getElementById('form-date') || document.getElementById('form-dueDate');
   if (!status) return;
 
   try {
@@ -748,9 +751,15 @@ async function ocrPrefill(file) {
     const text = await runOCRWithTimeout(image, (msg) => { status.textContent = msg; });
     const title = guessTitleFromText(text);
     const amount = guessAmountFromText(text);
+    const date = guessDateFromText(text);
     if (!titleEl.value && title) titleEl.value = title;
     if (!amountEl.value && amount > 0) amountEl.value = amount;
-    status.textContent = 'Done — check title and amount, then save.';
+    // The date fields ship with defaults (today / empty), so unlike title and
+    // amount this one is always overwritten when the receipt shows a date.
+    if (dateEl && date) dateEl.value = date;
+    status.textContent = date
+      ? 'Done — check title, amount and date, then save.'
+      : 'Done — check title and amount, then save.';
   } catch (err) {
     console.error('OCR failed:', err);
     status.textContent = 'Could not read that file — enter the details manually.';

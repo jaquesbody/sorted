@@ -18,7 +18,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - Spend, Bills Due, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - Reports: spending and bills broken down by category
 - Month navigation and status filters
-- Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title and amount for you to confirm
+- Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
 - Export / import your whole dataset as JSON
 - Sample data seeds on first run so the app isn't empty
 
