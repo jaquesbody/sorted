@@ -4,6 +4,8 @@ Easily check and track your spending, saving and bills, all local and private.
 
 **Sorted v2** is a modern rewrite: a dark-themed finance tracker that runs as a desktop app (Electron) and straight in your browser. No backend, no cloud, no login — everything lives in your device's local storage (IndexedDB).
 
+Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted/) — no install needed.
+
 ## Screenshots
 
 ![Sorted dashboard — spend, bills, and savings at a glance](screenshots/dashboard.png)
@@ -13,7 +15,7 @@ Easily check and track your spending, saving and bills, all local and private.
 ## Features
 
 - Dashboard: spent this month, bills due, savings progress, and a 6-month trend chart
-- Spend, Bills Due, and Savings lists — add, edit, confirm, and mark-as-paid
+- Spend, Bills Due, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - Reports: spending and bills broken down by category
 - Month navigation and status filters
 - Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title and amount for you to confirm
@@ -50,14 +52,14 @@ To rebuild it yourself (needs JDK 21 and the Android SDK):
     cd android
     ./gradlew assembleDebug
 
-Note: JSON export/import works on desktop and in the browser; on Android the export isn't wired to device storage yet.
+Note: importing JSON works on every platform. Export uses the native save dialog on desktop and downloads a file in the browser; writing an export directly to Android device storage isn't wired up yet.
 
 ## Tech Stack
 
 - Vanilla HTML, CSS, and JavaScript — no frameworks
 - Electron for the desktop shell
 - IndexedDB for local storage
-- No dependencies at runtime
+- Zero runtime dependencies in the web app (OCR and PDF libraries are vendored in the repo)
 
 ## Privacy
 
@@ -65,7 +67,7 @@ No backend, no cloud storage, no login. All data stays on your own device and on
 
 ## History
 
-v1 — the original web/PWA with service worker and Syncthing sync — lives in the git history and still serves from earlier commits.
+v1 — the original web/PWA with service worker and Syncthing sync — lives in the git history; check out any commit from before the v2 rebuild to run it.
 
 ## Licence
 
