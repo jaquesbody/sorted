@@ -36,7 +36,15 @@ function isSameYear(dateStr, targetDate) {
 }
 
 function isOverdue(dueDate) {
-  return new Date(dueDate) < new Date();
+  // Date-only: a bill is overdue the day AFTER it was due. Comparing
+  // against the current time made every bill due today read as overdue
+  // on the dashboard while the Bills page said "Due today" — both now
+  // normalise to local midnight like daysUntil() does.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const due = new Date(dueDate);
+  due.setHours(0, 0, 0, 0);
+  return due < today;
 }
 
 function daysUntil(dueDate) {
