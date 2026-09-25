@@ -590,7 +590,7 @@ function buildForm(type, editId = null) {
         </div>
         <div class="form-group">
           <label class="form-label">Date</label>
-          <input type="date" class="form-input" id="form-date" value="${new Date().toISOString().slice(0, 10)}">
+          <input type="date" class="form-input" id="form-date" value="${localISO()}">
         </div>
       </div>
       <div class="form-row">
@@ -871,7 +871,7 @@ let capExport = null;
 async function exportData() {
   const data = await getAllData();
   const json = JSON.stringify(data, null, 2);
-  const name = `sorted-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = `sorted-backup-${localISO()}.json`;
 
   // Capacitor/Android: the WebView can't process blob: downloads (the click
   // silently does nothing), so write the backup into the app cache and hand

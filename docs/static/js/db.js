@@ -267,8 +267,7 @@ async function doSeed() {
   // Dates are generated relative to today so a fresh install always looks
   // current: spend lands inside the current month and the bills sit one
   // overdue and one upcoming, instead of ageing out as the calendar moves.
-  const pad = (n) => String(n).padStart(2, '0');
-  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const iso = localISO; // utils.js — local dates, unlike toISOString()
   const daysFromNow = (n) => {
     const d = new Date();
     d.setDate(d.getDate() + n);
