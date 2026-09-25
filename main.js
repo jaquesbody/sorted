@@ -19,7 +19,7 @@ function createWindow() {
     show: false
   });
 
-  mainWindow.loadFile('renderer/index.html');
+  mainWindow.loadFile('docs/index.html');
   
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();

@@ -30,11 +30,11 @@ Easily check and track your spending, saving and bills, all local and private.
 
 ### In a browser
 
-Serve the `renderer` folder with any static file server:
+Serve the `docs` folder with any static file server:
 
     git clone https://github.com/jaquesbody/sorted.git
     cd sorted
-    python3 -m http.server --directory renderer
+    python3 -m http.server --directory docs
 
 Then open `http://localhost:8000` in your browser. Same app, minus the native export dialogs (export downloads a JSON file instead).
 

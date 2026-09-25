@@ -1,5 +1,5 @@
 {
   "appId": "com.jaquesbody.sorted",
   "appName": "Sorted v2",
-  "webDir": "renderer"
+  "webDir": "docs"
 }
