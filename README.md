@@ -43,7 +43,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.1-debug.apk`](sorted-v2-2.0.1-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
+Grab [`sorted-v2-2.0.2-debug.apk`](sorted-v2-2.0.2-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
