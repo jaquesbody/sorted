@@ -1,6 +1,6 @@
 {
   "name": "sorted-v2",
-  "version": "2.0.1",
+  "version": "2.0.3",
   "description": "Modern finance tracker - spend, savings, and bills, all local and private",
   "main": "main.js",
   "scripts": {
@@ -13,6 +13,8 @@
   "dependencies": {
     "@capacitor/android": "^8.5.2",
     "@capacitor/cli": "^8.5.2",
-    "@capacitor/core": "^8.5.2"
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/filesystem": "^8.1.3",
+    "@capacitor/share": "^8.0.2"
   }
 }

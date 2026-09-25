@@ -836,13 +836,44 @@ async function markPaid(id) {
   renderPage();
 }
 
+// Cap plugins are registered lazily on first use — registerPlugin() warns
+// if called twice for the same name.
+let capExport = null;
+
 async function exportData() {
   const data = await getAllData();
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const json = JSON.stringify(data, null, 2);
+  const name = `sorted-backup-${new Date().toISOString().slice(0, 10)}.json`;
+
+  // Capacitor/Android: the WebView can't process blob: downloads (the click
+  // silently does nothing), so write the backup into the app cache and hand
+  // it to the system share sheet via the FileProvider instead.
+  if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+    try {
+      if (!capExport) {
+        capExport = {
+          fs: window.Capacitor.registerPlugin('Filesystem'),
+          share: window.Capacitor.registerPlugin('Share'),
+        };
+      }
+      const { uri } = await capExport.fs.writeFile({ path: name, data: json, directory: 'CACHE' });
+      await capExport.share.share({ title: 'Sorted backup', files: [uri] });
+      showToast('Backup ready to share');
+    } catch (err) {
+      const msg = String((err && err.message) || err);
+      if (/cancel/i.test(msg)) return; // backing out of the share sheet isn't an error
+      console.error('Export failed:', err);
+      showToast(`Export failed: ${msg}`);
+    }
+    return;
+  }
+
+  // Web: browser download.
+  const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `sorted-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = name;
   a.click();
   URL.revokeObjectURL(url);
 }

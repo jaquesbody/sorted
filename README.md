@@ -43,7 +43,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.2-debug.apk`](sorted-v2-2.0.2-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
+Grab [`sorted-v2-2.0.3-debug.apk`](sorted-v2-2.0.3-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
@@ -52,7 +52,7 @@ To rebuild it yourself (needs JDK 21 and the Android SDK):
     cd android
     ./gradlew assembleDebug
 
-Note: importing JSON works on every platform. Export uses the native save dialog on desktop and downloads a file in the browser; writing an export directly to Android device storage isn't wired up yet.
+Note: importing JSON works on every platform. Export uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
 
 ## Tech Stack
 
