@@ -33,17 +33,18 @@ function openModal(title, content) {
 }
 
 // Export/Import — Electron gets native dialogs; web/Android fall back to
-// browser download + file picker.
-document.getElementById('export-btn').addEventListener('click', async () => {
+// browser download + file picker. The sidebar buttons and the Settings
+// buttons share these handlers so both entry points behave identically.
+async function handleExport() {
   if (window.require) {
     const { ipcRenderer } = window.require('electron');
     await ipcRenderer.invoke('export-data');
   } else {
     await exportData();
   }
-});
+}
 
-document.getElementById('import-btn').addEventListener('click', async () => {
+async function handleImport() {
   if (window.require) {
     const { ipcRenderer } = window.require('electron');
     const res = await ipcRenderer.invoke('import-data');
@@ -51,7 +52,10 @@ document.getElementById('import-btn').addEventListener('click', async () => {
   } else {
     await importData();
   }
-});
+}
+
+document.getElementById('export-btn').addEventListener('click', handleExport);
+document.getElementById('import-btn').addEventListener('click', handleImport);
 
 if (window.require) {
   // Main process sends the parsed backup contents after the file dialog.
@@ -542,8 +546,8 @@ function renderSettings(container) {
       <div class="report-card">
         <h3 class="report-title">Data Management</h3>
         <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
-        <button class="btn btn-primary" onclick="exportData()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
-        <button class="btn btn-ghost" onclick="importData()" style="width: 100%;">Import Data</button>
+        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
+        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
       </div>
       
       <div class="report-card">
