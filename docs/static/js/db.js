@@ -175,10 +175,63 @@ function importKeyOf(item) {
   ].join('|');
 }
 
+// Coerce one imported entry into something the app can store and show:
+// numbers as numbers (string amounts used to poison Reports totals with
+// concatenation), ISO dates only, sane booleans, category defaulted.
+// Returns null when the entry is unusable — no title, no money, or a
+// missing/garbage date on spend/bills (those rows would render
+// "NaN days" or vanish from every list while Reports still counted
+// them). Unknown fields pass through untouched.
+function sanitizeItem(storeName, item) {
+  const out = { ...item };
+  delete out.id; // ids are reassigned on import
+
+  const str = (v) => String(v == null ? '' : v).trim();
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+  const bool = (v) => (typeof v === 'string' ? v === 'true' : !!v);
+  const isoDate = (v) => {
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(str(v));
+    if (!m) return null;
+    const [y, mo, d] = m[1].split('-').map(Number);
+    const dt = new Date(y, mo - 1, d); // round-trip rejects 31 Feb etc.
+    return dt.getFullYear() === y && dt.getMonth() === mo - 1 && dt.getDate() === d
+      ? m[1] : null;
+  };
+
+  out.title = str(item.title).slice(0, 100);
+  if (!out.title) return null;
+  out.category = str(item.category).slice(0, 60) || 'General';
+
+  if (storeName === 'spend' || storeName === 'due') {
+    const amount = num(item.amount);
+    if (amount === null || amount <= 0) return null;
+    out.amount = amount;
+    // due entries written by older versions may carry `date` only
+    const date = isoDate(storeName === 'spend' ? item.date : (item.dueDate || item.date));
+    if (!date) return null;
+    if (storeName === 'spend') out.date = date; else out.dueDate = date;
+    if ('recurring' in item) out.recurring = bool(item.recurring);
+    if ('confirmed' in item) out.confirmed = bool(item.confirmed);
+    if ('paid' in item) out.paid = bool(item.paid);
+    if ('frequency' in item) out.frequency = str(item.frequency).slice(0, 20);
+  } else if (storeName === 'savings') {
+    const target = num(item.target);
+    const current = num(item.current);
+    if (target === null || target <= 0) return null;
+    out.target = target;
+    out.current = current !== null && current >= 0 ? current : 0;
+  }
+
+  if ('notes' in item) out.notes = str(item.notes).slice(0, 1000);
+  return out;
+}
+
 // mode 'merge'  — keep everything stored, add only entries not already there
 //                 (existing wins; duplicates inside the file are skipped too)
 // mode 'replace' — restore semantics: the file becomes the data set; every
 //                 store is cleared first, even ones missing from the file.
+// Sanitisation runs up front so replace mode never clears anything it
+// can't back with usable entries.
 async function importDataToDB(data, mode = 'merge') {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error("That file isn't a Sorted backup");
@@ -189,6 +242,19 @@ async function importDataToDB(data, mode = 'merge') {
     throw new Error('No Sorted data found in that file');
   }
 
+  let dropped = 0;
+  const usable = {};
+  for (const storeName of fileStores) {
+    usable[storeName] = [];
+    for (const item of data[storeName]) {
+      const clean = item && typeof item === 'object' ? sanitizeItem(storeName, item) : null;
+      if (clean) usable[storeName].push(clean);
+      else dropped++;
+    }
+  }
+  const totalUsable = Object.values(usable).reduce((n, arr) => n + arr.length, 0);
+  if (totalUsable === 0) throw new Error('Nothing usable in that file');
+
   const db = await openDB();
   let imported = 0;
   let skipped = 0;
@@ -198,14 +264,10 @@ async function importDataToDB(data, mode = 'merge') {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       store.clear();
-      if (fileStores.includes(storeName)) {
-        data[storeName].forEach(item => {
-          if (!item || typeof item !== 'object') return;
-          const { id, ...rest } = item; // strip old ids; autoIncrement assigns new ones
-          store.add(rest);
-          imported++;
-        });
-      }
+      (usable[storeName] || []).forEach(item => {
+        store.add(item);
+        imported++;
+      });
       await txDone(tx);
     }
   } else {
@@ -217,16 +279,14 @@ async function importDataToDB(data, mode = 'merge') {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
 
-      data[storeName].forEach(item => {
-        if (!item || typeof item !== 'object') return;
-        const { id, ...rest } = item;
-        const key = importKeyOf(rest);
+      usable[storeName].forEach(item => {
+        const key = importKeyOf(item);
         if (seen.has(key)) {
           skipped++;
           return;
         }
         seen.add(key);
-        store.add(rest);
+        store.add(item);
         imported++;
       });
 
@@ -235,7 +295,7 @@ async function importDataToDB(data, mode = 'merge') {
   }
 
   if (imported === 0 && skipped === 0) throw new Error('Nothing to import in that file');
-  return { imported, skipped };
+  return { imported, skipped, dropped };
 }
 
 // Seeding runs at most once per page load, shared across callers. The

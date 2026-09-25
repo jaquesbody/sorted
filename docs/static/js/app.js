@@ -986,11 +986,11 @@ async function commitImport(mode, btn) {
   if (!data) return;
 
   try {
-    const { imported, skipped } = await importDataToDB(data, mode);
+    const { imported, skipped, dropped } = await importDataToDB(data, mode);
     if (mode === 'replace') {
-      showToast(`Replaced with ${imported} item${imported === 1 ? '' : 's'}`);
+      showToast(`Replaced with ${imported} item${imported === 1 ? '' : 's'}${dropped ? ` (${dropped} unusable skipped)` : ''}`);
     } else {
-      showToast(`Imported ${imported} new item${imported === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} duplicate${skipped === 1 ? '' : 's'}` : ''}`);
+      showToast(`Imported ${imported} new item${imported === 1 ? '' : 's'}${skipped ? `, skipped ${skipped} duplicate${skipped === 1 ? '' : 's'}` : ''}${dropped ? `, ${dropped} unusable skipped` : ''}`);
     }
     renderPage();
   } catch (err) {
