@@ -2,44 +2,56 @@
 
 Easily check and track your spending, saving and bills, all local and private.
 
-## Screenshot
+**Sorted v2** is a modern rewrite: a dark-themed finance tracker that runs as a desktop app (Electron) and straight in your browser. No backend, no cloud, no login — everything lives in your device's local storage (IndexedDB).
 
-![Sorted dashboard — spend, due, and savings at a glance](static/screenshots/dashboard.jpg)
+## Screenshots
 
-![Add a bill via photo capture, upload or manual](static/screenshots/addbills.jpg)
+![Sorted dashboard — spend, bills, and savings at a glance](screenshots/dashboard.png)
 
-![Savings tracking view](static/screenshots/savings.jpg)
+![Spend list with month navigation and confirm flow](screenshots/spend.png)
 
 ## Features
 
-- Dashboard: spend, savings, and due at a glance, no scrolling required
-- Itemised spend, savings, and due lists — edit, confirm, reorder, filter
-- Phone: capture receipts by photo or manual entry
-- Desktop: full editor with client-side OCR, categorisation, and Brave-powered spending tips
-- Installable PWA with daily reminders on Android
-- Sync between phone and desktop via Syncthing, no cloud involved
+- Dashboard: spent this month, bills due, savings progress, and a 6-month trend chart
+- Spend, Bills Due, and Savings lists — add, edit, confirm, and mark-as-paid
+- Reports: spending and bills broken down by category
+- Month navigation and status filters
+- Export / import your whole dataset as JSON
+- Sample data seeds on first run so the app isn't empty
 
-## Tech Stack
+## Run It
 
-- Vanilla HTML, CSS, and JavaScript, no frameworks
-- Tesseract.js for client-side OCR
-- File System Access API for desktop auto-ingest of synced receipts
-- Brave Search API for spending tips (optional, uses your own key)
-- Service worker for offline PWA support
-
-## Running Locally
-
-Clone the repo, then serve the folder with any static file server, for example:
+### Desktop app (Electron)
 
     git clone https://github.com/jaquesbody/sorted.git
     cd sorted
-    python3 -m http.server
+    npm install
+    npm start
 
-Then open `http://localhost:8000` in your browser.
+### In a browser
+
+Serve the `renderer` folder with any static file server:
+
+    git clone https://github.com/jaquesbody/sorted.git
+    cd sorted
+    python3 -m http.server --directory renderer
+
+Then open `http://localhost:8000` in your browser. Same app, minus the native export dialogs (export downloads a JSON file instead).
+
+## Tech Stack
+
+- Vanilla HTML, CSS, and JavaScript — no frameworks
+- Electron for the desktop shell
+- IndexedDB for local storage
+- No dependencies at runtime
 
 ## Privacy
 
-No backend, no cloud storage, no login. All data stays on your own devices, synced directly between them via Syncthing. OCR runs entirely in your browser. If you use the Brave API for spending tips, your key is stored locally, never sent anywhere except Brave's API directly.
+No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
+
+## History
+
+v1 — the original web/PWA with OCR, service worker, and Syncthing sync — lives in the git history and still serves from earlier commits.
 
 ## Licence
 

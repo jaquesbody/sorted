@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+
+# Capacitor / Android build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/

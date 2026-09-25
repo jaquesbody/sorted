@@ -1,0 +1,13 @@
+{
+  "name": "sorted-v2",
+  "version": "2.0.0",
+  "description": "Modern finance tracker - spend, savings, and bills, all local and private",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^44.3.0"
+  }
+}
