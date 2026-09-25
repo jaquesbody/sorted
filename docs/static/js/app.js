@@ -179,7 +179,7 @@ function renderCategoryBreakdown(totals, grandTotal) {
         const pct = grandTotal > 0 ? Math.round((amt / grandTotal) * 100) : 0;
         return `
           <div class="category-row">
-            <span class="category-name">${cat}</span>
+            <span class="category-name">${escapeHTML(cat)}</span>
             <div class="category-bar">
               <div class="category-bar-fill" style="width: ${pct}%"></div>
             </div>
@@ -308,19 +308,19 @@ function renderSpendItems(items, total) {
   return items.map(item => {
     const pct = total > 0 ? Math.round((item.amount / total) * 100) : 0;
     return `
-      <div class="item-row" onclick="openEditModal('spend', ${item.id})">
+      <div class="item-row" data-edit-type="spend" data-edit-id="${item.id}">
         <div class="item-row-main">
           <div class="item-info">
-            <div class="item-title">${item.title}</div>
+            <div class="item-title">${escapeHTML(item.title)}</div>
             <div class="item-meta">
-              ${formatDate(item.date)} · ${item.category}
+              ${formatDate(item.date)} · ${escapeHTML(item.category)}
               ${item.recurring ? '<span class="badge badge-recurring">Recurring</span>' : ''}
             </div>
           </div>
         </div>
         <div class="item-amount">${currency(item.amount)}</div>
         <div class="item-actions">
-          <button class="btn-icon" onclick="event.stopPropagation(); toggleConfirm('spend', ${JSON.stringify(item).replace(/"/g, '&quot;')})" title="${item.confirmed ? 'Confirmed' : 'Confirm'}">
+          <button class="btn-icon" data-action="toggle" data-type="spend" data-id="${item.id}" title="${item.confirmed ? 'Confirmed' : 'Confirm'}">
             ${item.confirmed ? '✓' : '○'}
           </button>
         </div>
@@ -369,12 +369,12 @@ async function renderDue(container) {
         const days = daysUntil(item.dueDate);
         const overdue = days < 0;
         return `
-          <div class="item-row" onclick="openEditModal('due', ${item.id})" style="${overdue ? 'border-color: var(--danger);' : ''}">
+          <div class="item-row" data-edit-type="due" data-edit-id="${item.id}" style="${overdue ? 'border-color: var(--danger);' : ''}">
             <div class="item-row-main">
               <div class="item-info">
-                <div class="item-title">${item.title}</div>
+                <div class="item-title">${escapeHTML(item.title)}</div>
                 <div class="item-meta">
-                  Due ${formatDate(item.dueDate)} · ${item.category}
+                  Due ${formatDate(item.dueDate)} · ${escapeHTML(item.category)}
                   ${item.recurring ? '<span class="badge badge-recurring">Recurring</span>' : ''}
                 </div>
               </div>
@@ -386,7 +386,7 @@ async function renderDue(container) {
               </div>
             </div>
             <div class="item-actions">
-              <button class="btn-icon" onclick="event.stopPropagation(); markPaid(${JSON.stringify(item).replace(/"/g, '&quot;')})" title="Mark as Paid">✓</button>
+              <button class="btn-icon" data-action="paid" data-type="due" data-id="${item.id}" title="Mark as Paid">✓</button>
             </div>
           </div>
         `;
@@ -431,11 +431,11 @@ async function renderSavings(container) {
       ` : items.map(item => {
         const goalPct = item.target > 0 ? Math.round((item.current / item.target) * 100) : 0;
         return `
-          <div class="item-row" onclick="openEditModal('savings', ${item.id})">
+          <div class="item-row" data-edit-type="savings" data-edit-id="${item.id}">
             <div class="item-row-main">
               <div class="item-info">
-                <div class="item-title">${item.title}</div>
-                <div class="item-meta">${item.category} · ${goalPct}% complete</div>
+                <div class="item-title">${escapeHTML(item.title)}</div>
+                <div class="item-meta">${escapeHTML(item.category)} · ${goalPct}% complete</div>
               </div>
             </div>
             <div style="text-align: right; min-width: 150px;">
@@ -512,7 +512,7 @@ function renderReportBreakdown(totals, grandTotal) {
     const pct = grandTotal > 0 ? Math.round((amt / grandTotal) * 100) : 0;
     return `
       <div class="category-row">
-        <span class="category-name">${cat}</span>
+        <span class="category-name">${escapeHTML(cat)}</span>
         <div class="category-bar">
           <div class="category-bar-fill" style="width: ${pct}%"></div>
         </div>
@@ -803,13 +803,17 @@ async function deleteItemFromModal(type, id, btn) {
   renderPage();
 }
 
-async function toggleConfirm(type, item) {
+async function toggleConfirm(type, id) {
+  const item = await getItem(type, id);
+  if (!item) return;
   item.confirmed = !item.confirmed;
   await updateItem(type, item);
   renderPage();
 }
 
-async function markPaid(item) {
+async function markPaid(id) {
+  const item = await getItem('due', id);
+  if (!item) return;
   await markDuePaid(item);
   renderPage();
 }
@@ -867,6 +871,20 @@ function showToast(message) {
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => el.classList.remove('show'), 3500);
 }
+
+// Row actions — one delegated listener instead of inline handlers, so no
+// user-controlled value is ever interpolated into an HTML attribute.
+document.getElementById('content').addEventListener('click', (e) => {
+  const action = e.target.closest('[data-action]');
+  if (action) {
+    const id = Number(action.dataset.id);
+    if (action.dataset.action === 'toggle') toggleConfirm(action.dataset.type, id);
+    else if (action.dataset.action === 'paid') markPaid(id);
+    return;
+  }
+  const row = e.target.closest('[data-edit-id]');
+  if (row) openEditModal(row.dataset.editType, Number(row.dataset.editId));
+});
 
 // Initialize
 renderPage();

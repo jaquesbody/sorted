@@ -1,7 +1,8 @@
 // Sorted v2 - Utility Functions
 
 function currency(amount) {
-  return '£' + amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const n = Number(amount);
+  return '£' + (Number.isFinite(n) ? n : 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
 function formatDate(dateStr) {
@@ -49,4 +50,11 @@ function daysUntil(dueDate) {
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
+}
+
+// Escape a value for safe interpolation into HTML text or attributes.
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, ch => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+  ));
 }
