@@ -79,15 +79,54 @@ async function deleteItem(storeName, id) {
   });
 }
 
+// Same day next month, clamped to the month's length (31 Jan → 28 Feb).
+// Missing/unparseable dueDates roll from today's date instead.
+function nextDueDate(dueDate) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueDate || '');
+  let y, mo, d;
+  if (m) {
+    y = Number(m[1]); mo = Number(m[2]); d = Number(m[3]);
+  } else {
+    const t = new Date();
+    y = t.getFullYear(); mo = t.getMonth() + 1; d = t.getDate();
+  }
+  const ny = mo === 12 ? y + 1 : y;
+  const nm = mo === 12 ? 1 : mo + 1;
+  const lastDay = new Date(ny, nm, 0).getDate();
+  return localISO(new Date(ny, nm - 1, Math.min(d, lastDay)));
+}
+
+// Paying a bill: the payment lands in Spend. A recurring bill then rolls
+// forward to the same day next month instead of disappearing — one tap
+// records this month's payment and next month's due date appears.
+// Both writes run in a single transaction, so a failure can never leave
+// the bill in both lists or in neither.
 async function markDuePaid(dueItem) {
   const { id, ...rest } = dueItem;
-  await addItem('spend', {
+  const db = await openDB();
+  const tx = db.transaction(['spend', 'due'], 'readwrite');
+  const now = new Date().toISOString();
+
+  tx.objectStore('spend').add({
     ...rest,
-    date: new Date().toISOString().slice(0, 10),
+    date: localISO(),
     confirmed: true,
-    paid: true
+    paid: true,
+    createdAt: now
   });
-  await deleteItem('due', id);
+
+  if (dueItem.recurring) {
+    tx.objectStore('due').put({
+      ...rest,
+      id,
+      dueDate: nextDueDate(rest.dueDate),
+      updatedAt: now
+    });
+  } else {
+    tx.objectStore('due').delete(id);
+  }
+
+  await txDone(tx);
 }
 
 async function getAllData() {

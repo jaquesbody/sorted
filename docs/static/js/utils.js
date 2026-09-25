@@ -48,8 +48,11 @@ function daysUntil(dueDate) {
 }
 
 
-function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).substr(2);
+// Local-date YYYY-MM-DD (toISOString() is UTC — wrong "today" between
+// 00:00 and 01:00 in BST).
+function localISO(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 // Escape a value for safe interpolation into HTML text or attributes.
