@@ -38,6 +38,19 @@ Serve the `renderer` folder with any static file server:
 
 Then open `http://localhost:8000` in your browser. Same app, minus the native export dialogs (export downloads a JSON file instead).
 
+### Android (APK)
+
+Grab [`sorted-v2-2.0.0-debug.apk`](sorted-v2-2.0.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
+
+To rebuild it yourself (needs JDK 21 and the Android SDK):
+
+    npm install
+    npx cap sync android
+    cd android
+    ./gradlew assembleDebug
+
+Note: JSON export/import works on desktop and in the browser; on Android the export isn't wired to device storage yet.
+
 ## Tech Stack
 
 - Vanilla HTML, CSS, and JavaScript — no frameworks
