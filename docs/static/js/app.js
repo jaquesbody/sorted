@@ -15,21 +15,47 @@ document.querySelectorAll('.nav-item').forEach(item => {
   });
 });
 
-// Modal
+// Modal — openModal moves focus into the modal (first field, or the
+// close button when there are none, so Enter can never fire a
+// destructive button); closeModal puts focus back on the opener.
+// Escape closes from anywhere.
 const modal = document.getElementById('modal');
 const modalTitle = document.getElementById('modal-title');
 const modalBody = document.getElementById('modal-body');
 const modalClose = document.getElementById('modal-close');
+let modalReturnFocus = null;
 
-modalClose.addEventListener('click', () => modal.classList.remove('active'));
+function closeModal() {
+  modal.classList.remove('active');
+  if (modalReturnFocus && document.contains(modalReturnFocus)) modalReturnFocus.focus();
+  modalReturnFocus = null;
+}
+
+modalClose.addEventListener('click', closeModal);
 modal.addEventListener('click', (e) => {
-  if (e.target === modal) modal.classList.remove('active');
+  if (e.target === modal) closeModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && modal.classList.contains('active')) closeModal();
+});
+
+// Keyboard activation for custom buttons (nav items, filter chips,
+// dashboard stat cards): Enter/Space clicks them like real buttons.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const el = e.target.closest && e.target.closest('[role="button"]');
+  if (!el) return;
+  e.preventDefault();
+  el.click();
 });
 
 function openModal(title, content) {
+  modalReturnFocus = document.activeElement;
   modalTitle.textContent = title;
   modalBody.innerHTML = content;
   modal.classList.add('active');
+  const focusTarget = modal.querySelector('input:not([type="file"]), select, textarea') || modalClose;
+  focusTarget.focus();
 }
 
 // Export/Import — Electron gets native dialogs; web/Android fall back to
@@ -118,7 +144,7 @@ async function renderDashboard(container) {
     </div>
     
     <div class="dashboard-grid">
-      <div class="stat-card" onclick="currentPage='spend'; renderPage();">
+      <div class="stat-card" role="button" tabindex="0" onclick="currentPage='spend'; renderPage();">
         <div class="stat-card-header">
           <span class="stat-card-title">Spent This Month</span>
           <span class="stat-card-sub">${spendMonth.length} items</span>
@@ -131,7 +157,7 @@ async function renderDashboard(container) {
         ${renderCategoryBreakdown(spendByCategory, spendMonthTotal)}
       </div>
       
-      <div class="stat-card" onclick="currentPage='due'; renderPage();">
+      <div class="stat-card" role="button" tabindex="0" onclick="currentPage='due'; renderPage();">
         <div class="stat-card-header">
           <span class="stat-card-title">Bills Due</span>
           <span class="stat-card-sub">${dueItems.length} items</span>
@@ -144,7 +170,7 @@ async function renderDashboard(container) {
         ${renderCategoryBreakdown(dueByCategory, dueTotal)}
       </div>
       
-      <div class="stat-card" onclick="currentPage='savings'; renderPage();">
+      <div class="stat-card" role="button" tabindex="0" onclick="currentPage='savings'; renderPage();">
         <div class="stat-card-header">
           <span class="stat-card-title">Savings</span>
           <span class="stat-card-sub">${savingsItems.length} goals</span>
@@ -313,10 +339,10 @@ async function renderSpend(container) {
     </div>
     
     <div class="filter-bar">
-      <span class="filter-chip ${spendFilter === 'all' ? 'active' : ''}" onclick="filterSpend('all')">All</span>
-      <span class="filter-chip ${spendFilter === 'confirmed' ? 'active' : ''}" onclick="filterSpend('confirmed')">Confirmed</span>
-      <span class="filter-chip ${spendFilter === 'pending' ? 'active' : ''}" onclick="filterSpend('pending')">Pending</span>
-      <span class="filter-chip ${spendFilter === 'recurring' ? 'active' : ''}" onclick="filterSpend('recurring')">Recurring</span>
+      <span class="filter-chip ${spendFilter === 'all' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('all')">All</span>
+      <span class="filter-chip ${spendFilter === 'confirmed' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('confirmed')">Confirmed</span>
+      <span class="filter-chip ${spendFilter === 'pending' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('pending')">Pending</span>
+      <span class="filter-chip ${spendFilter === 'recurring' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('recurring')">Recurring</span>
     </div>
     
     <div class="item-list" id="spend-list">
@@ -868,8 +894,8 @@ async function saveItem(type, editId = null) {
     if (type === 'spend') Object.assign(fields, { confirmed: false, paid: false });
     await addItem(type, fields);
   }
-  
-  modal.classList.remove('active');
+
+  closeModal();
   renderPage();
 }
 
@@ -885,7 +911,7 @@ async function deleteItemFromModal(type, id, btn) {
     return;
   }
   await deleteItem(type, id);
-  modal.classList.remove('active');
+  closeModal();
   renderPage();
 }
 
@@ -1006,7 +1032,7 @@ async function startImport(data) {
 
 function cancelImport() {
   pendingImport = null;
-  modal.classList.remove('active');
+  closeModal();
 }
 
 async function commitImport(mode, btn) {
@@ -1022,7 +1048,7 @@ async function commitImport(mode, btn) {
   }
   const data = pendingImport;
   pendingImport = null;
-  modal.classList.remove('active');
+  closeModal();
   if (!data) return;
 
   try {

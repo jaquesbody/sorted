@@ -701,3 +701,13 @@ body {
     gap: 0;
   }
 }
+
+/* Keyboard focus for custom interactive elements (nav items, filter
+   chips, dashboard stat cards) — they're role=button spans/divs/li
+   without a native focus ring. */
+.nav-item:focus-visible,
+.filter-chip:focus-visible,
+.stat-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
