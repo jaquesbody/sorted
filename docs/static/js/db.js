@@ -187,11 +187,30 @@ async function importDataToDB(data, mode = 'merge') {
 async function seedIfEmpty() {
   const existing = await getAll('spend');
   if (existing.length > 0) return;
-  
+
+  // Dates are generated relative to today so a fresh install always looks
+  // current: spend lands inside the current month and the bills sit one
+  // overdue and one upcoming, instead of ageing out as the calendar moves.
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const daysFromNow = (n) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return iso(d);
+  };
+  // Spread through the current month — fraction 0 ≈ today, 1 = the 1st —
+  // so the sample spend can never fall outside "this month" on the dashboard.
+  const thisMonth = (fraction) => {
+    const now = new Date();
+    const elapsed = now.getDate();
+    const day = Math.max(1, elapsed - Math.round(elapsed * fraction));
+    return iso(new Date(now.getFullYear(), now.getMonth(), day));
+  };
+
   // Sample spend data
   await addItem('spend', {
     title: 'Electricity: Co-op Energy',
-    date: '2026-08-16',
+    date: thisMonth(0.1),
     amount: 283.65,
     category: 'Utilities',
     recurring: true,
@@ -202,7 +221,7 @@ async function seedIfEmpty() {
   
   await addItem('spend', {
     title: 'Fuel: Spar',
-    date: '2026-08-26',
+    date: thisMonth(0.5),
     amount: 40.05,
     category: 'Motor',
     recurring: false,
@@ -212,7 +231,7 @@ async function seedIfEmpty() {
   
   await addItem('spend', {
     title: 'Beer: Cash',
-    date: '2026-08-29',
+    date: thisMonth(0.85),
     amount: 10.00,
     category: 'Entertainment',
     recurring: false,
@@ -220,10 +239,11 @@ async function seedIfEmpty() {
     paid: false
   });
   
-  // Sample due data
+  // Sample due data — one upcoming, one already overdue so the bills page
+  // demonstrates both states.
   await addItem('due', {
     title: 'Mortgage',
-    dueDate: '2026-09-03',
+    dueDate: daysFromNow(6),
     amount: 98.00,
     category: 'Mortgage',
     recurring: true,
@@ -232,7 +252,7 @@ async function seedIfEmpty() {
   
   await addItem('due', {
     title: 'Electricity: Co-op Energy',
-    dueDate: '2026-09-16',
+    dueDate: daysFromNow(-4),
     amount: 24.10,
     category: 'Utilities',
     recurring: true,
