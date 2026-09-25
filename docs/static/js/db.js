@@ -4,10 +4,17 @@ const DB_NAME = 'sorted-v2-db';
 const DB_VERSION = 1;
 const STORES = ['spend', 'due', 'savings', 'recurring'];
 
+// One cached connection for the page's lifetime. Every operation used to
+// open a fresh IndexedDB connection and never close it — enough leaked
+// connections piled up that deleteDatabase() blocked and memory grew on
+// heavy use. Failures drop the cache so the next call can retry.
+let dbPromise = null;
+
 function openDB() {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    
+
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
       STORES.forEach(name => {
@@ -18,10 +25,18 @@ function openDB() {
         }
       });
     };
-    
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+
+    request.onsuccess = () => {
+      const db = request.result;
+      // Another tab requesting a schema upgrade, or a forced close, drops
+      // the cache so the next operation opens a fresh connection.
+      db.onversionchange = () => { db.close(); dbPromise = null; };
+      db.onclose = () => { dbPromise = null; };
+      resolve(db);
+    };
+    request.onerror = () => { dbPromise = null; reject(request.error); };
   });
+  return dbPromise;
 }
 
 async function getAll(storeName) {
