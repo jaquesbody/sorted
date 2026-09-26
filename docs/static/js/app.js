@@ -10,15 +10,31 @@ let viewedDate = new Date();
 viewedDate.setDate(1);
 let spendFilter = 'all';
 
-// Navigation
-document.querySelectorAll('.nav-item').forEach(item => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-    item.classList.add('active');
-    currentPage = item.dataset.page;
-    renderPage();
-  });
+// Navigation — delegated, so the cloned bottom-bar copy used by the
+// phone layout works with the same handler and all copies stay in sync.
+document.addEventListener('click', (e) => {
+  const item = e.target.closest && e.target.closest('.nav-item');
+  if (!item) return;
+  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+  item.classList.add('active');
+  currentPage = item.dataset.page;
+  renderPage();
 });
+
+// Phone layout: the vertical rail eats a big slice of a phone screen, so
+// the Android build clones the nav into a fixed bottom bar instead.
+// ?native in the URL previews that layout in a desktop browser.
+const IS_NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform())
+  || new URLSearchParams(window.location.search).has('native');
+
+if (IS_NATIVE) {
+  const bar = document.getElementById('bottom-nav');
+  const list = document.querySelector('.sidebar .nav-list');
+  if (bar && list) {
+    bar.appendChild(list.cloneNode(true));
+    document.body.classList.add('is-native');
+  }
+}
 
 // Modal — openModal moves focus into the modal (first field, or the
 // close button when there are none, so Enter can never fire a
