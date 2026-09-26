@@ -1,5 +1,10 @@
 // Sorted v2 - Main Application
 
+// Single source for the version shown in the UI. Bump this together with
+// package.json and android/app/build.gradle.
+const APP_VERSION = '2.0.3';
+document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
+
 let currentPage = 'dashboard';
 let viewedDate = new Date();
 viewedDate.setDate(1);
@@ -615,7 +620,7 @@ function renderSettings(container) {
       <div class="report-card">
         <h3 class="report-title">About</h3>
         <p style="color: var(--text-secondary);">
-          <strong>Sorted v2.0</strong><br>
+          <strong>Sorted <span class="app-version">v2.0.3</span></strong><br>
           A modern finance tracker<br>
           All data stored locally<br>
           No cloud, no login required
