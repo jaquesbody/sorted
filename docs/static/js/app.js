@@ -9,6 +9,7 @@ let currentPage = 'dashboard';
 let viewedDate = new Date();
 viewedDate.setDate(1);
 let spendFilter = 'all';
+let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
 
 // Navigation — delegated, so the cloned bottom-bar copy used by the
 // phone layout works with the same handler and all copies stay in sync.
@@ -555,25 +556,41 @@ async function renderReports(container) {
     getAll('due'),
     getAll('savings')
   ]);
-  
-  const totalSpend = spendItems.reduce((sum, i) => sum + i.amount, 0);
-  const totalDue = dueItems.reduce((sum, i) => sum + i.amount, 0);
+
+  // Range chips scope spending and bills; savings goals have no dates,
+  // so their total stays lifetime.
+  const inRange = (dateStr) => reportRange === 'all' ? true
+    : reportRange === 'month' ? isThisMonth(dateStr)
+    : isThisYear(dateStr);
+  const rangedSpend = spendItems.filter(i => inRange(i.date));
+  const rangedDue = dueItems.filter(i => inRange(i.dueDate));
+
+  const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
+  const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
   const totalSavings = savingsItems.reduce((sum, i) => sum + i.current, 0);
-  
+
+  const chip = (value, label) =>
+    `<span class="filter-chip ${reportRange === value ? 'active' : ''}" role="button" tabindex="0" onclick="setReportRange('${value}')">${label}</span>`;
+
   container.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Reports</h1>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        ${chip('all', 'All time')}
+        ${chip('month', 'This month')}
+        ${chip('year', 'This year')}
+      </div>
     </div>
     
     <div class="reports-grid">
       <div class="report-card">
         <h3 class="report-title">Spending by Category</h3>
-        ${renderReportBreakdown(groupByCategory(spendItems, 'amount'), totalSpend)}
+        ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend)}
       </div>
       
       <div class="report-card">
         <h3 class="report-title">Bills by Category</h3>
-        ${renderReportBreakdown(groupByCategory(dueItems, 'amount'), totalDue)}
+        ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue)}
       </div>
       
       <div class="report-card">
@@ -595,6 +612,11 @@ async function renderReports(container) {
       </div>
     </div>
   `;
+}
+
+function setReportRange(range) {
+  reportRange = range;
+  renderPage();
 }
 
 function renderReportBreakdown(totals, grandTotal) {
