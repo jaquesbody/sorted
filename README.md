@@ -14,11 +14,12 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 
 ## Features
 
-- Dashboard: spent this month, bills due, savings progress, and a 6-month trend chart
+- Dashboard: spent, bills due and savings for whichever month you're looking at, plus a 6-month trend chart that splits recurring from one-off spend
 - Spend, Bills Due, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - Recurring bills: marking one paid copies the payment into Spend and rolls the due date a month forward
-- Bills Due has its own month navigator, so the next few months of recurring payments are one tap away; anything already past its date stays listed whatever month you look at
-- Reports: spending and bills broken down by category, over all time, this month or this year
+- A month selector on Dashboard, Spend and Bills Due, all the same width; tap the month name to jump back to the current one
+- Bills Due filters — All, Confirmed, Pending, Recurring — over the month's bills paid as well as unpaid, so a month you've already dealt with is still worth looking at
+- Reports: spending, bills and savings goals broken down by category, over all time, this month or this year
 - Month navigation and status filters
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
@@ -49,7 +50,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.5-debug.apk`](sorted-v2-2.0.5-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.0.6-debug.apk`](sorted-v2-2.0.6-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 

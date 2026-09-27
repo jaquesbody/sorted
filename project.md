@@ -3,7 +3,7 @@ Last updated 27th September 2026
 **Project: Sorted**
 
 **1. Status**
-- Phase: v2 rewrite complete and running on desktop, browser and Android. Iterating with visual/UX feedback; v2.0.5 adds light/dark, a passcode lock, stored receipts, and a month view on Bills Due.
+- Phase: v2 rewrite complete and running on desktop, browser and Android. Iterating with visual/UX feedback; v2.0.6 adds a month selector to the Dashboard, paid/unpaid bill history behind the Bills Due filters, bar colours per card, and a trend chart split by recurring vs one-off.
 - Formerly Saved — dropped entirely, no merger, Sorted supersedes it.
 
 **2. Problem, User, Outcome**
@@ -30,6 +30,8 @@ Last updated 27th September 2026
 - Notifications: Web Notifications API in an installed PWA, Android-only, flagged on the GitHub page
 - Data model: recurring flag + frequency on Spend/Due items. One item per uploaded document (sub-lines for itemised charges within a single bill, not separate items). Direct Debit collections on a bill are payments, not separate charges. Recurring + DD items default to paid=true on upload, confirm button overrides.
 - Receipts are stored on the item itself as a downscaled data URL (max 1400px, JPEG), not as a file reference — there is no file system to point at in a browser or a WebView. PDFs are flattened to a first-page image, which is what OCR reads and what's shown, so one copy serves both. Receipt images ride in the JSON export, so a backup stays self-contained; they are not part of the merge-dedupe key.
+- A paid bill leaves exactly one record: the copy `markDuePaid` writes into Spend, keeping the original `dueDate`. The Bills Due month view reads those back as its history, which is why paying a bill leaves a "Paid" row in the month it was due rather than in the month you paid it. Each occurrence therefore appears once per month — either paid in Spend or still owing in the due store — with no double count and no gap.
+- Overdue bills ride along in the month view, but only when looking at now or the future. A past month is a record of what it held; dragging today's overdue pile into it made the history unreadable.
 - Theme and passcode live in localStorage, not IndexedDB: they're device settings, not finance data, and the passcode has to be readable synchronously at launch to decide whether to show the lock screen.
 - Passcode is stored as a salted SHA-256 (crypto.subtle, with a non-crypto fallback for insecure contexts). It is a shoulder-surfing screen only — the hash sits next to the data on the same device, so it is documented as such rather than sold as encryption.
 - Idle locking uses a `lastActivity` timestamp rather than counting events, so a backgrounded WebView that has its timers throttled can't drift the clock; a backgrounded app is re-checked on `visibilitychange`.
@@ -51,8 +53,10 @@ Last updated 27th September 2026
 
 **9. Layout Notes**
 - Pages have no `<h1>`. The nav bar already says where you are, and on a phone the heading was the single biggest thing between the top bar and the content. Each page's one control — the month navigator, the report range chips, a lone action button — sits in a toolbar row instead.
-- Category bars are a grid with a fixed name column, so a long name like "Entertainment" can't squeeze the bar it sits next to; the name truncates and keeps the full text in a title attribute.
-- Bills Due is scoped to a month because a bill is only ever stored with the date it's currently due — without stepping forward there was no way to see what the following months hold. Bills already past their date stay listed in every month view, and the total card names next month's figure so nothing looks lost.
+- The month selector is one component on three pages at a fixed width (`--month-nav-width`), because the same control in two widths reads as two different controls. The label is a button: tapping it returns to the current month, which is otherwise a long walk back with ▶.
+- Category bars are a grid with a fixed name column, so a long name like "Entertainment" can't squeeze the bar it sits next to; the name truncates and keeps the full text in a title attribute. Bars carry the colour of what they break down — spending blue, bills red, savings green — because "Bills by Category" in spending blue read as a spending chart.
+- Bills Due is scoped to a month because a bill is only ever stored with the date it's currently due — without stepping forward there was no way to see what the following months hold.
+- The trend chart's month in view is marked with a band behind its column. That band needed its own token: `--bg-surface` works in dark but is the same white as the card in light, so the highlight vanished in the light theme.
 
 **10. Open Questions**
 - Confirmed: no Saved repo exists, only a portfolio stub on jaquesbody.github.io.
