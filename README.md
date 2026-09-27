@@ -16,10 +16,12 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 
 - Dashboard: spent this month, bills due, savings progress, and a 6-month trend chart
 - Spend, Bills Due, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
-- Reports: spending and bills broken down by category
+- Recurring bills: marking one paid copies the payment into Spend and rolls the due date a month forward
+- Reports: spending and bills broken down by category, over all time, this month or this year
 - Month navigation and status filters
 - Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
 - Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed)
+- Works in the browser, on the desktop as an Electron app, and on Android — where the six destinations sit in a bottom bar instead of a side rail
 - Sample data seeds on first run so the app isn't empty
 
 ## Run It
@@ -43,7 +45,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.4-debug.apk`](sorted-v2-2.0.4-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone.
+Grab [`sorted-v2-2.0.4-debug.apk`](sorted-v2-2.0.4-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
