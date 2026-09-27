@@ -17,10 +17,14 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - Dashboard: spent this month, bills due, savings progress, and a 6-month trend chart
 - Spend, Bills Due, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - Recurring bills: marking one paid copies the payment into Spend and rolls the due date a month forward
+- Bills Due has its own month navigator, so the next few months of recurring payments are one tap away; anything already past its date stays listed whatever month you look at
 - Reports: spending and bills broken down by category, over all time, this month or this year
 - Month navigation and status filters
-- Receipt OCR: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
-- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed)
+- Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
+- Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
+- Light, dark, or follow-the-system theme, set in Settings and applied before the first paint
+- Optional passcode: a numeric keypad locks the app on launch and again after a set idle period (1, 5 or 30 minutes, or immediately when it's put away). Only a salted hash of the passcode is stored
+- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images travel with the backup
 - Works in the browser, on the desktop as an Electron app, and on Android — where the six destinations sit in a bottom bar instead of a side rail
 - Sample data seeds on first run so the app isn't empty
 
@@ -45,7 +49,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.4-debug.apk`](sorted-v2-2.0.4-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.0.5-debug.apk`](sorted-v2-2.0.5-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
@@ -60,12 +64,14 @@ Note: importing JSON works on every platform. Export uses the native save dialog
 
 - Vanilla HTML, CSS, and JavaScript — no frameworks
 - Electron for the desktop shell
-- IndexedDB for local storage
+- IndexedDB for local storage, plus `localStorage` for the theme and passcode
 - Zero runtime dependencies in the web app (OCR and PDF libraries are vendored in the repo)
 
 ## Privacy
 
 No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
+
+The passcode is a privacy screen, not encryption: it stops the app being readable when you hand your phone over, and it can't protect data from anyone who already has the unlocked device. It isn't backed up, so a forgotten passcode means clearing the app's storage to get back in.
 
 ## History
 
