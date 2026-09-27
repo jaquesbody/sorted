@@ -8,5 +8,8 @@ contextBridge.exposeInMainWorld('sortedBridge', {
   exportData: () => ipcRenderer.invoke('export-data'),
   importData: () => ipcRenderer.invoke('import-data'),
   // Main sends the parsed backup contents after the file dialog.
-  onImport: (callback) => ipcRenderer.on('sorted:import', (_event, data) => callback(data))
+  onImport: (callback) => ipcRenderer.on('sorted:import', (_event, data) => callback(data)),
+  // The window is painted before the page loads, so a light theme would
+  // otherwise flash dark behind it on launch and on every theme change.
+  setWindowBackground: (color) => ipcRenderer.send('set-window-background', color)
 });

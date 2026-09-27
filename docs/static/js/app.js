@@ -8,6 +8,11 @@ document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v'
 let currentPage = 'dashboard';
 let viewedDate = new Date();
 viewedDate.setDate(1);
+// Bills Due has its own month cursor: the two pages are navigated separately
+// and a shared one made stepping through a bill's recurrence move the spend
+// list too.
+let dueViewedDate = new Date();
+dueViewedDate.setDate(1);
 let spendFilter = 'all';
 let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
 
@@ -79,6 +84,14 @@ function openModal(title, content) {
   const focusTarget = modal.querySelector('input:not([type="file"]), select, textarea') || modalClose;
   focusTarget.focus();
 }
+
+// The passcode lock screen is a full-screen overlay, so nothing behind it can
+// be reached by pointer — but the keyboard still can. Escape is the one that
+// matters: it would otherwise close whatever modal happened to be open at the
+// moment the app locked, leaving it open behind the lock.
+document.addEventListener('keydown', (e) => {
+  if (isLocked() && e.key === 'Escape') e.stopPropagation();
+}, true);
 
 // Export/Import — Electron gets native dialogs; web/Android fall back to
 // browser download + file picker. The sidebar buttons and the Settings
@@ -169,10 +182,6 @@ async function renderDashboard(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Dashboard</h1>
-    </div>
-    
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="currentPage='spend'; renderPage();">
         <div class="stat-card-header">
@@ -215,7 +224,7 @@ async function renderDashboard(container) {
     
     <div class="chart-container">
       <div class="chart-header">
-        <h3 class="chart-title">Monthly Trend</h3>
+        <h2 class="chart-title">Monthly Trend</h2>
       </div>
       <canvas id="trend-chart" class="chart-canvas"></canvas>
     </div>
@@ -244,7 +253,7 @@ function renderCategoryBreakdown(totals, grandTotal) {
         const pct = grandTotal > 0 ? Math.round((amt / grandTotal) * 100) : 0;
         return `
           <div class="category-row">
-            <span class="category-name">${escapeHTML(cat)}</span>
+            <span class="category-name" title="${escapeHTML(cat)}">${escapeHTML(cat)}</span>
             <div class="category-bar">
               <div class="category-bar-fill" style="width: ${pct}%"></div>
             </div>
@@ -279,7 +288,9 @@ function drawTrendChart(spendItems) {
   const css = getComputedStyle(document.documentElement);
   const accent = css.getPropertyValue('--accent').trim() || '#3d8bfd';
   const muted = css.getPropertyValue('--text-secondary').trim() || '#8b8b96';
-  const surface = css.getPropertyValue('--bg-surface').trim() || '#1a1a1f';
+  // The canvas sits inside a card, so it paints itself the card colour —
+  // --bg-surface left a visible inset rectangle of a different shade.
+  const surface = css.getPropertyValue('--bg-card').trim() || '#222228';
   const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
 
   const months = [];
@@ -336,6 +347,49 @@ window.addEventListener('resize', () => {
   trendResizeTimer = setTimeout(() => drawTrendChart(lastTrendItems), 150);
 });
 
+// settings.js calls this after a theme change: the chart is a canvas painted
+// with colours read out of the CSS variables, so a restyle isn't enough.
+function onThemeChanged() {
+  if (currentPage === 'dashboard' && lastTrendItems) drawTrendChart(lastTrendItems);
+}
+
+// A single crisp tick, shared by the confirm (Spend) and mark-as-paid (Bills
+// Due) boxes. Inline SVG rather than a "✓" character: the text glyph rendered
+// thin and inconsistently placed, and read as a dot inside a circle rather
+// than as a tick.
+const TICK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+
+// Paperclip shown on rows that have a stored receipt.
+const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>';
+
+// How a bill reads at a glance. Only counted down when the number is worth
+// acting on: a raw "522 days" for a bill due in 2028 told the user nothing
+// and looked like the app was incrementing something on its own.
+function dueCountdown(dueDate) {
+  const days = daysUntil(dueDate);
+  if (days < 0) {
+    const n = Math.abs(days);
+    return `<span style="color: var(--danger)">${n} day${n === 1 ? '' : 's'} overdue</span>`;
+  }
+  if (days === 0) return '<span style="color: var(--warning)">Due today</span>';
+  if (days <= 7) return `<span style="color: var(--warning)">In ${days} day${days === 1 ? '' : 's'}</span>`;
+  // Beyond a week the exact date under the title says it better than a
+  // number that ticks down in the background.
+  return '<span style="color: var(--text-secondary)">Scheduled</span>';
+}
+
+// Every spend/bill row carries the paperclip, so the row doesn't change shape
+// once a receipt is attached. Dimmed with no photo behind it, it doubles as
+// the way in to attach one — which is how entries added before receipts were
+// stored get their picture.
+function receiptChip(item, type) {
+  const has = !!item.receipt;
+  return `<button class="receipt-chip${has ? '' : ' receipt-chip--empty'}" data-action="${has ? 'receipt' : 'edit-receipt'}"
+            data-type="${type}" data-id="${item.id}"
+            title="${has ? 'View receipt' : 'Add a receipt'}"
+            aria-label="${has ? 'View receipt for' : 'Add a receipt for'} ${escapeHTML(item.title)}">${CLIP_SVG}</button>`;
+}
+
 // Spend Page
 async function renderSpend(container) {
   const token = renderToken;
@@ -351,15 +405,13 @@ async function renderSpend(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Spend</h1>
+    <div class="page-toolbar">
+      <div class="month-nav">
+        <button class="btn-icon" onclick="stepMonth('spend', -1)" aria-label="Previous month">◀</button>
+        <span class="month-label">${formatMonth(viewedDate)}</span>
+        <button class="btn-icon" onclick="stepMonth('spend', 1)" aria-label="Next month">▶</button>
+      </div>
       <button class="btn btn-primary" onclick="openAddModal('spend')">+ Add Spend</button>
-    </div>
-    
-    <div class="month-nav">
-      <button class="btn-icon" onclick="viewedDate.setMonth(viewedDate.getMonth() - 1); renderPage();">◀</button>
-      <span class="month-label">${formatMonth(viewedDate)}</span>
-      <button class="btn-icon" onclick="viewedDate.setMonth(viewedDate.getMonth() + 1); renderPage();">▶</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px;">
@@ -427,9 +479,11 @@ function renderSpendItems(items, total) {
         </div>
         <div class="item-amount">${currency(item.amount)}</div>
         <div class="item-actions">
-          <button class="btn-icon" data-action="toggle" data-type="spend" data-id="${item.id}" title="${item.confirmed ? 'Confirmed' : 'Confirm'}">
-            ${item.confirmed ? '✓' : '○'}
-          </button>
+          ${receiptChip(item, 'spend')}
+          <button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
+                  aria-pressed="${item.confirmed ? 'true' : 'false'}"
+                  aria-label="${item.confirmed ? 'Unconfirm' : 'Confirm'} ${escapeHTML(item.title)}"
+                  title="${item.confirmed ? 'Confirmed — tap to undo' : 'Confirm'}">${TICK_SVG}</button>
         </div>
       </div>
     `;
@@ -441,44 +495,84 @@ function filterSpend(filter) {
   renderPage();
 }
 
+// Month stepper, shared by Spend and Bills Due so both pages navigate
+// identically. Spend and Due keep separate cursors, so this takes which one to
+// move rather than reaching for a shared global.
+function stepMonth(which, delta) {
+  if (which === 'due') dueViewedDate.setMonth(dueViewedDate.getMonth() + delta);
+  else viewedDate.setMonth(viewedDate.getMonth() + delta);
+  renderPage();
+}
+
 // Due Page
 async function renderDue(container) {
   const token = renderToken;
   await seedIfEmpty();
   
-  const items = await getAll('due');
-  items.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  const all = await getAll('due');
+  all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  
+  // The month view exists so a recurring bill's *next* occurrences are
+  // visible — a bill is only ever stored with the date it's currently due,
+  // so without stepping forward there was no way to see what the following
+  // few months look like.
+  const inMonth = all.filter(i => isSameMonth(i.dueDate, dueViewedDate));
+  // Anything already past its date stays listed whatever month you're looking
+  // at: it's still payable, and dropping it off the screen the moment you tap
+  // ▶ is how a bill gets missed.
+  const overdueElsewhere = all.filter(i => isOverdue(i.dueDate) && !isSameMonth(i.dueDate, dueViewedDate));
+  const items = [...inMonth, ...overdueElsewhere].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   
   const total = items.reduce((sum, i) => sum + i.amount, 0);
   const overdue = items.filter(i => isOverdue(i.dueDate));
+  const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
+  // What the month after the one on screen holds. A bill due next month is
+  // genuinely not in this month's list, and without saying so it reads as
+  // the bill having gone missing.
+  const nextMonth = new Date(dueViewedDate.getFullYear(), dueViewedDate.getMonth() + 1, 1);
+  const following = all.filter(i => isSameMonth(i.dueDate, nextMonth));
+  const followingTotal = following.reduce((sum, i) => sum + i.amount, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Bills Due</h1>
+    <div class="page-toolbar">
+      <div class="month-nav">
+        <button class="btn-icon" onclick="stepMonth('due', -1)" aria-label="Previous month">◀</button>
+        <span class="month-label">${formatMonth(dueViewedDate)}</span>
+        <button class="btn-icon" onclick="stepMonth('due', 1)" aria-label="Next month">▶</button>
+      </div>
       <button class="btn btn-primary" onclick="openAddModal('due')">+ Add Bill</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
       <div class="stat-card-header">
         <span class="stat-card-title">Total Due</span>
-        <span class="stat-card-sub">${items.length} items</span>
+        <span class="stat-card-sub">${items.length} item${items.length === 1 ? '' : 's'}</span>
       </div>
       <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
-      ${overdue.length > 0 ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>` : ''}
+      ${overdue.length > 0
+        ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>`
+        : `<div class="stat-card-sub">${upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month'}</div>`}
+      ${overdueElsewhere.length > 0
+        ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
+      ${following.length > 0
+        ? `<div class="stat-card-sub">${escapeHTML(formatMonth(nextMonth))}: ${currency(followingTotal)} · ${following.length} bill${following.length === 1 ? '' : 's'} — tap ▶</div>`
+        : ''}
     </div>
     
     <div class="item-list">
       ${items.length === 0 ? `
         <div class="empty-state">
-          <div class="empty-state-text">No bills due</div>
-          <button class="btn btn-primary" onclick="openAddModal('due')">Add First Bill</button>
+          <div class="empty-state-text">${all.length > 0 ? 'Nothing due this month' : 'No bills due'}</div>
+          ${all.length > 0
+            ? '<p class="setting-hint" style="margin-bottom: 20px;">Use ◀ ▶ to see other months</p>'
+            : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add First Bill</button>'}
         </div>
       ` : items.map(item => {
         const days = daysUntil(item.dueDate);
-        const overdue = days < 0;
+        const isOverdueItem = days < 0;
         return `
-          <div class="item-row" data-edit-type="due" data-edit-id="${item.id}" style="${overdue ? 'border-color: var(--danger);' : ''}">
+          <div class="item-row" data-edit-type="due" data-edit-id="${item.id}" style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
@@ -490,12 +584,12 @@ async function renderDue(container) {
             </div>
             <div style="text-align: right;">
               <div class="item-amount">${currency(item.amount)}</div>
-              <div class="stat-card-sub" style="color: ${overdue ? 'var(--danger)' : days <= 7 ? 'var(--warning)' : 'var(--text-secondary)'}">
-                ${overdue ? Math.abs(days) + ' days overdue' : days === 0 ? 'Due today' : days + ' days'}
-              </div>
+              <div class="stat-card-sub">${dueCountdown(item.dueDate)}</div>
             </div>
             <div class="item-actions">
-              <button class="btn-icon" data-action="paid" data-type="due" data-id="${item.id}" title="Mark as Paid">✓</button>
+              ${receiptChip(item, 'due')}
+              <button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
+                      aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>
             </div>
           </div>
         `;
@@ -516,8 +610,7 @@ async function renderSavings(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Savings</h1>
+    <div class="page-toolbar page-toolbar--end">
       <button class="btn btn-primary" onclick="openAddModal('savings')">+ Add Goal</button>
     </div>
     
@@ -589,9 +682,8 @@ async function renderReports(container) {
 
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Reports</h1>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+    <div class="page-toolbar">
+      <div class="filter-bar">
         ${chip('all', 'All time')}
         ${chip('month', 'This month')}
         ${chip('year', 'This year')}
@@ -600,29 +692,29 @@ async function renderReports(container) {
     
     <div class="reports-grid">
       <div class="report-card">
-        <h3 class="report-title">Spending by Category</h3>
+        <h2 class="report-title">Spending by Category</h2>
         ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend)}
       </div>
       
       <div class="report-card">
-        <h3 class="report-title">Bills by Category</h3>
+        <h2 class="report-title">Bills by Category</h2>
         ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue)}
       </div>
       
       <div class="report-card">
-        <h3 class="report-title">Summary</h3>
+        <h2 class="report-title">Summary</h2>
         <div style="margin-top: 10px;">
-          <div class="category-row">
-            <span class="category-name">Total Spent</span>
-            <span class="category-amount">${currency(totalSpend)}</span>
+          <div class="kv-row">
+            <span class="kv-name">Total Spent</span>
+            <span class="kv-value">${currency(totalSpend)}</span>
           </div>
-          <div class="category-row">
-            <span class="category-name">Total Due</span>
-            <span class="category-amount">${currency(totalDue)}</span>
+          <div class="kv-row">
+            <span class="kv-name">Total Due</span>
+            <span class="kv-value">${currency(totalDue)}</span>
           </div>
-          <div class="category-row">
-            <span class="category-name">Total Saved</span>
-            <span class="category-amount" style="color: var(--success)">${currency(totalSavings)}</span>
+          <div class="kv-row">
+            <span class="kv-name">Total Saved</span>
+            <span class="kv-value" style="color: var(--success)">${currency(totalSavings)}</span>
           </div>
         </div>
       </div>
@@ -646,7 +738,7 @@ function renderReportBreakdown(totals, grandTotal) {
     const pct = grandTotal > 0 ? Math.round((amt / grandTotal) * 100) : 0;
     return `
       <div class="category-row">
-        <span class="category-name">${escapeHTML(cat)}</span>
+        <span class="category-name" title="${escapeHTML(cat)}">${escapeHTML(cat)}</span>
         <div class="category-bar">
           <div class="category-bar-fill" style="width: ${pct}%"></div>
         </div>
@@ -659,22 +751,41 @@ function renderReportBreakdown(totals, grandTotal) {
 // Settings Page
 function renderSettings(container) {
   container.innerHTML = `
-    <div class="page-header">
-      <h1 class="page-title">Settings</h1>
-    </div>
-    
     <div class="reports-grid">
       <div class="report-card">
-        <h3 class="report-title">Data Management</h3>
+        <h2 class="report-title">Appearance</h2>
+        <div class="setting-row">
+          <div class="setting-text">
+            <div class="setting-label">Theme</div>
+            <div class="setting-hint">System follows your device setting</div>
+          </div>
+          <div class="setting-control">
+            ${themeSegment()}
+          </div>
+        </div>
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Passcode</h2>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 15px;">
+          Locks the app on launch and after a period of inactivity. Your data stays
+          on this device either way — this only keeps the app closed when you're
+          not using it.
+        </p>
+        ${passcodeSettings()}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Data Management</h2>
         <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
         <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
         <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
       </div>
       
       <div class="report-card">
-        <h3 class="report-title">About</h3>
+        <h2 class="report-title">About</h2>
         <p style="color: var(--text-secondary);">
-          <strong>Sorted <span class="app-version">v2.0.4</span></strong><br>
+          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong><br>
           A modern finance tracker<br>
           All data stored locally<br>
           No cloud, no login required
@@ -684,21 +795,140 @@ function renderSettings(container) {
   `;
 }
 
+function themeSegment() {
+  const pref = getThemePreference();
+  const opt = (value, label) =>
+    `<button class="segmented-option ${pref === value ? 'active' : ''}" onclick="setThemePreference('${value}')">${label}</button>`;
+  return `<div class="segmented">${opt('light', 'Light')}${opt('dark', 'Dark')}${opt('system', 'System')}</div>`;
+}
+
+function passcodeSettings() {
+  if (!isPasscodeSet()) {
+    return `
+      <div class="setting-row">
+        <div class="setting-text">
+          <div class="setting-label">Require a passcode</div>
+          <div class="setting-hint">Ask for it when the app opens</div>
+        </div>
+        <div class="setting-control">
+          <button class="switch" role="switch" aria-checked="false" aria-label="Require a passcode"
+                  onclick="openPasscodeSetup()"></button>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="setting-row">
+      <div class="setting-text">
+        <div class="setting-label">Passcode on</div>
+        <div class="setting-hint">Tap to remove</div>
+      </div>
+      <div class="setting-control">
+        <button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
+                onclick="confirmRemovePasscode(this)"></button>
+      </div>
+    </div>
+    <div class="setting-block">
+      <div class="setting-row">
+        <div class="setting-text">
+          <div class="setting-label">Lock after</div>
+          <div class="setting-hint">Of no use — the app re-locks itself</div>
+        </div>
+        <div class="setting-control">
+          <select class="form-input" id="lock-timeout" style="width: auto;" onchange="setLockTimeoutMinutes(Number(this.value))">
+            ${LOCK_TIMEOUTS.map(t => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-text">
+          <div class="setting-label">Lock now</div>
+          <div class="setting-hint">Test it, or lock the phone down now</div>
+        </div>
+        <div class="setting-control">
+          <button class="btn btn-ghost" onclick="lockApp()">Lock</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Passcode setup is a modal rather than a field on the page: the toggle is the
+// only entry point, and a form that appears under a switch you just tapped
+// reads as a glitch.
+function openPasscodeSetup() {
+  openModal('Set a passcode', `
+    <p class="form-label">4 to 8 digits. You'll need it every time the app locks.</p>
+    <div class="form-group">
+      <label class="form-label" for="passcode-new">New passcode</label>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="form-input"
+             id="passcode-new" autocomplete="new-password" placeholder="••••">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="passcode-confirm">Confirm passcode</label>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="form-input"
+             id="passcode-confirm" autocomplete="new-password" placeholder="••••">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="passcode-timeout">Lock after</label>
+      <select class="form-input" id="passcode-timeout">
+        ${LOCK_TIMEOUTS.map(t => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
+      </select>
+    </div>
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="savePasscodeSetup()">Save passcode</button>
+  `);
+}
+
+async function savePasscodeSetup() {
+  const first = normalisePasscode(document.getElementById('passcode-new').value);
+  const second = normalisePasscode(document.getElementById('passcode-confirm').value);
+
+  if (first.length < 4) return showFormError('Use at least 4 digits', 'passcode-new');
+  if (first !== second) return showFormError('Those two don’t match', 'passcode-confirm');
+
+  await setPasscode(first);
+  setLockTimeoutMinutes(Number(document.getElementById('passcode-timeout').value));
+  closeModal();
+  showToast('Passcode on — Sorted will ask for it next time');
+  renderPage();
+}
+
+// Turning the passcode off needs a deliberate second tap, same as Delete in
+// the item form: one mis-tap shouldn't drop someone's lock screen.
+function confirmRemovePasscode(switchEl) {
+  if (switchEl.dataset.confirming !== '1') {
+    switchEl.dataset.confirming = '1';
+    switchEl.setAttribute('aria-label', 'Tap again to remove the passcode');
+    switchEl.title = 'Tap again to remove';
+    const row = switchEl.closest('.setting-text');
+    if (row) {
+      const hint = row.querySelector('.setting-hint');
+      if (hint) hint.textContent = 'Tap again to remove';
+    }
+    setTimeout(() => {
+      switchEl.dataset.confirming = '';
+      switchEl.setAttribute('aria-label', 'Remove passcode');
+      switchEl.removeAttribute('title');
+      renderPage();
+    }, 4000);
+    return;
+  }
+  clearPasscode();
+  showToast('Passcode removed');
+  renderPage();
+}
+
 // Modal Forms
 function buildForm(type, editId = null) {
   const saveCall = editId == null
     ? `saveItem('${type}')`
     : `saveItem('${type}', ${editId})`;
-  // Receipt capture is add-only: a photo is taken when the entry is created,
-  // not when it's edited (matches v1, which hid the capture link in edit mode).
-  const receiptHtml = editId == null && (type === 'spend' || type === 'due') ? `
-      <div class="receipt-row">
-        <button type="button" class="btn btn-ghost" id="receipt-camera-btn">Take photo</button>
-        <button type="button" class="btn btn-ghost" id="receipt-upload-btn">Upload file</button>
-        <input type="file" id="receipt-camera-input" accept="image/*" capture="environment" hidden>
-        <input type="file" id="receipt-upload-input" accept="image/*,application/pdf" hidden>
-      </div>
-      <p class="ocr-status" id="ocr-status" aria-live="polite"></p>` : '';
+  // The receipt panel is a live region app.js fills in — it needs to exist in
+  // both add and edit mode, since a stored receipt can be viewed, replaced or
+  // removed after the entry is saved.
+  const receiptHtml = (type === 'spend' || type === 'due') ? `
+      <div class="receipt-panel" id="receipt-panel"></div>` : '';
   const deleteBtn = editId == null ? '' : `
       <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${editId}, this)">Delete</button>`;
   const forms = {
@@ -809,15 +1039,24 @@ function buildForm(type, editId = null) {
 }
 
 function openAddModal(type) {
+  if (type !== 'spend' && type !== 'due') currentReceipt = null;
+  receiptRemoved = false;
+  ocrStatusText = '';
   openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type));
-  if (type === 'spend' || type === 'due') setupReceiptCapture();
+  if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
 
 async function openEditModal(type, id) {
   const item = await getItem(type, id);
   if (!item) return;
+  // Seeded before the form is built so the panel renders with the stored
+  // receipt already in place rather than flashing empty.
+  currentReceipt = item.receipt || null;
+  receiptRemoved = false;
+  ocrStatusText = '';
   openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type, id));
   prefillForm(item);
+  if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
 
 function prefillForm(item) {
@@ -836,16 +1075,119 @@ function prefillForm(item) {
   if (recurring && item.recurring !== undefined) recurring.value = String(item.recurring);
 }
 
-// Receipt capture — camera or file upload, OCR'd to pre-fill title/amount.
-function setupReceiptCapture() {
-  const cameraBtn = document.getElementById('receipt-camera-btn');
-  const cameraInput = document.getElementById('receipt-camera-input');
-  const uploadBtn = document.getElementById('receipt-upload-btn');
-  const uploadInput = document.getElementById('receipt-upload-input');
-  if (!cameraBtn) return;
+/* -----------------------------------------------------------------------------
+   Receipts
+   A receipt used to be read for OCR and then thrown away, so there was nothing
+   to go back to. It's now downscaled to a data URL and saved on the item, then
+   offered again on the row (paperclip) and in the Edit popup, where it can be
+   replaced or removed.
+   -------------------------------------------------------------------------- */
 
-  cameraBtn.addEventListener('click', () => cameraInput.click());
-  uploadBtn.addEventListener('click', () => uploadInput.click());
+// Longest edge kept when storing. A phone photo is 3-5MB as a base64 string;
+// this keeps a receipt legible while staying small enough to sit in the export.
+const RECEIPT_MAX_EDGE = 1400;
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('could not read that image'));
+    img.src = src;
+  });
+}
+
+async function shrinkImageToDataURL(blob) {
+  const original = await blobToDataURL(blob);
+  const img = await loadImage(original);
+  const scale = Math.min(1, RECEIPT_MAX_EDGE / Math.max(img.width, img.height));
+  if (scale >= 1) return original; // already small enough — keep the original
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+// PDFs are flattened to a first-page image, which is both what OCR reads and
+// what gets stored — one copy instead of a PDF plus a preview, and a PDF can be
+// viewed with the same <img> as a photo. The full-size page comes back
+// separately for OCR, so a PDF is only ever rendered once.
+async function prepareReceipt(file) {
+  const isPdf = typeof isPDF === 'function' && isPDF(file);
+  const image = isPdf ? await pdfFirstPageToImageBlob(file) : file;
+  if (!image) throw new Error('could not render that PDF');
+  return {
+    receipt: { dataUrl: await shrinkImageToDataURL(image), name: file.name, addedAt: new Date().toISOString() },
+    source: image
+  };
+}
+
+// The receipt being edited lives outside the form so re-rendering the panel
+// (after a pick or a remove) doesn't have to thread it through, and so
+// opening a savings form can't inherit the last receipt.
+let currentReceipt = null;
+// Set when the user drops the stored receipt. An edit merges over the stored
+// record, so without this the "remove" would be silently undone on save.
+let receiptRemoved = false;
+
+function renderReceiptPanel(existing) {
+  const panel = document.getElementById('receipt-panel');
+  if (!panel) return;
+  const receipt = currentReceipt;
+
+  const preview = receipt ? `
+    <div class="receipt-card">
+      <img class="receipt-thumb" src="${receipt.dataUrl}" alt="Receipt for ${escapeHTML(document.getElementById('form-title')?.value || 'this item')}"
+           data-action="view-receipt" title="View full size">
+      <div class="receipt-meta">
+        <div class="receipt-name" title="${escapeHTML(receipt.name || 'Receipt')}">${escapeHTML(receipt.name || 'Receipt')}</div>
+        <div class="setting-hint">Saved with this item</div>
+        <div class="receipt-actions">
+          <button type="button" class="btn btn-ghost" data-action="view-receipt">View</button>
+          <button type="button" class="btn btn-ghost" id="receipt-replace-btn">Replace</button>
+          <button type="button" class="btn btn-ghost" id="receipt-remove-btn">Remove</button>
+        </div>
+      </div>
+    </div>` : `
+    <div class="receipt-row">
+      <button type="button" class="btn btn-ghost" id="receipt-camera-btn">Take photo</button>
+      <button type="button" class="btn btn-ghost" id="receipt-upload-btn">Upload file</button>
+    </div>`;
+
+  panel.innerHTML = `
+    ${preview}
+    <p class="ocr-status" id="ocr-status" aria-live="polite">${ocrStatusText || ''}</p>
+    <input type="file" id="receipt-camera-input" accept="image/*" capture="environment" hidden>
+    <input type="file" id="receipt-upload-input" accept="image/*,application/pdf" hidden>
+  `;
+
+  // "Replace" reuses the upload input rather than adding a second pair.
+  const cameraBtn = document.getElementById('receipt-camera-btn');
+  const uploadBtn = document.getElementById('receipt-upload-btn');
+  const replaceBtn = document.getElementById('receipt-replace-btn');
+  const removeBtn = document.getElementById('receipt-remove-btn');
+  const cameraInput = document.getElementById('receipt-camera-input');
+  const uploadInput = document.getElementById('receipt-upload-input');
+
+  if (cameraBtn) cameraBtn.addEventListener('click', () => cameraInput.click());
+  if (uploadBtn) uploadBtn.addEventListener('click', () => uploadInput.click());
+  if (replaceBtn) replaceBtn.addEventListener('click', () => uploadInput.click());
+  if (removeBtn) removeBtn.addEventListener('click', () => {
+    currentReceipt = null;
+    receiptRemoved = true;
+    ocrStatusText = '';
+    renderReceiptPanel();
+  });
 
   const handleChange = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -856,40 +1198,72 @@ function setupReceiptCapture() {
   uploadInput.addEventListener('change', handleChange);
 }
 
+let ocrStatusText = '';
+
+// The status line lives in a variable rather than the DOM because the panel is
+// re-rendered after every pick — OCR's progress messages would otherwise be
+// wiped by the thumbnail appearing underneath them.
+function setOcrStatus(text) {
+  ocrStatusText = text || '';
+  const el = document.getElementById('ocr-status');
+  if (el) el.textContent = ocrStatusText;
+}
+
 async function ocrPrefill(file) {
-  const status = document.getElementById('ocr-status');
   const titleEl = document.getElementById('form-title');
   const amountEl = document.getElementById('form-amount');
   // Spend has form-date (pre-filled with today), bills have form-dueDate
   // (starts empty) — whichever the open form owns gets the receipt date.
   const dateEl = document.getElementById('form-date') || document.getElementById('form-dueDate');
-  if (!status) return;
 
   try {
-    status.textContent = 'Reading receipt…';
-    let image = file;
-    if (typeof isPDF === 'function' && isPDF(file)) {
-      status.textContent = 'Rendering PDF…';
-      image = await pdfFirstPageToImageBlob(file);
-      if (!image) throw new Error('could not render PDF');
-    }
-    const text = await runOCRWithTimeout(image, (msg) => { status.textContent = msg; });
+    // Store the image first: even if OCR fails or guesses wrong, the photo is
+    // the part the user can't recreate. For a PDF this also does the (slow)
+    // render, so OCR reads the page we already have rather than doing it again.
+    setOcrStatus(typeof isPDF === 'function' && isPDF(file) ? 'Rendering PDF…' : 'Reading receipt…');
+    const prepared = await prepareReceipt(file);
+    currentReceipt = prepared.receipt;
+    setOcrStatus('Reading receipt…');
+    renderReceiptPanel();
+
+    const text = await runOCRWithTimeout(prepared.source, (msg) => setOcrStatus(msg));
     const title = guessTitleFromText(text);
     const amount = guessAmountFromText(text);
     const date = guessDateFromText(text);
-    if (!titleEl.value && title) titleEl.value = title;
-    if (!amountEl.value && amount > 0) amountEl.value = amount;
+    if (titleEl && !titleEl.value && title) titleEl.value = title;
+    if (amountEl && !amountEl.value && amount > 0) amountEl.value = amount;
     // The date fields ship with defaults (today / empty), so unlike title and
     // amount this one is always overwritten when the receipt shows a date.
     if (dateEl && date) dateEl.value = date;
-    status.textContent = date
+    setOcrStatus(date
       ? 'Done — check title, amount and date, then save.'
-      : 'Done — check title and amount, then save.';
+      : 'Done — check title and amount, then save.');
   } catch (err) {
     console.error('OCR failed:', err);
-    status.textContent = 'Could not read that file — enter the details manually.';
+    setOcrStatus('Could not read that file — enter the details manually.');
   }
 }
+
+// Full-size viewer, opened from a row's paperclip or the Edit popup.
+function openViewer(receipt) {
+  if (!receipt || !receipt.dataUrl) return;
+  const viewer = document.getElementById('viewer');
+  document.getElementById('viewer-image').src = receipt.dataUrl;
+  document.getElementById('viewer-caption').textContent = receipt.name || 'Receipt';
+  viewer.hidden = false;
+}
+
+function closeViewer() {
+  const viewer = document.getElementById('viewer');
+  if (!viewer || viewer.hidden) return;
+  viewer.hidden = true;
+  document.getElementById('viewer-image').src = '';
+}
+
+document.getElementById('viewer-close').addEventListener('click', closeViewer);
+document.getElementById('viewer').addEventListener('click', (e) => {
+  if (e.target.id === 'viewer') closeViewer();
+});
 
 // In-modal validation error — replaces native alert(). Error sits at the
 // top of the form, announced by role="alert", and the offending field
@@ -923,6 +1297,11 @@ async function saveItem(type, editId = null) {
 
   const fields = { title, category };
   if (type !== 'savings') fields.recurring = recurring;
+  // Written only when the panel actually changed: an edit that leaves it alone
+  // leaves the stored image alone (the merge below keeps it), and a removed
+  // receipt is nulled out rather than left behind.
+  if (currentReceipt) fields.receipt = currentReceipt;
+  else if (receiptRemoved) fields.receipt = null;
 
   // A cleared date saved an entry that no list could show (Reports still
   // counted it) and a cleared bill date rendered "NaN days" — dates and
@@ -954,6 +1333,9 @@ async function saveItem(type, editId = null) {
     await addItem(type, fields);
   }
 
+  currentReceipt = null;
+  receiptRemoved = false;
+  ocrStatusText = '';
   closeModal();
   renderPage();
 }
@@ -970,6 +1352,7 @@ async function deleteItemFromModal(type, id, btn) {
     return;
   }
   await deleteItem(type, id);
+  currentReceipt = null;
   closeModal();
   renderPage();
 }
@@ -986,6 +1369,14 @@ async function markPaid(id) {
   const item = await getItem('due', id);
   if (!item) return;
   await markDuePaid(item);
+  // A recurring bill rolls to the same day next month, so it leaves the list
+  // that was just tapped. Say where it went — otherwise a payment looks like
+  // it deleted the bill.
+  if (item.recurring) {
+    showToast(`Paid — next due ${formatDate(nextDueDate(item.dueDate))}`);
+  } else {
+    showToast('Marked as paid');
+  }
   renderPage();
 }
 
@@ -1141,11 +1532,26 @@ document.getElementById('content').addEventListener('click', (e) => {
     const id = Number(action.dataset.id);
     if (action.dataset.action === 'toggle') toggleConfirm(action.dataset.type, id);
     else if (action.dataset.action === 'paid') markPaid(id);
+    else if (action.dataset.action === 'receipt') viewItemReceipt(action.dataset.type, id);
+    else if (action.dataset.action === 'edit-receipt') openEditModal(action.dataset.type, id);
     return;
   }
   const row = e.target.closest('[data-edit-id]');
   if (row) openEditModal(row.dataset.editType, Number(row.dataset.editId));
 });
 
+// The receipt thumbnail inside the Edit popup opens the same viewer as the
+// paperclip on a list row.
+modalBody.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="view-receipt"]')) openViewer(currentReceipt);
+});
+
+async function viewItemReceipt(type, id) {
+  const item = await getItem(type, id);
+  if (item) openViewer(item.receipt);
+}
+
 // Initialize
+applyTheme();
+initLock();
 renderPage();

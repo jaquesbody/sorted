@@ -164,6 +164,8 @@ function txDone(tx) {
 // Identity for merge dedupe: enough to tell two logical entries apart
 // (title + money + when) without relying on ids, which are reassigned on
 // import. Deliberately heuristic — same naive spirit as the OCR guesses.
+// A receipt's image is not part of the key: the same bill photographed twice
+// is one entry, not two.
 function importKeyOf(item) {
   const norm = (v) => String(v == null ? '' : v).trim().toLowerCase();
   return [
@@ -214,6 +216,18 @@ function sanitizeItem(storeName, item) {
     if ('confirmed' in item) out.confirmed = bool(item.confirmed);
     if ('paid' in item) out.paid = bool(item.paid);
     if ('frequency' in item) out.frequency = str(item.frequency).slice(0, 20);
+    // Receipt images ride along with the entry, so a backup taken on one
+    // device still shows its photos on another. Only a self-contained image
+    // data URL is accepted — anything else is dropped rather than rendered.
+    if (item.receipt && typeof item.receipt === 'object' && /^data:image\/(png|jpe?g|webp|gif);base64,/.test(str(item.receipt.dataUrl))) {
+      out.receipt = {
+        dataUrl: item.receipt.dataUrl,
+        name: str(item.receipt.name).slice(0, 200),
+        addedAt: str(item.receipt.addedAt)
+      };
+    } else if ('receipt' in item) {
+      delete out.receipt;
+    }
   } else if (storeName === 'savings') {
     const target = num(item.target);
     const current = num(item.current);
