@@ -714,7 +714,7 @@ body {
 
 /* Month Navigator */
 /* A fixed width, so the selector is the same shape on Dashboard, Spend and
-   Bills Due — it used to stretch on wide screens and shrink on narrow ones.
+   Bills — it used to stretch on wide screens and shrink on narrow ones.
    The label is a button: tapping it jumps back to the current month. */
 .month-nav {
   display: flex;

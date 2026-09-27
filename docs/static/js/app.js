@@ -2,13 +2,13 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.0.6';
+const APP_VERSION = '2.0.7';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
 let viewedDate = new Date();
 viewedDate.setDate(1);
-// Bills Due has its own month cursor: the two pages are navigated separately
+// The Bills page has its own month cursor: the pages are navigated separately
 // and a shared one made stepping through a bill's recurrence move the spend
 // list too. The Dashboard has a third, for the same reason — the month you're
 // looking at on a summary shouldn't drag the lists along with it.
@@ -17,7 +17,7 @@ dueViewedDate.setDate(1);
 let dashViewedDate = new Date();
 dashViewedDate.setDate(1);
 let spendFilter = 'all';
-let dueFilter = 'all'; // Bills Due: 'all' | 'pending' | 'confirmed' | 'recurring'
+let dueFilter = 'all'; // Bills page: 'all' | 'pending' | 'confirmed' | 'recurring'
 let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
 
 // The one way to change page. The nav bar, the bottom bar and the dashboard's
@@ -178,7 +178,7 @@ async function renderDashboard(container) {
   ]);
   
   // The month selector at the top scopes the two cards that have dates. The
-  // Bills Due card uses the same rule as the Bills Due page, so the two never
+  // Bills card uses the same rule as the Bills page, so the two never
   // disagree about what "September" owes.
   const spendMonth = spendItems.filter(i => isSameMonth(i.date, dashViewedDate));
   const spendYear = spendItems.filter(i => isSameYear(i.date, dashViewedDate));
@@ -220,7 +220,7 @@ async function renderDashboard(container) {
       
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
-          <span class="stat-card-title">Bills Due</span>
+          <span class="stat-card-title">Bills</span>
           <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'}</span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
@@ -275,7 +275,7 @@ function groupByCategory(items, amountKey) {
 // unpaid bill is still payable, and dropping it the moment you tap ▶ is how a
 // bill gets missed. Looking *back* is different: a past month is a record of
 // what it held, and dragging the current overdue pile into it makes the
-// history unreadable. Shared by the Bills Due page and the dashboard card so
+// history unreadable. Shared by the Bills page and the dashboard card so
 // the two never disagree.
 function billsForMonth(dueItems, date) {
   const now = new Date();
@@ -570,7 +570,7 @@ function filterSpend(filter) {
   renderPage();
 }
 
-// Month stepper, shared by Dashboard, Spend and Bills Due so all three
+// Month stepper, shared by Dashboard, Spend and Bills so all three
 // navigate identically — and so the control is the same width on every page
 // (see .month-nav). Each page keeps its own cursor, so this takes which one to
 // move rather than reaching for a shared global.
@@ -665,12 +665,6 @@ async function renderDue(container) {
   const overdue = outstanding.filter(i => isOverdue(i.dueDate));
   const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
   const paidTotal = paid.reduce((sum, i) => sum + i.amount, 0);
-  // What the month after the one on screen holds. A bill due next month is
-  // genuinely not in this month's list, and without saying so it reads as
-  // the bill having gone missing.
-  const nextMonth = new Date(dueViewedDate.getFullYear(), dueViewedDate.getMonth() + 1, 1);
-  const following = all.filter(i => isSameMonth(i.dueDate, nextMonth));
-  const followingTotal = following.reduce((sum, i) => sum + i.amount, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
@@ -692,9 +686,6 @@ async function renderDue(container) {
         ? `<div class="stat-card-sub">${paid.length} paid · ${currency(paidTotal)}</div>` : ''}
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
-      ${following.length > 0
-        ? `<div class="stat-card-sub">${escapeHTML(formatMonth(nextMonth))}: ${currency(followingTotal)} · ${following.length} bill${following.length === 1 ? '' : 's'} — tap ▶</div>`
-        : ''}
     </div>
     
     <div class="filter-bar">
@@ -898,7 +889,7 @@ function renderSavingsBreakdown(goals) {
         <span class="category-amount">${currency(goal.current)}</span>
       </div>
     `;
-  }).join('') + `<p class="setting-hint" style="margin-top: 10px;">Hover a goal for its target and percentage.</p>`;
+  }).join('');
 }
 
 function setReportRange(range) {
