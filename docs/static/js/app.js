@@ -10,21 +10,34 @@ let viewedDate = new Date();
 viewedDate.setDate(1);
 // Bills Due has its own month cursor: the two pages are navigated separately
 // and a shared one made stepping through a bill's recurrence move the spend
-// list too.
+// list too. The Dashboard has a third, for the same reason — the month you're
+// looking at on a summary shouldn't drag the lists along with it.
 let dueViewedDate = new Date();
 dueViewedDate.setDate(1);
+let dashViewedDate = new Date();
+dashViewedDate.setDate(1);
 let spendFilter = 'all';
+let dueFilter = 'all'; // Bills Due: 'all' | 'pending' | 'confirmed' | 'recurring'
 let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
+
+// The one way to change page. The nav bar, the bottom bar and the dashboard's
+// stat cards all go through it, so the highlighted tab can't disagree with the
+// page on screen — jumping from a dashboard card used to leave the bottom bar
+// still showing Dashboard.
+function navigate(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach((i) => {
+    i.classList.toggle('active', i.dataset.page === page);
+  });
+  renderPage();
+}
 
 // Navigation — delegated, so the cloned bottom-bar copy used by the
 // phone layout works with the same handler and all copies stay in sync.
 document.addEventListener('click', (e) => {
   const item = e.target.closest && e.target.closest('.nav-item');
   if (!item) return;
-  document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-  item.classList.add('active');
-  currentPage = item.dataset.page;
-  renderPage();
+  navigate(item.dataset.page);
 });
 
 // Phone layout: the vertical rail eats a big slice of a phone screen, so
@@ -164,13 +177,18 @@ async function renderDashboard(container) {
     getAll('savings')
   ]);
   
-  const spendMonth = spendItems.filter(i => isThisMonth(i.date));
-  const spendYear = spendItems.filter(i => isThisYear(i.date));
+  // The month selector at the top scopes the two cards that have dates. The
+  // Bills Due card uses the same rule as the Bills Due page, so the two never
+  // disagree about what "September" owes.
+  const spendMonth = spendItems.filter(i => isSameMonth(i.date, dashViewedDate));
+  const spendYear = spendItems.filter(i => isSameYear(i.date, dashViewedDate));
   const spendMonthTotal = spendMonth.reduce((sum, i) => sum + i.amount, 0);
   const spendYearTotal = spendYear.reduce((sum, i) => sum + i.amount, 0);
+  const dashYear = dashViewedDate.getFullYear();
   
-  const dueTotal = dueItems.reduce((sum, i) => sum + i.amount, 0);
-  const overdueCount = dueItems.filter(i => isOverdue(i.dueDate)).length;
+  const { items: dueShown, overdueElsewhere } = billsForMonth(dueItems, dashViewedDate);
+  const dueTotal = dueShown.reduce((sum, i) => sum + i.amount, 0);
+  const overdueCount = dueShown.filter(i => isOverdue(i.dueDate)).length;
   
   const savingsCurrent = savingsItems.reduce((sum, i) => sum + i.current, 0);
   const savingsTarget = savingsItems.reduce((sum, i) => sum + i.target, 0);
@@ -178,38 +196,44 @@ async function renderDashboard(container) {
   
   // Category breakdowns
   const spendByCategory = groupByCategory(spendMonth, 'amount');
-  const dueByCategory = groupByCategory(dueItems, 'amount');
+  const dueByCategory = groupByCategory(dueShown, 'amount');
   
   if (token !== renderToken) return;
   container.innerHTML = `
+    <div class="page-toolbar">
+      ${monthNavHtml('dash', dashViewedDate)}
+    </div>
+
     <div class="dashboard-grid">
-      <div class="stat-card" role="button" tabindex="0" onclick="currentPage='spend'; renderPage();">
+      <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
         <div class="stat-card-header">
-          <span class="stat-card-title">Spent This Month</span>
-          <span class="stat-card-sub">${spendMonth.length} items</span>
+          <span class="stat-card-title">Spent</span>
+          <span class="stat-card-sub">${spendMonth.length} item${spendMonth.length === 1 ? '' : 's'}</span>
         </div>
         <div class="stat-card-value">${currency(spendMonthTotal)}</div>
-        <div class="stat-card-sub">${currency(spendYearTotal)} this year</div>
+        <div class="stat-card-sub">${currency(spendYearTotal)} in ${dashYear}</div>
         <div class="stat-card-progress">
           <div class="stat-card-progress-fill progress-spend" style="width: ${Math.min(100, (spendMonthTotal / 1000) * 100)}%"></div>
         </div>
-        ${renderCategoryBreakdown(spendByCategory, spendMonthTotal)}
+        ${renderCategoryBreakdown(spendByCategory, spendMonthTotal, 'accent')}
       </div>
       
-      <div class="stat-card" role="button" tabindex="0" onclick="currentPage='due'; renderPage();">
+      <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
           <span class="stat-card-title">Bills Due</span>
-          <span class="stat-card-sub">${dueItems.length} items</span>
+          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'}</span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
-        <div class="stat-card-sub">${overdueCount > 0 ? overdueCount + ' overdue' : 'All up to date'}</div>
+        <div class="stat-card-sub">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</div>
+        ${overdueElsewhere.length > 0
+          ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
         <div class="stat-card-progress">
           <div class="stat-card-progress-fill progress-due" style="width: ${Math.min(100, (dueTotal / 500) * 100)}%"></div>
         </div>
-        ${renderCategoryBreakdown(dueByCategory, dueTotal)}
+        ${renderCategoryBreakdown(dueByCategory, dueTotal, 'danger')}
       </div>
       
-      <div class="stat-card" role="button" tabindex="0" onclick="currentPage='savings'; renderPage();">
+      <div class="stat-card" role="button" tabindex="0" onclick="navigate('savings')">
         <div class="stat-card-header">
           <span class="stat-card-title">Savings</span>
           <span class="stat-card-sub">${savingsItems.length} goals</span>
@@ -225,13 +249,17 @@ async function renderDashboard(container) {
     <div class="chart-container">
       <div class="chart-header">
         <h2 class="chart-title">Monthly Trend</h2>
+        <div class="chart-legend">
+          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Recurring</span>
+          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>One-off</span>
+        </div>
       </div>
       <canvas id="trend-chart" class="chart-canvas"></canvas>
     </div>
   `;
   
   // Draw simple bar chart
-  drawTrendChart(spendItems);
+  drawTrendChart(spendItems, dashViewedDate);
 }
 
 function groupByCategory(items, amountKey) {
@@ -242,7 +270,26 @@ function groupByCategory(items, amountKey) {
   return totals;
 }
 
-function renderCategoryBreakdown(totals, grandTotal) {
+// Bills for the month on screen: what's due then, plus — while you're looking
+// at now or the future — anything already overdue wherever it was due. An
+// unpaid bill is still payable, and dropping it the moment you tap ▶ is how a
+// bill gets missed. Looking *back* is different: a past month is a record of
+// what it held, and dragging the current overdue pile into it makes the
+// history unreadable. Shared by the Bills Due page and the dashboard card so
+// the two never disagree.
+function billsForMonth(dueItems, date) {
+  const now = new Date();
+  const lookingBack = date.getFullYear() < now.getFullYear()
+    || (date.getFullYear() === now.getFullYear() && date.getMonth() < now.getMonth());
+  const inMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
+  const overdueElsewhere = lookingBack
+    ? []
+    : dueItems.filter((i) => isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
+  const items = [...inMonth, ...overdueElsewhere].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  return { items, inMonth, overdueElsewhere };
+}
+
+function renderCategoryBreakdown(totals, grandTotal, tone) {
   const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 3);
   
   if (entries.length === 0) return '';
@@ -255,7 +302,7 @@ function renderCategoryBreakdown(totals, grandTotal) {
           <div class="category-row">
             <span class="category-name" title="${escapeHTML(cat)}">${escapeHTML(cat)}</span>
             <div class="category-bar">
-              <div class="category-bar-fill" style="width: ${pct}%"></div>
+              <div class="category-bar-fill${tone ? ' tone-' + tone : ''}" style="width: ${pct}%"></div>
             </div>
             <span class="category-amount">${currency(amt)}</span>
           </div>
@@ -265,10 +312,11 @@ function renderCategoryBreakdown(totals, grandTotal) {
   `;
 }
 
-function drawTrendChart(spendItems) {
+function drawTrendChart(spendItems, focusDate) {
   const canvas = document.getElementById('trend-chart');
   if (!canvas) return;
   lastTrendItems = spendItems;
+  lastTrendFocus = focusDate;
 
   // Size the backing store to the element's CSS box × devicePixelRatio —
   // the canvas used to sit at its default 300×150 stretched by CSS, which
@@ -287,40 +335,70 @@ function drawTrendChart(spendItems) {
   // Colours follow the theme variables instead of the old hard-coded hexes.
   const css = getComputedStyle(document.documentElement);
   const accent = css.getPropertyValue('--accent').trim() || '#3d8bfd';
+  const danger = css.getPropertyValue('--danger').trim() || '#ef4444';
   const muted = css.getPropertyValue('--text-secondary').trim() || '#8b8b96';
+  const textPrimary = css.getPropertyValue('--text-primary').trim() || '#f0f0f5';
+  const highlight = css.getPropertyValue('--chart-highlight').trim() || '#2b2b33';
   // The canvas sits inside a card, so it paints itself the card colour —
   // --bg-surface left a visible inset rectangle of a different shade.
   const surface = css.getPropertyValue('--bg-card').trim() || '#222228';
   const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
 
+  // The window ends on the month being looked at, so stepping back shows the
+  // six months that led to it, and the month in question is marked.
+  const end = focusDate ? new Date(focusDate.getFullYear(), focusDate.getMonth(), 1) : new Date();
   const months = [];
-  const now = new Date();
 
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
+    const inMonth = spendItems.filter((item) => isSameMonth(item.date, d));
+    const sum = (list) => list.reduce((n, item) => n + item.amount, 0);
+    const recurring = sum(inMonth.filter((item) => item.recurring));
+    const oneOff = sum(inMonth.filter((item) => !item.recurring));
     months.push({
       label: d.toLocaleDateString('en-GB', { month: 'short' }),
-      total: spendItems
-        .filter(item => isSameMonth(item.date, d))
-        .reduce((sum, i) => sum + i.amount, 0)
+      recurring,
+      oneOff,
+      total: recurring + oneOff,
+      selected: focusDate ? isSameMonth(d, focusDate) : false
     });
   }
 
   const max = Math.max(...months.map(m => m.total), 100);
   const barWidth = w / months.length - 10;
+  const baseline = h - 20;
 
   ctx.fillStyle = surface;
   ctx.fillRect(0, 0, w, h);
 
   months.forEach((m, i) => {
-    const height = (m.total / max) * (h - 40);
     const x = i * (barWidth + 10) + 5;
-    const y = h - height - 20;
+    const height = (m.total / max) * (h - 40);
+    const y = baseline - height;
 
+    // Mark the month in view before the bar, so the bar sits on top of it.
+    if (m.selected) {
+      ctx.fillStyle = highlight;
+      ctx.fillRect(x - 3, y - 6, barWidth + 6, height + 6 + 20);
+    }
+
+    // One-off first from the baseline, recurring stacked on top of it — a
+    // month's bar reads as "how much of this repeats every month".
+    const oneOffHeight = max > 0 ? (m.oneOff / max) * (h - 40) : 0;
+    const recurringHeight = max > 0 ? (m.recurring / max) * (h - 40) : 0;
     ctx.fillStyle = accent;
-    ctx.fillRect(x, y, barWidth, height);
+    if (oneOffHeight > 0) ctx.fillRect(x, baseline - oneOffHeight, barWidth, oneOffHeight);
+    ctx.fillStyle = danger;
+    if (recurringHeight > 0) ctx.fillRect(x, baseline - oneOffHeight - recurringHeight, barWidth, recurringHeight);
 
-    ctx.fillStyle = muted;
+    // A sliver of a tiny total still has to be visible, or a month with only
+    // a few pounds in it reads as no month at all.
+    if (m.total > 0 && oneOffHeight + recurringHeight < 2) {
+      ctx.fillStyle = accent;
+      ctx.fillRect(x, baseline - 2, barWidth, 2);
+    }
+
+    ctx.fillStyle = m.selected ? textPrimary : muted;
     ctx.font = `12px ${bodyFont}`;
     ctx.textAlign = 'center';
     // Keep labels inside the canvas even when the window is narrow.
@@ -332,7 +410,7 @@ function drawTrendChart(spendItems) {
     // Zero months show nothing useful — five stacked £0.00 labels used to
     // crowd the baseline (and overlap outright in narrow windows).
     if (m.total > 0) {
-      ctx.fillText(currency(m.total), clamp(x + barWidth / 2, currency(m.total)), y - 5);
+      ctx.fillText(currency(m.total), clamp(x + barWidth / 2, currency(m.total)), y - 10);
     }
   });
 }
@@ -340,17 +418,18 @@ function drawTrendChart(spendItems) {
 // Redraw the trend chart on window resize (the backing store is sized in
 // device pixels, so a resize would otherwise leave it stretched).
 let lastTrendItems = null;
+let lastTrendFocus = null;
 let trendResizeTimer = null;
 window.addEventListener('resize', () => {
   if (currentPage !== 'dashboard' || !lastTrendItems) return;
   clearTimeout(trendResizeTimer);
-  trendResizeTimer = setTimeout(() => drawTrendChart(lastTrendItems), 150);
+  trendResizeTimer = setTimeout(() => drawTrendChart(lastTrendItems, lastTrendFocus), 150);
 });
 
 // settings.js calls this after a theme change: the chart is a canvas painted
 // with colours read out of the CSS variables, so a restyle isn't enough.
 function onThemeChanged() {
-  if (currentPage === 'dashboard' && lastTrendItems) drawTrendChart(lastTrendItems);
+  if (currentPage === 'dashboard' && lastTrendItems) drawTrendChart(lastTrendItems, lastTrendFocus);
 }
 
 // A single crisp tick, shared by the confirm (Spend) and mark-as-paid (Bills
@@ -406,11 +485,7 @@ async function renderSpend(container) {
   if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-toolbar">
-      <div class="month-nav">
-        <button class="btn-icon" onclick="stepMonth('spend', -1)" aria-label="Previous month">◀</button>
-        <span class="month-label">${formatMonth(viewedDate)}</span>
-        <button class="btn-icon" onclick="stepMonth('spend', 1)" aria-label="Next month">▶</button>
-      </div>
+      ${monthNavHtml('spend', viewedDate)}
       <button class="btn btn-primary" onclick="openAddModal('spend')">+ Add Spend</button>
     </div>
     
@@ -495,37 +570,101 @@ function filterSpend(filter) {
   renderPage();
 }
 
-// Month stepper, shared by Spend and Bills Due so both pages navigate
-// identically. Spend and Due keep separate cursors, so this takes which one to
+// Month stepper, shared by Dashboard, Spend and Bills Due so all three
+// navigate identically — and so the control is the same width on every page
+// (see .month-nav). Each page keeps its own cursor, so this takes which one to
 // move rather than reaching for a shared global.
+function monthCursor(which) {
+  if (which === 'due') return dueViewedDate;
+  if (which === 'dash') return dashViewedDate;
+  return viewedDate;
+}
+
 function stepMonth(which, delta) {
-  if (which === 'due') dueViewedDate.setMonth(dueViewedDate.getMonth() + delta);
-  else viewedDate.setMonth(viewedDate.getMonth() + delta);
+  const cursor = monthCursor(which);
+  cursor.setMonth(cursor.getMonth() + delta);
   renderPage();
 }
+
+// Tapping the month itself jumps back to the current month — otherwise a
+// summary you're eight months from is only reachable by pressing ▶ a lot.
+function goToThisMonth(which) {
+  const cursor = monthCursor(which);
+  const now = new Date();
+  cursor.setFullYear(now.getFullYear(), now.getMonth(), 1);
+  renderPage();
+}
+
+// One markup string for the selector, so the three pages can't drift apart.
+function monthNavHtml(which, date) {
+  return `
+    <div class="month-nav">
+      <button class="btn-icon" onclick="stepMonth('${which}', -1)" aria-label="Previous month">◀</button>
+      <button class="month-label" onclick="goToThisMonth('${which}')" title="Back to ${escapeHTML(formatMonth(new Date()))}">${formatMonth(date)}</button>
+      <button class="btn-icon" onclick="stepMonth('${which}', 1)" aria-label="Next month">▶</button>
+    </div>
+  `;
+}
+
+// Bills already paid, read back out of Spend. markDuePaid() writes the payment
+// into Spend before rolling or removing the bill, so that copy is the only
+// record a paid bill leaves behind — this is what makes a past month reviewable
+// rather than just a date you stepped back to.
+function paidBillsForMonth(spendItems, date) {
+  return spendItems
+    .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date))
+    .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+}
+
+function applyDueFilter(outstanding, paid) {
+  if (dueFilter === 'pending') return outstanding.map((i) => ({ item: i, paid: false }));
+  if (dueFilter === 'confirmed') return paid.map((i) => ({ item: i, paid: true }));
+  if (dueFilter === 'recurring') {
+    return [...outstanding, ...paid]
+      .filter((i) => i.recurring)
+      .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
+      .map((i) => ({ item: i, paid: paid.includes(i) }));
+  }
+  // All: everything the month held, unpaid first, both in date order.
+  return [
+    ...outstanding.map((i) => ({ item: i, paid: false })),
+    ...paid.map((i) => ({ item: i, paid: true }))
+  ].sort((a, b) => new Date(a.item.dueDate) - new Date(b.item.dueDate));
+}
+
+function filterBills(filter) {
+  dueFilter = filter;
+  renderPage();
+}
+
+const BILL_FILTERS = [
+  ['all', 'All'],
+  ['confirmed', 'Confirmed'],
+  ['pending', 'Pending'],
+  ['recurring', 'Recurring']
+];
 
 // Due Page
 async function renderDue(container) {
   const token = renderToken;
   await seedIfEmpty();
   
-  const all = await getAll('due');
+  const [all, spendItems] = await Promise.all([getAll('due'), getAll('spend')]);
   all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   
   // The month view exists so a recurring bill's *next* occurrences are
   // visible — a bill is only ever stored with the date it's currently due,
   // so without stepping forward there was no way to see what the following
   // few months look like.
-  const inMonth = all.filter(i => isSameMonth(i.dueDate, dueViewedDate));
-  // Anything already past its date stays listed whatever month you're looking
-  // at: it's still payable, and dropping it off the screen the moment you tap
-  // ▶ is how a bill gets missed.
-  const overdueElsewhere = all.filter(i => isOverdue(i.dueDate) && !isSameMonth(i.dueDate, dueViewedDate));
-  const items = [...inMonth, ...overdueElsewhere].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+  const { items: outstanding, inMonth, overdueElsewhere } = billsForMonth(all, dueViewedDate);
+  const paid = paidBillsForMonth(spendItems, dueViewedDate);
+  const rows = applyDueFilter(outstanding, paid);
   
-  const total = items.reduce((sum, i) => sum + i.amount, 0);
-  const overdue = items.filter(i => isOverdue(i.dueDate));
+  // The total is what's still owed, so a paid bill never inflates it.
+  const total = outstanding.reduce((sum, i) => sum + i.amount, 0);
+  const overdue = outstanding.filter(i => isOverdue(i.dueDate));
   const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
+  const paidTotal = paid.reduce((sum, i) => sum + i.amount, 0);
   // What the month after the one on screen holds. A bill due next month is
   // genuinely not in this month's list, and without saying so it reads as
   // the bill having gone missing.
@@ -536,23 +675,21 @@ async function renderDue(container) {
   if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-toolbar">
-      <div class="month-nav">
-        <button class="btn-icon" onclick="stepMonth('due', -1)" aria-label="Previous month">◀</button>
-        <span class="month-label">${formatMonth(dueViewedDate)}</span>
-        <button class="btn-icon" onclick="stepMonth('due', 1)" aria-label="Next month">▶</button>
-      </div>
+      ${monthNavHtml('due', dueViewedDate)}
       <button class="btn btn-primary" onclick="openAddModal('due')">+ Add Bill</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
       <div class="stat-card-header">
         <span class="stat-card-title">Total Due</span>
-        <span class="stat-card-sub">${items.length} item${items.length === 1 ? '' : 's'}</span>
+        <span class="stat-card-sub">${outstanding.length} unpaid</span>
       </div>
       <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
       ${overdue.length > 0
         ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>`
         : `<div class="stat-card-sub">${upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month'}</div>`}
+      ${paid.length > 0
+        ? `<div class="stat-card-sub">${paid.length} paid · ${currency(paidTotal)}</div>` : ''}
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
       ${following.length > 0
@@ -560,36 +697,49 @@ async function renderDue(container) {
         : ''}
     </div>
     
+    <div class="filter-bar">
+      ${BILL_FILTERS.map(([value, label]) =>
+        `<span class="filter-chip ${dueFilter === value ? 'active' : ''}" role="button" tabindex="0" onclick="filterBills('${value}')">${label}</span>`
+      ).join('')}
+    </div>
+
     <div class="item-list">
-      ${items.length === 0 ? `
+      ${rows.length === 0 ? `
         <div class="empty-state">
-          <div class="empty-state-text">${all.length > 0 ? 'Nothing due this month' : 'No bills due'}</div>
-          ${all.length > 0
+          <div class="empty-state-text">${
+            all.length === 0 && paid.length === 0
+              ? 'No bills due'
+              : dueFilter === 'all' ? 'Nothing due this month' : `No ${dueFilter} bills this month`
+          }</div>
+          ${all.length > 0 || paid.length > 0
             ? '<p class="setting-hint" style="margin-bottom: 20px;">Use ◀ ▶ to see other months</p>'
             : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add First Bill</button>'}
         </div>
-      ` : items.map(item => {
+      ` : rows.map(({ item, paid: isPaid }) => {
         const days = daysUntil(item.dueDate);
-        const isOverdueItem = days < 0;
+        const isOverdueItem = !isPaid && days < 0;
         return `
-          <div class="item-row" data-edit-type="due" data-edit-id="${item.id}" style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
+          <div class="item-row" data-edit-type="${isPaid ? 'spend' : 'due'}" data-edit-id="${item.id}" style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
                 <div class="item-meta">
                   Due ${formatDate(item.dueDate)} · ${escapeHTML(item.category)}
                   ${item.recurring ? '<span class="badge badge-recurring">Recurring</span>' : ''}
+                  ${isPaid ? `<span class="badge badge-confirmed">Paid</span>` : ''}
                 </div>
               </div>
             </div>
             <div style="text-align: right;">
               <div class="item-amount">${currency(item.amount)}</div>
-              <div class="stat-card-sub">${dueCountdown(item.dueDate)}</div>
+              <div class="stat-card-sub">${isPaid && item.date ? `Paid ${formatDate(item.date)}` : dueCountdown(item.dueDate)}</div>
             </div>
             <div class="item-actions">
-              ${receiptChip(item, 'due')}
-              <button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
-                      aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>
+              ${receiptChip(item, isPaid ? 'spend' : 'due')}
+              ${isPaid
+                ? `<span class="confirm-btn is-done" aria-hidden="true">${TICK_SVG}</span>`
+                : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
+                        aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
           </div>
         `;
@@ -693,12 +843,20 @@ async function renderReports(container) {
     <div class="reports-grid">
       <div class="report-card">
         <h2 class="report-title">Spending by Category</h2>
-        ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend)}
+        ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
       </div>
       
       <div class="report-card">
         <h2 class="report-title">Bills by Category</h2>
-        ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue)}
+        ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue, 'danger')}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Savings by Goal</h2>
+        <p class="setting-hint" style="margin-top: -8px; margin-bottom: 15px;">
+          Goals aren't dated, so the range above doesn't apply to these
+        </p>
+        ${renderSavingsBreakdown(savingsItems)}
       </div>
       
       <div class="report-card">
@@ -722,12 +880,33 @@ async function renderReports(container) {
   `;
 }
 
+// Savings goals measured against their own target, not against each other —
+// the bar answers "how far along is this goal", where the other two cards
+// answer "how does this split up".
+function renderSavingsBreakdown(goals) {
+  if (goals.length === 0) {
+    return '<div style="color: var(--text-secondary); padding: 20px 0;">No savings goals yet</div>';
+  }
+  return goals.map((goal) => {
+    const pct = goal.target > 0 ? Math.round((goal.current / goal.target) * 100) : 0;
+    return `
+      <div class="category-row">
+        <span class="category-name" title="${escapeHTML(goal.title)}">${escapeHTML(goal.title)}</span>
+        <div class="category-bar">
+          <div class="category-bar-fill tone-success" style="width: ${Math.min(100, pct)}%"></div>
+        </div>
+        <span class="category-amount">${currency(goal.current)}</span>
+      </div>
+    `;
+  }).join('') + `<p class="setting-hint" style="margin-top: 10px;">Hover a goal for its target and percentage.</p>`;
+}
+
 function setReportRange(range) {
   reportRange = range;
   renderPage();
 }
 
-function renderReportBreakdown(totals, grandTotal) {
+function renderReportBreakdown(totals, grandTotal, tone) {
   const entries = Object.entries(totals).sort((a, b) => b[1] - a[1]);
   
   if (entries.length === 0) {
@@ -740,7 +919,7 @@ function renderReportBreakdown(totals, grandTotal) {
       <div class="category-row">
         <span class="category-name" title="${escapeHTML(cat)}">${escapeHTML(cat)}</span>
         <div class="category-bar">
-          <div class="category-bar-fill" style="width: ${pct}%"></div>
+          <div class="category-bar-fill${tone ? ' tone-' + tone : ''}" style="width: ${pct}%"></div>
         </div>
         <span class="category-amount">${currency(amt)}</span>
       </div>

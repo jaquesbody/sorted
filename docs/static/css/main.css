@@ -30,6 +30,15 @@
   --border: #2a2a32;
   --border-strong: #3b3b47;
   --radius: 8px;
+  /* One width for the month selector on every page that has one. Sized so the
+     longest month name ("September 2026") fits at the desktop font size
+     without truncating, and still leaves room for an action button on a
+     phone, where the font steps down. */
+  --month-nav-width: 232px;
+  /* Column behind the month the trend chart is focused on. --bg-surface
+     worked in dark but is the same white as the card in light, so it has to
+     be its own value. */
+  --chart-highlight: #2b2b33;
   --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   --overlay: rgba(0, 0, 0, 0.6);
 }
@@ -56,6 +65,8 @@ html[data-theme="light"] {
   --danger-line: rgba(217, 45, 32, 0.3);
   --border: #e3e5ea;
   --border-strong: #c7cbd4;
+  --month-nav-width: 232px;
+  --chart-highlight: #eef0f5;
   --shadow: 0 6px 20px rgba(16, 24, 40, 0.1);
   --overlay: rgba(18, 20, 26, 0.45);
 }
@@ -290,6 +301,12 @@ body {
   border-radius: 3px;
 }
 
+/* A breakdown carries the colour of the thing it breaks down: spending blue,
+   bills red, savings green. Without this every bar in the app was the same
+   blue, so "Bills by Category" looked like a spending chart. */
+.category-bar-fill.tone-danger { background: var(--danger); }
+.category-bar-fill.tone-success { background: var(--success); }
+
 .category-amount {
   font-size: 0.85rem;
   font-weight: 600;
@@ -443,6 +460,15 @@ body {
 .confirm-btn[aria-pressed="true"]:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
+}
+
+/* A bill that's already paid shows the same filled box, as a state rather
+   than a button — there's nothing left to press. */
+.confirm-btn.is-done {
+  background: var(--success);
+  border-color: var(--success);
+  color: var(--on-accent);
+  opacity: 0.85;
 }
 
 .confirm-btn:focus-visible {
@@ -687,35 +713,48 @@ body {
 }
 
 /* Month Navigator */
-/* Shares a row with the page's action button on narrow screens, so the label
-   takes the space that's left instead of a fixed 150px. */
+/* A fixed width, so the selector is the same shape on Dashboard, Spend and
+   Bills Due — it used to stretch on wide screens and shrink on narrow ones.
+   The label is a button: tapping it jumps back to the current month. */
 .month-nav {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-bottom: 20px;
-  flex: 1;
-  min-width: 0;
+  flex: 0 0 auto;
+  width: var(--month-nav-width);
 }
 
 .month-label {
   flex: 1;
   min-width: 0;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  font: inherit;
   font-size: 1.05rem;
   font-weight: 600;
+  color: var(--text-primary);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.month-label:hover {
+  color: var(--accent-on-tint);
+  background: var(--accent-muted);
+}
+
+.month-label:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .page-toolbar .month-nav {
   margin-bottom: 0;
-  /* Capped so a wide window doesn't fling the steppers to opposite edges;
-     the action button then takes the far right, where the page title used to
-     push it. On a phone the flex below is what does the work. */
-  flex: 0 1 auto;
-  max-width: 340px;
 }
 
 .page-toolbar > .btn {
@@ -887,6 +926,32 @@ body {
   font-size: 1rem;
   font-weight: 600;
 }
+
+/* Which colour means which in the stacked trend bars */
+.chart-legend {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.legend-recurring { background: var(--danger); }
+.legend-oneoff { background: var(--accent); }
 
 .chart-canvas {
   width: 100%;
@@ -1279,10 +1344,10 @@ body.is-locked {
     font-size: 0.85rem;
   }
 
-  /* Back to sharing the row evenly — the month label takes the slack. */
-  .page-toolbar .month-nav {
-    flex: 1 1 auto;
-    max-width: none;
+  /* Same width on every page, just a little narrower to leave room for the
+     action button beside it. */
+  :root {
+    --month-nav-width: 196px;
   }
 
   .month-nav {
