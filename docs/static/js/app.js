@@ -109,8 +109,14 @@ if (window.sortedBridge) {
 }
 
 // Page Rendering
+// Two interactions in quick succession (saving an item, then tapping a
+// filter) can leave two renders in flight; each renderer captures the
+// generation it started in and only the newest one is allowed to paint.
+let renderToken = 0;
+
 async function renderPage() {
   const content = document.getElementById('content');
+  renderToken++;
   
   switch(currentPage) {
     case 'dashboard':
@@ -136,6 +142,7 @@ async function renderPage() {
 
 // Dashboard
 async function renderDashboard(container) {
+  const token = renderToken;
   await seedIfEmpty();
   
   const [spendItems, dueItems, savingsItems] = await Promise.all([
@@ -160,6 +167,7 @@ async function renderDashboard(container) {
   const spendByCategory = groupByCategory(spendMonth, 'amount');
   const dueByCategory = groupByCategory(dueItems, 'amount');
   
+  if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Dashboard</h1>
@@ -330,6 +338,7 @@ window.addEventListener('resize', () => {
 
 // Spend Page
 async function renderSpend(container) {
+  const token = renderToken;
   await seedIfEmpty();
   
   const items = await getAll('spend');
@@ -340,6 +349,7 @@ async function renderSpend(container) {
   const monthTotal = monthItems.reduce((sum, i) => sum + i.amount, 0);
   const yearTotal = yearItems.reduce((sum, i) => sum + i.amount, 0);
   
+  if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Spend</h1>
@@ -433,6 +443,7 @@ function filterSpend(filter) {
 
 // Due Page
 async function renderDue(container) {
+  const token = renderToken;
   await seedIfEmpty();
   
   const items = await getAll('due');
@@ -441,6 +452,7 @@ async function renderDue(container) {
   const total = items.reduce((sum, i) => sum + i.amount, 0);
   const overdue = items.filter(i => isOverdue(i.dueDate));
   
+  if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Bills Due</h1>
@@ -494,6 +506,7 @@ async function renderDue(container) {
 
 // Savings Page
 async function renderSavings(container) {
+  const token = renderToken;
   await seedIfEmpty();
   
   const items = await getAll('savings');
@@ -501,6 +514,7 @@ async function renderSavings(container) {
   const totalTarget = items.reduce((sum, i) => sum + i.target, 0);
   const pct = totalTarget > 0 ? Math.round((totalCurrent / totalTarget) * 100) : 0;
   
+  if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Savings</h1>
@@ -551,6 +565,7 @@ async function renderSavings(container) {
 
 // Reports Page
 async function renderReports(container) {
+  const token = renderToken;
   const [spendItems, dueItems, savingsItems] = await Promise.all([
     getAll('spend'),
     getAll('due'),
@@ -572,6 +587,7 @@ async function renderReports(container) {
   const chip = (value, label) =>
     `<span class="filter-chip ${reportRange === value ? 'active' : ''}" role="button" tabindex="0" onclick="setReportRange('${value}')">${label}</span>`;
 
+  if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-header">
       <h1 class="page-title">Reports</h1>
