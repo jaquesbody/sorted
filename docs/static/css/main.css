@@ -765,6 +765,16 @@ body.is-native .bottom-nav {
 .bottom-nav .nav-item span {
   display: block;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+/* Small phones: six columns of labels get tight, so shrink the text a step
+   rather than letting it spill past the bar. */
+@media (max-width: 380px) {
+  .bottom-nav .nav-item {
+    font-size: 0.58rem;
+  }
 }
 
 .bottom-nav .nav-item svg {
