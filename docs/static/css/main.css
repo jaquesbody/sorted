@@ -307,6 +307,53 @@ body {
 .category-bar-fill.tone-danger { background: var(--danger); }
 .category-bar-fill.tone-success { background: var(--success); }
 
+/* Who Spent What: the bar's length is the person's share of the household
+   total, and the two segments inside it are that person's own split between
+   spend and bills. The inner bar is a flex row so a split needs no
+   positioning — and so a 100%-spend row and a 0%-spend row are the same
+   element with a different second segment. */
+.split-bar {
+  display: flex;
+  height: 100%;
+  border-radius: 3px;
+  overflow: hidden;
+  /* A £0.60 person still shows a visible sliver rather than vanishing. */
+  min-width: 4px;
+}
+
+.split-seg {
+  height: 100%;
+}
+
+.split-seg.tone-accent { background: var(--accent); }
+.split-seg.tone-danger { background: var(--danger); }
+
+/* The legend the trend chart already sets the pattern for: the bar is
+   unreadable without it, since both halves are just coloured rectangles. */
+.split-legend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.split-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.split-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.split-swatch.tone-accent { background: var(--accent); }
+.split-swatch.tone-danger { background: var(--danger); }
+
 .category-amount {
   font-size: 0.85rem;
   font-weight: 600;

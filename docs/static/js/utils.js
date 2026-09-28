@@ -69,3 +69,33 @@ function escapeHTML(value) {
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
   ));
 }
+
+// Load a classic script on demand, once, however many callers ask. Tesseract
+// (63KB) and pdf.js (320KB) are two thirds of the payload and neither is
+// needed to draw a screen, so they are fetched when a receipt is actually
+// picked rather than on every page load — which held up the first paint
+// (LCP sat around 4s against a 0.9s FCP).
+//
+// `defer` on a <script> tag was not enough on its own: deferred scripts still
+// run in order, so app.js waited on the vendor bundles regardless. Dedupe
+// matters because isPDF() is called on every picked file and a user can pick
+// two receipts before the first has finished loading.
+const scriptLoads = new Map();
+
+function loadScriptOnce(src) {
+  if (scriptLoads.has(src)) return scriptLoads.get(src);
+  const promise = new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.async = true;
+    el.onload = () => resolve();
+    el.onerror = () => {
+      // Don't cache the failure: a retry after a flaky connection should work.
+      scriptLoads.delete(src);
+      reject(new Error('could not load ' + src));
+    };
+    document.head.appendChild(el);
+  });
+  scriptLoads.set(src, promise);
+  return promise;
+}

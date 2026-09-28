@@ -1018,10 +1018,12 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
+        <h2 class="report-title">Who Spent What</h2>
+        ${renderPersonBreakdown(rangedSpend, rangedDue)}
+      </div>
+
+      <div class="report-card">
         <h2 class="report-title">Savings by Goal</h2>
-        <p class="setting-hint" style="margin-top: -8px; margin-bottom: 15px;">
-          Goals aren't dated, so the range above doesn't apply to these
-        </p>
         ${renderSavingsBreakdown(savingsItems)}
       </div>
       
@@ -1093,6 +1095,65 @@ function renderReportBreakdown(totals, grandTotal, tone) {
   }).join('');
 }
 
+// Who spent what: one bar per person, split between what they spent and what
+// they owe. The bar's length is their share of the household total, so the
+// bars compare against each other; the split inside each bar is their own
+// ratio, which is the part the length can't show.
+//
+// Entries nobody is marked against are kept as their own row rather than
+// dropped: this card rolls up the same spend and bills as the two category
+// cards above it, and quietly leaving the unattributed money out would make
+// it disagree with them.
+function renderPersonBreakdown(spendItems, dueItems) {
+  const totals = new Map();
+  const bucket = (id) => {
+    if (!totals.has(id)) totals.set(id, { spend: 0, due: 0 });
+    return totals.get(id);
+  };
+  spendItems.forEach((i) => { bucket(i.personId || '').spend += i.amount; });
+  dueItems.forEach((i) => { bucket(i.personId || '').due += i.amount; });
+
+  const rows = [...totals.entries()]
+    .map(([id, t]) => ({ id, ...t, total: t.spend + t.due }))
+    .filter((t) => t.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  if (rows.length === 0) {
+    return '<div style="color: var(--text-secondary); padding: 20px 0;">No data yet</div>';
+  }
+
+  const grandTotal = rows.reduce((sum, r) => sum + r.total, 0);
+  const nameOf = (id) => { const p = personById(id); return p ? p.name : 'Anyone'; };
+
+  return `
+    <div class="split-legend">
+      <span class="split-key"><i class="split-swatch tone-accent"></i>Spend</span>
+      <span class="split-key"><i class="split-swatch tone-danger"></i>Bills</span>
+    </div>
+    ${rows.map((r) => {
+      const label = nameOf(r.id);
+      const width = grandTotal > 0 ? (r.total / grandTotal) * 100 : 0;
+      // Proportional inside the bar. A tiny slice still needs a sliver or a
+      // month of only bills reads as a month of nothing.
+      const spendShare = r.total > 0 ? (r.spend / r.total) * 100 : 0;
+      const spendPct = r.spend > 0 ? Math.max(spendShare, 1) : 0;
+      const duePct = r.due > 0 ? Math.max(100 - spendShare, 1) : 0;
+      return `
+        <div class="category-row" title="${escapeHTML(label)} — spend ${currency(r.spend)} (${Math.round(spendShare)}%), bills ${currency(r.due)} (${Math.round(100 - spendShare)}%)">
+          <span class="category-name" title="${escapeHTML(label)}">${escapeHTML(label)}</span>
+          <div class="category-bar">
+            <div class="split-bar" style="width: ${width}%">
+              <div class="split-seg tone-accent" style="width: ${spendPct}%"></div>
+              <div class="split-seg tone-danger" style="width: ${duePct}%"></div>
+            </div>
+          </div>
+          <span class="category-amount">${currency(r.total)}</span>
+        </div>
+      `;
+    }).join('')}
+  `;
+}
+
 // Settings Page
 function renderSettings(container) {
   container.innerHTML = `
@@ -1102,7 +1163,6 @@ function renderSettings(container) {
         <div class="setting-row">
           <div class="setting-text">
             <div class="setting-label">Theme</div>
-            <div class="setting-hint">System follows your device setting</div>
           </div>
           <div class="setting-control">
             ${themeSegment()}
@@ -1112,10 +1172,6 @@ function renderSettings(container) {
 
       <div class="report-card">
         <h2 class="report-title">People</h2>
-        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 15px;">
-          Marks spend and bills as somebody's, so you can see who spent what and
-          who paid which bill. Not a login — anyone can switch on the top bar.
-        </p>
         ${peopleSettingsHtml()}
       </div>
 
@@ -1250,7 +1306,6 @@ function passcodeSettings() {
     <div class="setting-row">
       <div class="setting-text">
         <div class="setting-label">Passcode on</div>
-        <div class="setting-hint">Tap to remove</div>
       </div>
       <div class="setting-control">
         <button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
@@ -1261,7 +1316,6 @@ function passcodeSettings() {
       <div class="setting-row">
         <div class="setting-text">
           <div class="setting-label">Lock after</div>
-          <div class="setting-hint">Of no use — the app re-locks itself</div>
         </div>
         <div class="setting-control">
           <select class="form-input" id="lock-timeout" style="width: auto;" onchange="setLockTimeoutMinutes(Number(this.value))">
@@ -1272,7 +1326,6 @@ function passcodeSettings() {
       <div class="setting-row">
         <div class="setting-text">
           <div class="setting-label">Lock now</div>
-          <div class="setting-hint">Test it, or lock the phone down now</div>
         </div>
         <div class="setting-control">
           <button class="btn btn-ghost" onclick="lockApp()">Lock</button>

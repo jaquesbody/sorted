@@ -123,13 +123,17 @@ try {
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="static/js/db.js"></script>
-<script src="static/js/utils.js"></script>
-<script src="static/js/settings.js"></script>
-<script src="static/vendor/tesseract/tesseract.min.js"></script>
-<script src="static/vendor/pdfjs/pdf.min.js"></script>
-<script src="static/js/ocr.js"></script>
-<script src="static/js/pdf-to-image.js"></script>
-<script src="static/js/app.js"></script>
+<!-- Deferred so parsing isn't held up. Order still matters — ocr.js and
+     pdf-to-image.js call into the helpers above them. Tesseract (63KB) and
+     pdf.js (320KB) are not here at all: two thirds of the payload, and
+     neither is needed until a receipt is picked, so they're fetched on demand
+     by loadScriptOnce() in utils.js. The theme bootstrap above stays inline
+     and unpainted-blocking on purpose — it has to run before the first paint. -->
+<script defer src="static/js/db.js"></script>
+<script defer src="static/js/utils.js"></script>
+<script defer src="static/js/settings.js"></script>
+<script defer src="static/js/ocr.js"></script>
+<script defer src="static/js/pdf-to-image.js"></script>
+<script defer src="static/js/app.js"></script>
 </body>
 </html>

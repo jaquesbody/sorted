@@ -4,11 +4,16 @@
    same OCR pipeline as a photographed receipt. Self-hosted pdf.js, pinned
    to 3.11.174 (plain-script build, not ESM) — see item-form.js for the
    reasoning.
+
+   pdf.js itself is fetched on demand (320KB, and only a PDF receipt needs
+   it) — see loadScriptOnce() in utils.js. The workerSrc line therefore can't
+   sit at the top of the file any more: it has to wait until pdfjsLib exists.
    ============================================================================= */
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'static/vendor/pdfjs/pdf.worker.min.js';
-
 async function pdfFirstPageToImageBlob(file) {
+  await loadScriptOnce('static/vendor/pdfjs/pdf.min.js');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'static/vendor/pdfjs/pdf.worker.min.js';
+
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
   const page = await pdf.getPage(1);
@@ -24,6 +29,8 @@ async function pdfFirstPageToImageBlob(file) {
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
+// Pure file inspection — no pdf.js needed to answer this, which is why the
+// app can decide whether to fetch the library at all.
 function isPDF(file) {
   return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
 }
