@@ -3,7 +3,7 @@ Last updated 28th September 2026
 **Project: Sorted**
 
 **1. Status**
-- Phase: v2 rewrite complete and running on desktop, browser and Android. Iterating with visual/UX feedback; v2.1.0 adds people: spend, bills and savings goals can be marked as somebody's, a person filter on Spend and Bills, and a record of who paid each bill. It also moves new rows off IndexedDB's auto-increment counter onto UUIDs, ahead of any future sync.
+- Phase: v2 rewrite complete and running on desktop, browser and Android. Iterating with visual/UX feedback; v2.2.0 adds a "Who Spent What" report splitting each person's bar between what they spent and what they owe, cuts six lines of explanatory copy from Settings, and takes Tesseract and pdf.js off the critical path. v2.1.0 added people and moved new rows onto UUIDs.
 - Formerly Saved — dropped entirely, no merger, Sorted supersedes it.
 
 **2. Problem, User, Outcome**
@@ -41,6 +41,9 @@ Last updated 28th September 2026
 - The person filter sits on Spend and Bills, one shared selection across both, so switching person in one place doesn't leave the other quietly showing a different slice. The Spend totals follow it (it's a filter on the same data); the Bills *Total Due* card deliberately doesn't, because a card dropping to £0 because of a filter reads as "nothing owed". Dashboard and Reports stay household-wide for the same reason — the household view is what they're for.
 - Rows are new rows get a `crypto.randomUUID()` id rather than the store's `autoIncrement` counter. Two devices counting from 1 would eventually hand out the same number, and sync is a stated goal — better to pay that cost now than re-key every row later. The stores keep the key generator they were created with, so this needs no schema change; `put`/`add` with an explicit key simply never invokes it.
 - Legacy rows have *numeric* keys, and a data attribute always hands an id back as a string — `"3"` is not the key `3`. `normaliseId()` turns a numeric string back into a number on read and delete, without which every row in an existing install silently fails to open.
+- "Who Spent What" gives one bar per person: the length is that person's share of the household total, so the bars compare against each other, and the split inside each bar is their own spend-to-bills ratio, which the length alone can't show. Unattributed money is kept as its own "Anyone" row rather than dropped — the card rolls up the same spend and bills as the two category cards above it, and quietly leaving it out would make the three disagree.
+- No person dot on the Who Spent What rows. The name is the identity, the fixed 104px name column already truncated longer names once a dot was added, and a third colour sitting beside a two-colour bar invites reading it as a third bar colour. The dot stays on the Spend/Bills rows, where there is no bar to confuse it with.
+- Tesseract (63KB) and pdf.js (320KB) load on demand via `loadScriptOnce()`, when a receipt is picked, not on every page load. `defer` on the script tags was tried first and did almost nothing (85 -> 86): deferred scripts still run in order, so app.js waited on the bundles regardless. Fetching them only when needed cut the first load from 577KB to 200KB, LCP from 4.1s to 2.0s, and performance 85 -> 99.
 - People come first on import, in both modes, and are matched by name: ids are minted per device, so a name is the only identity that survives the trip. Every `personId` in the file is then translated to the local id of whoever it matched, and an unmatched reference becomes unattributed rather than a dangling id the UI would render as a blank. `getAllData()` is driven off `STORES` for the same reason — people missing from a backup would strip every entry's attribution on the next restore.
 
 **6. Sample Data**
@@ -71,9 +74,9 @@ Last updated 28th September 2026
 
 **10. Open Questions**
 - Confirmed: no Saved repo exists, only a portfolio stub on jaquesbody.github.io.
+- Can unlocking identify *who* is using the app? Raised after v2.1.0. Attribution today is a free choice — the top-bar chip can be switched by anyone — so an unlock that named the person would be the one thing that ties the two together. The blocker is the passcode's honest framing: §5 documents it as a shoulder-surfing screen, not encryption, and a per-person PIN would quietly turn that into a credential. A 4-digit family PIN is not a security boundary, and anyone can still switch the chip afterwards, so it would identify rather than authenticate. Needs a decision before any code.
 
 **11. Outstanding Tasks**
 - Update jaquesbody.github.io: rename "Saved" card to "Sorted," update description to reflect actual outcome, keep status "Under construction."
 - Generate a banner logo (wordmark, matching Know's wordmark-know.svg pattern) and a single-letter favicon for Sorted, based on the jaquesbody portfolio and Know examples. Extend this into a standing process, applying the same asset pair to every future project, not a one-off.
 - Receipt images sit in the export, so a backup with several dozen receipts is a large JSON file. Worth a size check against a real dataset before relying on export as the only off-device copy.
-- Tesseract (63KB) and pdf.js (320KB) load as plain render-blocking `<script>` tags at the end of the body, which holds up the first contentful paint — LCP sits around 4s against a 0.9s FCP. Adding `defer` to the script tags should close most of that, and is a safe change (defer scripts keep their relative order and still run before DOMContentLoaded), but it is a performance change rather than a feature, so it has not been bundled into a release on the quiet.

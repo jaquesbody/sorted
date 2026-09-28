@@ -23,6 +23,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - A month selector on Dashboard, Spend and Bills, all the same width; tap the month name to jump back to the current one
 - Bills filters — All, Confirmed, Pending, Recurring — over the month's bills paid as well as unpaid, so a month you've already dealt with is still worth looking at
 - Reports: spending, bills and savings goals broken down by category, over all time, this month or this year
+- A "Who Spent What" report: one bar per person, its length their share of the household total, split blue for what they spent and red for what they owe. Money nobody is marked against is its own row, so the card adds up to the summary
 - Month navigation and status filters
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
@@ -53,7 +54,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.1.0-debug.apk`](sorted-v2-2.1.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.2.0-debug.apk`](sorted-v2-2.2.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
@@ -70,6 +71,7 @@ Note: importing JSON works on every platform. Export uses the native save dialog
 - Electron for the desktop shell
 - IndexedDB for local storage, plus `localStorage` for the theme and passcode
 - Zero runtime dependencies in the web app (OCR and PDF libraries are vendored in the repo)
+- Tesseract and pdf.js are loaded on demand, when a receipt is actually picked, rather than on every page load — they are two thirds of the payload and a screen doesn't need either
 
 ## Privacy
 
