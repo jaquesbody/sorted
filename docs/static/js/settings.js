@@ -13,6 +13,7 @@
 const THEME_KEY = 'sorted-theme';
 const PASSCODE_KEY = 'sorted-passcode';
 const TIMEOUT_KEY = 'sorted-lock-timeout';
+const PERSON_PINS_KEY = 'sorted-person-pins';
 
 // Idle periods offered in Settings. 0 means "lock the moment the app is
 // backgrounded" — the launch/foreground lock is handled separately and always
@@ -150,6 +151,135 @@ function getPasscodeLength() {
   return Number.isInteger(len) && len >= 4 && len <= 8 ? len : 4;
 }
 
+/* Per-person PINs
+   --------------------------------------------------------------------------
+   Additive on purpose: the app passcode above keeps working exactly as it
+   did, so nobody can be locked out by the existence of this feature. A person
+   may additionally set a PIN, and entering it at the lock screen both unlocks
+   and switches to them.
+
+   What a PIN is, stated plainly because it is easy to over-read: it says who
+   you are, not that you're allowed in. Anyone who gets into the app can reset
+   anyone's PIN from Settings without knowing it, and can still switch the
+   top-bar chip afterwards. It is a convenience for attribution on a shared
+   device, and a four-digit family PIN is not a security boundary.
+
+   PINs live in localStorage, like the app passcode and for the same reason:
+   they are a device setting, not finance data, and they deliberately do not
+   travel in a backup — the same reason a forgotten app passcode means clearing
+   storage. A person removed from the app has theirs dropped with them.
+   ------------------------------------------------------------------------ */
+
+function getPersonPinRecords() {
+  try {
+    const raw = localStorage.getItem(PERSON_PINS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    // Drop anything malformed rather than letting it break every unlock.
+    const out = {};
+    for (const [id, rec] of Object.entries(parsed)) {
+      if (rec && typeof rec.hash === 'string' && typeof rec.salt === 'string') out[id] = rec;
+    }
+    return out;
+  } catch (err) {
+    return {};
+  }
+}
+
+function getPersonPin(personId) {
+  return getPersonPinRecords()[personId] || null;
+}
+
+function hasPersonPin(personId) {
+  return !!getPersonPin(personId);
+}
+
+function anyPersonPins() {
+  return Object.keys(getPersonPinRecords()).length > 0;
+}
+
+// Every PIN and the app passcode are the same length. The lock screen's keypad
+// shows a fixed number of dots and submits on its own, so it has to know the
+// length before anything is typed — a four-digit PIN could never be entered
+// through a six-digit pad. One length for all of them is the only way to keep
+// that, and the alternative (an explicit unlock key) would make every existing
+// passcode entry slower.
+function getRequiredPinLength() {
+  return isPasscodeSet() ? getPasscodeLength() : 4;
+}
+
+// A PIN already in use by someone else. Two people sharing a PIN would make
+// the unlock ambiguous and silently attribute one person's spending to the
+// other, which is the one outcome this feature must never produce.
+// Returns the id of the person already using it, the sentinel below for the
+// app passcode, or null when the PIN is free.
+const PIN_TAKEN_BY_APP = 'app-passcode';
+
+async function isPersonPinTaken(pin, exceptPersonId) {
+  const clean = normalisePasscode(pin);
+  for (const [id, rec] of Object.entries(getPersonPinRecords())) {
+    if (id === exceptPersonId) continue;
+    if ((await hashPasscode(clean, rec.salt)) === rec.hash) return id;
+  }
+  // Also reject the app passcode: sharing it would make "which one did they
+  // type?" unanswerable, and the app passcode is meant to stay a plain lock.
+  const appRec = getPasscodeRecord();
+  if (appRec && (await hashPasscode(clean, appRec.salt)) === appRec.hash) return PIN_TAKEN_BY_APP;
+  return null;
+}
+
+async function setPersonPin(personId, pin) {
+  const clean = normalisePasscode(pin);
+  if (clean.length !== getRequiredPinLength()) return 'length';
+  if (await isPersonPinTaken(clean, personId)) return 'taken';
+  const salt = randomSalt();
+  const records = getPersonPinRecords();
+  records[personId] = { salt, hash: await hashPasscode(clean, salt), length: clean.length };
+  localStorage.setItem(PERSON_PINS_KEY, JSON.stringify(records));
+  return null;
+}
+
+function clearPersonPin(personId) {
+  const records = getPersonPinRecords();
+  if (!(personId in records)) return false;
+  delete records[personId];
+  if (Object.keys(records).length === 0) localStorage.removeItem(PERSON_PINS_KEY);
+  else localStorage.setItem(PERSON_PINS_KEY, JSON.stringify(records));
+  return true;
+}
+
+function clearAllPersonPins() {
+  localStorage.removeItem(PERSON_PINS_KEY);
+}
+
+// Which person, if any, this entry belongs to. Deliberately does not fall back
+// to "no passcode set, so let anyone in" the way verifyPasscode() does: the
+// lock screen only appears when there is something to match against, and
+// treating "nothing to check" as success would unlock on any digits at all.
+async function matchAnyPasscode(pin) {
+  const clean = normalisePasscode(pin);
+  const appRec = getPasscodeRecord();
+  if (appRec && (await hashPasscode(clean, appRec.salt)) === appRec.hash) {
+    return { ok: true, personId: null };
+  }
+  for (const [id, rec] of Object.entries(getPersonPinRecords())) {
+    if ((await hashPasscode(clean, rec.salt)) === rec.hash) {
+      return { ok: true, personId: id };
+    }
+  }
+  return { ok: false, personId: null };
+}
+
+// The lock screen appears if the app passcode is set, or if anyone has a PIN —
+// a PIN is a way in, so having one means the app can be locked. Without this,
+// setting someone's PIN while the app passcode is off would silently do
+// nothing, which is the worst outcome for a feature whose whole job is to be
+// noticed.
+function isLockEnabled() {
+  return isPasscodeSet() || anyPersonPins();
+}
+
 // Lock screen
 let locked = false;
 let lastActivity = Date.now();
@@ -178,7 +308,7 @@ function showLockScreen() {
 }
 
 function lockApp() {
-  if (!isPasscodeSet() || locked) return;
+  if (!isLockEnabled() || locked) return;
   showLockScreen();
 }
 
@@ -213,7 +343,14 @@ function setLockError(message, shake) {
 }
 
 async function submitLockEntry() {
-  if (await verifyPasscode(entry)) {
+  const match = await matchAnyPasscode(entry);
+  if (match.ok) {
+    // A person's PIN identifies them, so unlocking as them switches the app to
+    // them — the whole point of having it. The app passcode claims no
+    // identity, so whoever was in use stays in use.
+    if (match.personId) {
+      localStorage.setItem('sorted-current-person', match.personId);
+    }
     unlockApp();
     return;
   }
@@ -261,7 +398,7 @@ function noteActivity() {
 }
 
 function checkIdle() {
-  if (locked || !isPasscodeSet()) return;
+  if (locked || !isLockEnabled()) return;
   const minutes = getLockTimeoutMinutes();
   // "Immediately" means as soon as the app is put away — checked on
   // visibilitychange, since a backgrounded WebView may not tick reliably.
@@ -288,6 +425,6 @@ setInterval(checkIdle, 15000);
 // page must never paint behind the lock screen, and the two need to happen in
 // that order. index.html has already set data-theme before first paint.
 function initLock() {
-  if (isPasscodeSet()) showLockScreen();
+  if (isLockEnabled()) showLockScreen();
   else document.getElementById('lock-screen').hidden = true;
 }

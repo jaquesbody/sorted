@@ -161,6 +161,10 @@ async function removePerson(id) {
     }
   }
   await deleteItem('people', id);
+  // Their PIN goes with them. Leaving it behind would keep the app locked
+  // against a person who can no longer be selected, and the record would sit
+  // in localStorage pointing at an id nothing resolves any more.
+  clearPersonPin(id);
   // Straight to storage rather than through setCurrentPersonId(), which
   // renders: the caller is about to re-render anyway, and this way the chip
   // doesn't flicker to "Anyone" over a page that is about to be replaced.
@@ -1214,6 +1218,7 @@ function peopleSettingsHtml() {
         <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
       </div>
       <div class="setting-control">
+        <button class="btn btn-ghost" onclick="openPersonPinModal('${p.id}')">${hasPersonPin(p.id) ? 'Change PIN' : 'Set PIN'}</button>
         <button class="btn btn-ghost" onclick="removePersonFromSettings('${p.id}', this)">Remove</button>
       </div>
     </div>`).join('');
@@ -1243,7 +1248,81 @@ function peopleSettingsHtml() {
       </div>
     </div>
     ${people.length === 0 ? '<p class="setting-hint" style="margin-top: 12px;">Until you add anyone, entries are marked as Anyone\'s.</p>' : ''}
+    ${!isPasscodeSet() && anyPersonPins() ? '<p class="setting-hint" style="margin-top: 12px;">The app locks while a PIN is set.</p>' : ''}
   `;
+}
+
+// A person's PIN: the app passcode still opens the app, and this switches it to
+// them. Stated in the modal because a PIN that silently does nothing when
+// there's no app passcode would be the easiest thing in this feature to get
+// wrong.
+function openPersonPinModal(personId) {
+  const person = personById(personId);
+  if (!person) return;
+  const required = getRequiredPinLength();
+  const existing = hasPersonPin(personId);
+
+  openModal(`${existing ? 'Change' : 'Set'} ${escapeHTML(person.name)}'s PIN`, `
+    <p class="form-label">${required} digits. Entering it instead of the app passcode switches Sorted to ${escapeHTML(person.name)}.</p>
+    <div class="form-group">
+      <label class="form-label" for="person-pin-new">New PIN</label>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="${required}" class="form-input"
+             id="person-pin-new" autocomplete="new-password" placeholder="••••">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="person-pin-confirm">Confirm PIN</label>
+      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="${required}" class="form-input"
+             id="person-pin-confirm" autocomplete="new-password" placeholder="••••">
+    </div>
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="savePersonPin('${personId}')">Save PIN</button>
+    ${existing ? `<button class="btn btn-ghost" style="width: 100%; margin-top: 8px;" onclick="confirmRemovePersonPin('${personId}', this)">Remove PIN</button>` : ''}
+  `);
+}
+
+async function savePersonPin(personId) {
+  const first = normalisePasscode(document.getElementById('person-pin-new').value);
+  const second = normalisePasscode(document.getElementById('person-pin-confirm').value);
+  const person = personById(personId);
+  if (!person) return;
+
+  if (first.length !== getRequiredPinLength()) {
+    return showFormError(`Use ${getRequiredPinLength()} digits`, 'person-pin-new');
+  }
+  if (first !== second) return showFormError('Those two don’t match', 'person-pin-confirm');
+
+  const problem = await setPersonPin(personId, first);
+  if (problem === 'taken') {
+    const taker = await isPersonPinTaken(first, personId);
+    return showFormError(
+      taker === PIN_TAKEN_BY_APP ? 'That’s the app passcode' : `That’s ${personById(taker)?.name || 'someone else'}’s PIN`,
+      'person-pin-new');
+  }
+  if (problem) return showFormError('That PIN could not be saved', 'person-pin-new');
+
+  closeModal();
+  showToast(`${person.name}'s PIN set`);
+  await renderPage();
+}
+
+// Two-step, like every other destructive control here. No PIN required: anyone
+// who can reach Settings can reset anyone's PIN, which is the honest ceiling on
+// what a PIN is.
+function confirmRemovePersonPin(personId, btn) {
+  const person = personById(personId);
+  if (!person) return;
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Tap again to remove';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Remove PIN';
+    }, 5000);
+    return;
+  }
+  clearPersonPin(personId);
+  closeModal();
+  showToast(`${person.name}'s PIN removed`);
+  renderPage();
 }
 
 async function addPersonFromSettings() {
@@ -1287,31 +1366,11 @@ function themeSegment() {
 }
 
 function passcodeSettings() {
-  if (!isPasscodeSet()) {
-    return `
-      <div class="setting-row">
-        <div class="setting-text">
-          <div class="setting-label">Require a passcode</div>
-          <div class="setting-hint">Ask for it when the app opens</div>
-        </div>
-        <div class="setting-control">
-          <button class="switch" role="switch" aria-checked="false" aria-label="Require a passcode"
-                  onclick="openPasscodeSetup()"></button>
-        </div>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="setting-row">
-      <div class="setting-text">
-        <div class="setting-label">Passcode on</div>
-      </div>
-      <div class="setting-control">
-        <button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
-                onclick="confirmRemovePasscode(this)"></button>
-      </div>
-    </div>
+  // "Lock after" and "Lock now" belong to the app lock, not to the app
+  // passcode specifically — with someone's PIN set the app locks either way,
+  // and hiding these would leave the idle timeout unreachable while the app is
+  // in fact locking.
+  const lockBlock = isLockEnabled() ? `
     <div class="setting-block">
       <div class="setting-row">
         <div class="setting-text">
@@ -1332,6 +1391,35 @@ function passcodeSettings() {
         </div>
       </div>
     </div>
+  ` : '';
+
+  if (!isPasscodeSet()) {
+    return `
+      <div class="setting-row">
+        <div class="setting-text">
+          <div class="setting-label">Require a passcode</div>
+          <div class="setting-hint">Ask for it when the app opens</div>
+        </div>
+        <div class="setting-control">
+          <button class="switch" role="switch" aria-checked="false" aria-label="Require a passcode"
+                  onclick="openPasscodeSetup()"></button>
+        </div>
+      </div>
+      ${lockBlock}
+    `;
+  }
+
+  return `
+    <div class="setting-row">
+      <div class="setting-text">
+        <div class="setting-label">Passcode on</div>
+      </div>
+      <div class="setting-control">
+        <button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
+                onclick="confirmRemovePasscode(this)"></button>
+      </div>
+    </div>
+    ${lockBlock}
   `;
 }
 
@@ -1367,6 +1455,15 @@ async function savePasscodeSetup() {
 
   if (first.length < 4) return showFormError('Use at least 4 digits', 'passcode-new');
   if (first !== second) return showFormError('Those two don’t match', 'passcode-confirm');
+
+  // Every PIN shares one length, because the lock screen's keypad submits on
+  // its own and has to know the length up front. Changing it now would strand
+  // every PIN already set, so it has to be refused rather than silently
+  // breaking them — remove the PINs first, then set the new length.
+  if (anyPersonPins() && isPasscodeSet() && first.length !== getPasscodeLength()) {
+    return showFormError(
+      `People's PINs are ${getPasscodeLength()} digits. Remove them first to change that.`, 'passcode-new');
+  }
 
   await setPasscode(first);
   setLockTimeoutMinutes(Number(document.getElementById('passcode-timeout').value));
