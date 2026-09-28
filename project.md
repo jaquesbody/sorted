@@ -3,7 +3,7 @@ Last updated 28th September 2026
 **Project: Sorted**
 
 **1. Status**
-- Phase: v2 rewrite complete and running on desktop, browser and Android. Iterating with visual/UX feedback; v2.2.0 adds a "Who Spent What" report splitting each person's bar between what they spent and what they owe, cuts six lines of explanatory copy from Settings, and takes Tesseract and pdf.js off the critical path. v2.1.0 added people and moved new rows onto UUIDs.
+- Phase: v2 rewrite complete and running on desktop, browser and Android. Iterating with visual/UX feedback; v2.3.0 gives a person their own PIN, so unlocking the app also says who is using it. v2.2.0 added the "Who Spent What" report, cut six lines of copy, and took Tesseract and pdf.js off the critical path. v2.1.0 added people and moved new rows onto UUIDs.
 - Formerly Saved — dropped entirely, no merger, Sorted supersedes it.
 
 **2. Problem, User, Outcome**
@@ -44,6 +44,12 @@ Last updated 28th September 2026
 - "Who Spent What" gives one bar per person: the length is that person's share of the household total, so the bars compare against each other, and the split inside each bar is their own spend-to-bills ratio, which the length alone can't show. Unattributed money is kept as its own "Anyone" row rather than dropped — the card rolls up the same spend and bills as the two category cards above it, and quietly leaving it out would make the three disagree.
 - No person dot on the Who Spent What rows. The name is the identity, the fixed 104px name column already truncated longer names once a dot was added, and a third colour sitting beside a two-colour bar invites reading it as a third bar colour. The dot stays on the Spend/Bills rows, where there is no bar to confuse it with.
 - Tesseract (63KB) and pdf.js (320KB) load on demand via `loadScriptOnce()`, when a receipt is picked, not on every page load. `defer` on the script tags was tried first and did almost nothing (85 -> 86): deferred scripts still run in order, so app.js waited on the bundles regardless. Fetching them only when needed cut the first load from 577KB to 200KB, LCP from 4.1s to 2.0s, and performance 85 -> 99.
+- A person's PIN is additive, not a replacement: the app passcode keeps working exactly as before, so nobody can be locked out by the feature existing. Entering a person's PIN unlocks *and* switches to them, which is the only thing in the app that ties attribution to an action rather than a free choice.
+- What a PIN is, stated plainly because it is easy to over-read: it identifies, it does not authenticate. Anyone who reaches Settings can reset anyone's PIN without knowing the old one, and can switch the top-bar chip afterwards anyway. A four-digit family PIN is not a security boundary, and the README says so rather than leaving it implied.
+- A PIN alone locks the app (`isLockEnabled()`), and the People card says so when the app passcode is off. The alternative — a PIN that does nothing until an app passcode exists — is a feature that silently fails, which is the worst failure mode for something whose entire job is to be noticed. "Lock after" and "Lock now" follow the app lock rather than the app passcode, so they stay reachable when only person PINs hold it shut.
+- Every PIN and the app passcode share one length. The lock screen's keypad shows a fixed number of dots and submits on its own, so it has to know the length before anything is typed; a four-digit PIN could never be entered through a six-digit pad. Changing the app passcode to a different length while PINs exist is refused rather than allowed, because the alternative is silently stranding every PIN already set.
+- Two people cannot share a PIN, and a PIN cannot be the app passcode. A shared PIN would make the unlock ambiguous and attribute one person's spending to another — the one outcome this feature must never produce.
+- Person PINs live in localStorage, like the app passcode: a device setting, not finance data, and deliberately not in a backup. A person removed from the app has theirs dropped, or the app would sit locked against someone who can no longer be selected.
 - People come first on import, in both modes, and are matched by name: ids are minted per device, so a name is the only identity that survives the trip. Every `personId` in the file is then translated to the local id of whoever it matched, and an unmatched reference becomes unattributed rather than a dangling id the UI would render as a blank. `getAllData()` is driven off `STORES` for the same reason — people missing from a backup would strip every entry's attribution on the next restore.
 
 **6. Sample Data**
@@ -74,7 +80,7 @@ Last updated 28th September 2026
 
 **10. Open Questions**
 - Confirmed: no Saved repo exists, only a portfolio stub on jaquesbody.github.io.
-- Can unlocking identify *who* is using the app? Raised after v2.1.0. Attribution today is a free choice — the top-bar chip can be switched by anyone — so an unlock that named the person would be the one thing that ties the two together. The blocker is the passcode's honest framing: §5 documents it as a shoulder-surfing screen, not encryption, and a per-person PIN would quietly turn that into a credential. A 4-digit family PIN is not a security boundary, and anyone can still switch the chip afterwards, so it would identify rather than authenticate. Needs a decision before any code.
+- Resolved, v2.3.0: yes, and additively — the app passcode still works alone, and per-person PINs are optional. Kept here as the record of why it was a decision rather than a feature: the blocker was never technical, it was that §5 documents the passcode as a shoulder-surfing screen, and a per-person PIN turns that into a credential. It identifies rather than authenticates, and the privacy note now says so.
 
 **11. Outstanding Tasks**
 - Update jaquesbody.github.io: rename "Saved" card to "Sorted," update description to reflect actual outcome, keep status "Under construction."

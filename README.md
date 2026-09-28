@@ -16,6 +16,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 
 - Dashboard: spent, bills due and savings for whichever month you're looking at, plus a 6-month trend chart that splits recurring from one-off spend
 - People: mark spend, bills and savings goals as somebody's, and see a coloured dot on each row. A chip in the top bar says who's using the app, so new entries and bill payments are marked automatically. This is attribution, not a login — anyone can switch, and there's still no account
+- Give someone a PIN and entering it instead of the app passcode both unlocks the app and switches to them, so the right person is marked without touching anything. The app passcode keeps working exactly as before, and anyone who can reach Settings can reset a PIN without knowing it — it says who you are, not that you're allowed in
 - A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
 - Marking a bill paid records who paid it, which can be someone other than the bill's owner
 - Spend, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
@@ -54,7 +55,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.2.0-debug.apk`](sorted-v2-2.2.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.3.0-debug.apk`](sorted-v2-2.3.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
@@ -80,6 +81,8 @@ No backend, no cloud storage, no login. All data stays on your own device and on
 People are labels, not accounts: a person is a name and a colour, and anyone can switch who they're being. That makes attribution useful on a shared device and useless against anyone determined — it is not access control.
 
 The passcode is a privacy screen, not encryption: it stops the app being readable when you hand your phone over, and it can't protect data from anyone who already has the unlocked device. It isn't backed up, so a forgotten passcode means clearing the app's storage to get back in.
+
+A person's PIN works the same way, with one extra thing to be clear about. It identifies who is using the app — it does not authenticate them. Anyone who gets into the app can reset anyone's PIN from Settings without knowing the old one, and can still switch the top-bar chip afterwards. It saves a shared device from attributing your shopping to the wrong person; it is not a way of keeping anyone out, and a four-digit family PIN is not something to rely on. Person PINs aren't backed up either.
 
 ## History
 
