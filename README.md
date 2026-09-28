@@ -15,6 +15,9 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 ## Features
 
 - Dashboard: spent, bills due and savings for whichever month you're looking at, plus a 6-month trend chart that splits recurring from one-off spend
+- People: mark spend, bills and savings goals as somebody's, and see a coloured dot on each row. A chip in the top bar says who's using the app, so new entries and bill payments are marked automatically. This is attribution, not a login — anyone can switch, and there's still no account
+- A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
+- Marking a bill paid records who paid it, which can be someone other than the bill's owner
 - Spend, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - Recurring bills: marking one paid copies the payment into Spend and rolls the due date a month forward
 - A month selector on Dashboard, Spend and Bills, all the same width; tap the month name to jump back to the current one
@@ -25,7 +28,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
 - Light, dark, or follow-the-system theme, set in Settings and applied before the first paint
 - Optional passcode: a numeric keypad locks the app on launch and again after a set idle period (1, 5 or 30 minutes, or immediately when it's put away). Only a salted hash of the passcode is stored
-- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images travel with the backup
+- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images and your list of people travel with the backup
 - Works in the browser, on the desktop as an Electron app, and on Android — where the six destinations sit in a bottom bar instead of a side rail
 - Sample data seeds on first run so the app isn't empty
 
@@ -50,7 +53,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.0.7-debug.apk`](sorted-v2-2.0.7-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.1.0-debug.apk`](sorted-v2-2.1.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
@@ -71,6 +74,8 @@ Note: importing JSON works on every platform. Export uses the native save dialog
 ## Privacy
 
 No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
+
+People are labels, not accounts: a person is a name and a colour, and anyone can switch who they're being. That makes attribution useful on a shared device and useless against anyone determined — it is not access control.
 
 The passcode is a privacy screen, not encryption: it stops the app being readable when you hand your phone over, and it can't protect data from anyone who already has the unlocked device. It isn't backed up, so a forgotten passcode means clearing the app's storage to get back in.
 
