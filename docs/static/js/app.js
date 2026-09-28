@@ -20,6 +20,154 @@ let spendFilter = 'all';
 let dueFilter = 'all'; // Bills page: 'all' | 'pending' | 'confirmed' | 'recurring'
 let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
 
+/* -----------------------------------------------------------------------------
+   People
+   Attribution, not accounts: a person is a name and a colour, and anyone can
+   pick who they're currently being. There is no login and no PIN per person —
+   the whole point is that a shared family device can say whose spending is
+   whose. "Who's using the app" is a device setting (localStorage, like the
+   theme) because it answers "who is holding the phone", and it is what stamps
+   new entries and bill payments.
+   -------------------------------------------------------------------------- */
+
+const CURRENT_PERSON_KEY = 'sorted-current-person';
+
+function getCurrentPersonId() {
+  const id = localStorage.getItem(CURRENT_PERSON_KEY);
+  return id || null;
+}
+
+function setCurrentPersonId(id) {
+  if (id) localStorage.setItem(CURRENT_PERSON_KEY, id);
+  else localStorage.removeItem(CURRENT_PERSON_KEY);
+  renderPage();
+}
+
+// People for this page render, resolved to a map. Cleared on every render so
+// a rename or a removal shows up everywhere at once.
+let peopleCache = new Map();
+
+async function loadPeople() {
+  const people = await getAll('people');
+  people.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  peopleCache = new Map(people.map((p) => [p.id, p]));
+  return peopleCache;
+}
+
+function personById(id) {
+  return id ? peopleCache.get(id) || null : null;
+}
+
+// Everyone shares this one filter across Spend and Bills, so switching
+// person in one place doesn't leave the other quietly showing a different
+// slice. 'all' means no filter — the household.
+let personFilter = 'all';
+
+function personFilterActive() {
+  return personFilter !== 'all' && peopleCache.has(personFilter);
+}
+
+function matchesPersonFilter(item) {
+  return !personFilterActive() || item.personId === personFilter;
+}
+
+function setPersonFilter(id) {
+  personFilter = id || 'all';
+  renderPage();
+}
+
+// The dot beside a number in a list: colour plus first letter, so it is
+// identifiable without spending row width on a full name. `decorative` for
+// the places where the name is already right next to it (the chip, the
+// picker, a filter chip) — otherwise a screen reader announces "S Sarah".
+function personDot(person, size, decorative) {
+  if (!person) return '';
+  const initial = String(person.name).trim().charAt(0).toUpperCase() || '?';
+  const px = size || 24;
+  const a11y = decorative ? ' aria-hidden="true"' : ` role="img" aria-label="${escapeHTML(person.name)}"`;
+  return `<span class="person-dot" style="width:${px}px;height:${px}px;font-size:${Math.round(px * 0.5)}px;background:${escapeHTML(person.colour || PERSON_COLOURS[0])};color:${readableOn(person.colour)}"
+    title="${escapeHTML(person.name)}"${a11y}>${escapeHTML(initial)}</span>`;
+}
+
+// Black or white lettering on an arbitrary identity colour, by its luminance —
+// so every swatch in the palette stays readable instead of assuming light text.
+function readableOn(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#ffffff';
+  const n = parseInt(m[1], 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.45 ? '#16181d' : '#ffffff';
+}
+
+// The person chip sits in the top bar (phone) and the sidebar (desktop) —
+// only one of the two is ever visible, since the top bar is hidden above
+// 768px and the rail is hidden below it. It lives in the chrome rather than a
+// page so it stays put while you move around, and so a row's attribution is
+// never a surprise because you forgot to switch.
+function renderPersonChip() {
+  const person = personById(getCurrentPersonId());
+  const html = `<button class="person-chip" data-action="pick-person" title="Who's using the app">
+      ${personDot(person, 22, true)}<span class="person-chip-name">${escapeHTML(person ? person.name : 'Anyone')}</span>
+    </button>`;
+  for (const id of ['topbar-person', 'sidebar-person']) {
+    const slot = document.getElementById(id);
+    if (slot) slot.innerHTML = html;
+  }
+}
+
+function personChipsHtml() {
+  const people = [...peopleCache.values()];
+  const chip = (value, label, dot) => `<span class="filter-chip ${personFilter === value ? 'active' : ''}" role="button" tabindex="0" onclick="setPersonFilter('${value}')">${dot || ''}${label}</span>`;
+  return [
+    chip('all', 'Everyone'),
+    ...people.map((p) => chip(p.id, escapeHTML(p.name), personDot(p, 16, true)))
+  ].join('');
+}
+
+function openPersonPicker() {
+  const people = [...peopleCache.values()];
+  const current = getCurrentPersonId();
+  const option = (id, label, dot) => `<button class="person-option" data-action="choose-person" data-id="${id || ''}"${id === current ? ' aria-current="true"' : ''}>${dot}<span>${label}</span></button>`;
+  openModal('Who\'s using the app', `
+    <p class="form-label" style="margin-bottom: 14px;">New spend and bills you add are marked as theirs, and marking a bill paid records who paid it.</p>
+    <div class="person-options">
+      ${option('', 'Anyone', personDot(null, 24, true))}
+      ${people.map((p) => option(p.id, escapeHTML(p.name), personDot(p, 24, true))).join('')}
+    </div>
+    <p class="setting-hint" style="margin-top: 14px;">This isn't a login — anyone can switch. Add people in Settings.</p>
+  `);
+}
+
+async function addPerson(name) {
+  const clean = String(name || '').trim().slice(0, 40);
+  if (!clean) return false;
+  const people = await getAll('people');
+  if (people.some((p) => String(p.name).toLowerCase() === clean.toLowerCase())) return false;
+  await addItem('people', { name: clean, colour: nextPersonColour(people) });
+  return true;
+}
+
+async function removePerson(id) {
+  // Their entries are left alone — a spend doesn't stop being real because
+  // the person is removed — they just become unattributed.
+  for (const store of ['spend', 'due', 'savings']) {
+    const items = await getAll(store);
+    for (const item of items) {
+      if (item.personId === id) await updateItem(store, { ...item, personId: null });
+    }
+  }
+  await deleteItem('people', id);
+  // Straight to storage rather than through setCurrentPersonId(), which
+  // renders: the caller is about to re-render anyway, and this way the chip
+  // doesn't flicker to "Anyone" over a page that is about to be replaced.
+  if (getCurrentPersonId() === id) localStorage.removeItem(CURRENT_PERSON_KEY);
+  if (personFilter === id) personFilter = 'all';
+}
+
 // The one way to change page. The nav bar, the bottom bar and the dashboard's
 // stat cards all go through it, so the highlighted tab can't disagree with the
 // page on screen — jumping from a dashboard card used to leave the bottom bar
@@ -143,7 +291,12 @@ let renderToken = 0;
 async function renderPage() {
   const content = document.getElementById('content');
   renderToken++;
-  
+
+  // Every page needs the people list: to resolve a row's dot, to offer the
+  // filter, or to stamp a form. One read, shared by the render below.
+  await loadPeople();
+  renderPersonChip();
+
   switch(currentPage) {
     case 'dashboard':
       await renderDashboard(content);
@@ -477,8 +630,13 @@ async function renderSpend(container) {
   const items = await getAll('spend');
   items.sort((a, b) => new Date(b.date) - new Date(a.date));
   
-  const monthItems = items.filter(i => isSameMonth(i.date, viewedDate));
-  const yearItems = items.filter(i => isSameYear(i.date, viewedDate));
+  const inMonth = items.filter(i => isSameMonth(i.date, viewedDate));
+  const inYear = items.filter(i => isSameYear(i.date, viewedDate));
+  // The totals follow the filters, so tapping a person chip changes what the
+  // card is counting rather than leaving the household total above a list of
+  // one person's items.
+  const monthItems = applySpendFilter(inMonth);
+  const yearItems = applySpendFilter(inYear);
   const monthTotal = monthItems.reduce((sum, i) => sum + i.amount, 0);
   const yearTotal = yearItems.reduce((sum, i) => sum + i.amount, 0);
   
@@ -497,36 +655,37 @@ async function renderSpend(container) {
       <div class="stat-card-value">${currency(monthTotal)}</div>
     </div>
     
-    <div class="filter-bar">
+    <div class="filter-bar" aria-label="Status">
       <span class="filter-chip ${spendFilter === 'all' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('all')">All</span>
       <span class="filter-chip ${spendFilter === 'confirmed' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('confirmed')">Confirmed</span>
       <span class="filter-chip ${spendFilter === 'pending' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('pending')">Pending</span>
       <span class="filter-chip ${spendFilter === 'recurring' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('recurring')">Recurring</span>
     </div>
+    <div class="filter-bar filter-bar--people" aria-label="Person">
+      ${personChipsHtml()}
+    </div>
     
     <div class="item-list" id="spend-list">
-      ${renderSpendList(monthItems, monthTotal)}
+      ${renderSpendList(monthItems, inMonth.length > 0, monthTotal)}
     </div>
   `;
 }
 
 function applySpendFilter(items) {
-  if (spendFilter === 'confirmed') return items.filter(i => i.confirmed === true);
-  if (spendFilter === 'pending') return items.filter(i => !i.confirmed);
-  if (spendFilter === 'recurring') return items.filter(i => !!i.recurring);
-  return items;
+  const mine = items.filter(matchesPersonFilter);
+  if (spendFilter === 'confirmed') return mine.filter(i => i.confirmed === true);
+  if (spendFilter === 'pending') return mine.filter(i => !i.confirmed);
+  if (spendFilter === 'recurring') return mine.filter(i => !!i.recurring);
+  return mine;
 }
 
-function renderSpendList(monthItems, monthTotal) {
-  const filtered = applySpendFilter(monthItems);
-  if (filtered.length === 0 && monthItems.length > 0) {
-    return `
-      <div class="empty-state">
-        <div class="empty-state-text">No ${spendFilter} items this month</div>
-      </div>
-    `;
+function renderSpendList(monthItems, monthHasAnything, monthTotal) {
+  // Something in the month, but nothing matching: the chips above already say
+  // why, so there's no need to name the filter here as well.
+  if (monthItems.length === 0 && monthHasAnything) {
+    return '<div class="empty-state"><div class="empty-state-text">No items match</div></div>';
   }
-  return renderSpendItems(filtered, monthTotal);
+  return renderSpendItems(monthItems, monthTotal);
 }
 
 function renderSpendItems(items, total) {
@@ -554,6 +713,7 @@ function renderSpendItems(items, total) {
         </div>
         <div class="item-amount">${currency(item.amount)}</div>
         <div class="item-actions">
+          ${personDot(personById(item.personId))}
           ${receiptChip(item, 'spend')}
           <button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
                   aria-pressed="${item.confirmed ? 'true' : 'false'}"
@@ -617,18 +777,24 @@ function paidBillsForMonth(spendItems, date) {
 }
 
 function applyDueFilter(outstanding, paid) {
-  if (dueFilter === 'pending') return outstanding.map((i) => ({ item: i, paid: false }));
-  if (dueFilter === 'confirmed') return paid.map((i) => ({ item: i, paid: true }));
+  // The person filter applies to the list; the Total Due card deliberately
+  // keeps counting the household, because what a bill is worth doesn't change
+  // whose list you're looking at — and a card that dropped to £0 because of a
+  // filter reads as "nothing owed".
+  const mine = outstanding.filter(matchesPersonFilter);
+  const minePaid = paid.filter(matchesPersonFilter);
+  if (dueFilter === 'pending') return mine.map((i) => ({ item: i, paid: false }));
+  if (dueFilter === 'confirmed') return minePaid.map((i) => ({ item: i, paid: true }));
   if (dueFilter === 'recurring') {
-    return [...outstanding, ...paid]
+    return [...mine, ...minePaid]
       .filter((i) => i.recurring)
       .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
-      .map((i) => ({ item: i, paid: paid.includes(i) }));
+      .map((i) => ({ item: i, paid: minePaid.includes(i) }));
   }
   // All: everything the month held, unpaid first, both in date order.
   return [
-    ...outstanding.map((i) => ({ item: i, paid: false })),
-    ...paid.map((i) => ({ item: i, paid: true }))
+    ...mine.map((i) => ({ item: i, paid: false })),
+    ...minePaid.map((i) => ({ item: i, paid: true }))
   ].sort((a, b) => new Date(a.item.dueDate) - new Date(b.item.dueDate));
 }
 
@@ -688,10 +854,13 @@ async function renderDue(container) {
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
     </div>
     
-    <div class="filter-bar">
+    <div class="filter-bar" aria-label="Status">
       ${BILL_FILTERS.map(([value, label]) =>
         `<span class="filter-chip ${dueFilter === value ? 'active' : ''}" role="button" tabindex="0" onclick="filterBills('${value}')">${label}</span>`
       ).join('')}
+    </div>
+    <div class="filter-bar filter-bar--people" aria-label="Person">
+      ${personChipsHtml()}
     </div>
 
     <div class="item-list">
@@ -700,7 +869,9 @@ async function renderDue(container) {
           <div class="empty-state-text">${
             all.length === 0 && paid.length === 0
               ? 'No bills due'
-              : dueFilter === 'all' ? 'Nothing due this month' : `No ${dueFilter} bills this month`
+              : personFilterActive() || dueFilter !== 'all'
+                ? 'No bills match'
+                : 'Nothing due this month'
           }</div>
           ${all.length > 0 || paid.length > 0
             ? '<p class="setting-hint" style="margin-bottom: 20px;">Use ◀ ▶ to see other months</p>'
@@ -726,6 +897,7 @@ async function renderDue(container) {
               <div class="stat-card-sub">${isPaid && item.date ? `Paid ${formatDate(item.date)}` : dueCountdown(item.dueDate)}</div>
             </div>
             <div class="item-actions">
+              ${personDot(personById(item.personId))}
               ${receiptChip(item, isPaid ? 'spend' : 'due')}
               ${isPaid
                 ? `<span class="confirm-btn is-done" aria-hidden="true">${TICK_SVG}</span>`
@@ -789,6 +961,9 @@ async function renderSavings(container) {
               <div class="stat-card-progress" style="margin-top: 8px;">
                 <div class="stat-card-progress-fill progress-savings" style="width: ${goalPct}%"></div>
               </div>
+            </div>
+            <div class="item-actions">
+              ${personDot(personById(item.personId))}
             </div>
           </div>
         `;
@@ -936,6 +1111,15 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
+        <h2 class="report-title">People</h2>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 15px;">
+          Marks spend and bills as somebody's, so you can see who spent what and
+          who paid which bill. Not a login — anyone can switch on the top bar.
+        </p>
+        ${peopleSettingsHtml()}
+      </div>
+
+      <div class="report-card">
         <h2 class="report-title">Passcode</h2>
         <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 15px;">
           Locks the app on launch and after a period of inactivity. Your data stays
@@ -963,6 +1147,80 @@ function renderSettings(container) {
       </div>
     </div>
   `;
+}
+
+function peopleSettingsHtml() {
+  const people = [...peopleCache.values()];
+  const current = getCurrentPersonId();
+  const rows = people.map((p) => `
+    <div class="setting-row">
+      <div class="setting-text">
+        <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" onclick="removePersonFromSettings('${p.id}', this)">Remove</button>
+      </div>
+    </div>`).join('');
+
+  return `
+    <div class="setting-row">
+      <div class="setting-text">
+        <div class="setting-label">Using the app as</div>
+        <div class="setting-hint">What new entries and bill payments get marked as</div>
+      </div>
+      <div class="setting-control">
+        <select class="form-input" id="current-person" style="width: auto;" onchange="setCurrentPersonId(this.value || null)">
+          <option value="" ${!current ? 'selected' : ''}>Anyone</option>
+          ${people.map((p) => `<option value="${p.id}" ${current === p.id ? 'selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    ${rows}
+    <div class="setting-row">
+      <div class="setting-text">
+        <div class="setting-label">Add someone</div>
+        <div class="setting-hint">A name and a colour, nothing more</div>
+      </div>
+      <div class="setting-control">
+        <input type="text" class="form-input" id="new-person-name" placeholder="Name" maxlength="40" style="width: 130px;">
+        <button class="btn btn-primary" onclick="addPersonFromSettings()">Add</button>
+      </div>
+    </div>
+    ${people.length === 0 ? '<p class="setting-hint" style="margin-top: 12px;">Until you add anyone, entries are marked as Anyone\'s.</p>' : ''}
+  `;
+}
+
+async function addPersonFromSettings() {
+  const input = document.getElementById('new-person-name');
+  const name = input.value.trim();
+  if (!name) return showFormError('Please enter a name', 'new-person-name');
+  const added = await addPerson(name);
+  if (!added) {
+    input.value = '';
+    return showFormError('Someone with that name already exists', 'new-person-name');
+  }
+  input.value = '';
+  showToast(`${name} added`);
+  await renderPage();
+}
+
+// Two-step confirm, like every other destructive action in the app (no native
+// dialogs). The first tap rewrites itself to say what will happen.
+async function removePersonFromSettings(id, btn) {
+  const person = personById(id);
+  if (!person) return;
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Their entries stay — remove?';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Remove';
+    }, 5000);
+    return;
+  }
+  await removePerson(id);
+  showToast(`${person.name} removed`);
+  await renderPage();
 }
 
 function themeSegment() {
@@ -1091,16 +1349,33 @@ function confirmRemovePasscode(switchEl) {
 
 // Modal Forms
 function buildForm(type, editId = null) {
+  // Ids are UUID strings now, so they're interpolated as JSON rather than
+  // dropped into the handler bare — a bare UUID would be a syntax error, and
+  // Number() on one is NaN. JSON.stringify also quotes the older numeric ids
+  // that predate the change.
+  const idArg = editId == null ? '' : JSON.stringify(editId);
   const saveCall = editId == null
     ? `saveItem('${type}')`
-    : `saveItem('${type}', ${editId})`;
+    : `saveItem('${type}', ${idArg})`;
   // The receipt panel is a live region app.js fills in — it needs to exist in
   // both add and edit mode, since a stored receipt can be viewed, replaced or
   // removed after the entry is saved.
   const receiptHtml = (type === 'spend' || type === 'due') ? `
       <div class="receipt-panel" id="receipt-panel"></div>` : '';
+  // Who this entry belongs to. Pre-filled with whoever is currently using the
+  // app, so the common case is no taps at all and the odd case (adding a
+  // bill in someone else's name) is one dropdown away.
+  const peopleOptions = [...peopleCache.values()];
+  const personHtml = `
+      <div class="form-group">
+        <label class="form-label" for="form-person">${type === 'savings' ? 'Whose goal' : 'Whose'}</label>
+        <select class="form-input" id="form-person">
+          <option value="">Anyone</option>
+          ${peopleOptions.map((p) => `<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('')}
+        </select>
+      </div>`;
   const deleteBtn = editId == null ? '' : `
-      <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${editId}, this)">Delete</button>`;
+      <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${idArg}, this)">Delete</button>`;
   const forms = {
     spend: `
       ${receiptHtml}
@@ -1139,6 +1414,7 @@ function buildForm(type, editId = null) {
           </select>
         </div>
       </div>
+      ${personHtml}
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     due: `
@@ -1176,6 +1452,7 @@ function buildForm(type, editId = null) {
           </select>
         </div>
       </div>
+      ${personHtml}
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     savings: `
@@ -1201,6 +1478,7 @@ function buildForm(type, editId = null) {
           <option value="General">General</option>
         </select>
       </div>
+      ${personHtml}
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `
   };
@@ -1213,6 +1491,12 @@ function openAddModal(type) {
   receiptRemoved = false;
   ocrStatusText = '';
   openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type));
+  // Default to whoever is using the app, rather than making the common case
+  // a dropdown trip every time.
+  const personEl = document.getElementById('form-person');
+  if (personEl && getCurrentPersonId() && peopleCache.has(getCurrentPersonId())) {
+    personEl.value = getCurrentPersonId();
+  }
   if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
 
@@ -1243,6 +1527,7 @@ function prefillForm(item) {
   setVal('form-target', item.target);
   const recurring = document.getElementById('form-recurring');
   if (recurring && item.recurring !== undefined) recurring.value = String(item.recurring);
+  setVal('form-person', item.personId || '');
 }
 
 /* -----------------------------------------------------------------------------
@@ -1459,13 +1744,14 @@ async function saveItem(type, editId = null) {
   const target = parseFloat(document.getElementById('form-target')?.value || 0);
   const category = document.getElementById('form-category').value;
   const recurring = document.getElementById('form-recurring')?.value === 'true';
+  const personId = document.getElementById('form-person')?.value || null;
 
   if (!title) {
     showFormError('Please enter a title', 'form-title');
     return;
   }
 
-  const fields = { title, category };
+  const fields = { title, category, personId };
   if (type !== 'savings') fields.recurring = recurring;
   // Written only when the panel actually changed: an edit that leaves it alone
   // leaves the stored image alone (the merge below keeps it), and a removed
@@ -1538,7 +1824,9 @@ async function toggleConfirm(type, id) {
 async function markPaid(id) {
   const item = await getItem('due', id);
   if (!item) return;
-  await markDuePaid(item);
+  // Whoever is using the app right now is recorded as the payer, which is the
+  // half of "who paid for it" the bill's own person can't answer.
+  await markDuePaid(item, getCurrentPersonId());
   // A recurring bill rolls to the same day next month, so it leaves the list
   // that was just tapped. Say where it went — otherwise a payment looks like
   // it deleted the bill.
@@ -1699,7 +1987,9 @@ function showToast(message) {
 document.getElementById('content').addEventListener('click', (e) => {
   const action = e.target.closest('[data-action]');
   if (action) {
-    const id = Number(action.dataset.id);
+    // The id straight off the dataset. Ids are UUID strings (older rows are
+    // still numbers), so this must not be run through Number().
+    const id = action.dataset.id;
     if (action.dataset.action === 'toggle') toggleConfirm(action.dataset.type, id);
     else if (action.dataset.action === 'paid') markPaid(id);
     else if (action.dataset.action === 'receipt') viewItemReceipt(action.dataset.type, id);
@@ -1707,7 +1997,22 @@ document.getElementById('content').addEventListener('click', (e) => {
     return;
   }
   const row = e.target.closest('[data-edit-id]');
-  if (row) openEditModal(row.dataset.editType, Number(row.dataset.editId));
+  if (row) openEditModal(row.dataset.editType, row.dataset.editId);
+});
+
+// The person chip lives outside #content (the top bar), and the picker's
+// options live inside the modal, so both are handled on the document.
+document.addEventListener('click', (e) => {
+  const action = e.target.closest('[data-action]');
+  if (!action) return;
+  if (action.dataset.action === 'pick-person') {
+    openPersonPicker();
+    return;
+  }
+  if (action.dataset.action === 'choose-person') {
+    setCurrentPersonId(action.dataset.id || null);
+    closeModal();
+  }
 });
 
 // The receipt thumbnail inside the Edit popup opens the same viewer as the

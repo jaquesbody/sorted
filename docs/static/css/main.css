@@ -1283,6 +1283,115 @@ body.is-locked {
   overflow: hidden;
 }
 
+/* People: a coloured dot with a first letter. Identity, not status — the
+   palette deliberately avoids the app's semantic colours (see PERSON_COLOURS
+   in db.js), and the letter colour is picked by the dot's own luminance so
+   every swatch stays readable. */
+.person-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  user-select: none;
+}
+
+/* The dot in a filter chip, sized to sit on the text baseline */
+.filter-chip .person-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.person-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.person-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-on-tint);
+}
+
+.person-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Top bar: the wordmark left, the person right */
+.topbar-person {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+/* Desktop rail: same chip, under the wordmark. The whole header is hidden
+   below 768px, so this needs no rule of its own to stay off phones. */
+.sidebar-person {
+  margin-top: 12px;
+}
+
+.person-setting-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Picker options — one row per person, tappable end to end */
+.person-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.person-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.person-option:hover {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.person-options .person-option[aria-current="true"] {
+  border-color: var(--accent);
+}
+
+/* The people row of a filter bar sits tighter to the list than the status
+   row does, since the two read as one control with two axes. */
+.filter-bar--people {
+  margin-top: -8px;
+  margin-bottom: 20px;
+}
+
 /* Report range chips stay on one line — three short labels always fit a
    phone, so they shrink rather than wrap onto a second row. */
 .page-toolbar .filter-bar {
