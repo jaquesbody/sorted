@@ -713,7 +713,14 @@ body {
   padding: 15px 20px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  /* Top-aligned, not centred: the title, the amount and the tick all sit on
+     one line at the top, so a one-line title doesn't leave the amount floating
+     in the middle of a two-line block. The extra line of a wrapped title then
+     hangs below rather than pushing the actions out of alignment. */
+  align-items: flex-start;
+  /* A sub-line (what a bill is, or when it was paid) drops to its own
+     full-width line under everything else. */
+  flex-wrap: wrap;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -757,6 +764,50 @@ body {
   display: flex;
   gap: 8px;
   margin-left: 15px;
+  /* With the row top-aligned, the actions have to line up with the title's
+     first line rather than float in the middle of the block. */
+  align-items: center;
+}
+
+/* The foot of a Reports card: the total its own breakdown adds up to. */
+.report-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.report-total-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.report-total-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.report-total-value.tone-accent { color: var(--accent); }
+.report-total-value.tone-danger { color: var(--danger); }
+.report-total-value.tone-success { color: var(--success); }
+
+/* The line under a row: "Paid 28 Sept 2026", "In 3 days", "3 days overdue".
+   Takes the full width of the row and sits hard right, so the date a bill was
+   settled reads as its own note rather than crowding the amount. */
+.item-sub {
+  flex-basis: 100%;
+  text-align: right;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  /* The last flex line, so it has to be allowed to wrap onto its own. */
+  min-width: 0;
 }
 
 /* Month Navigator */
@@ -1181,6 +1232,19 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The lock settings' controls sit beside their label rather than pushed to the
+   far edge, so pairing a dropdown with the sentence describing it doesn't mean
+   travelling the width of the card. Applied to the whole lock block rather
+   than just "Lock after" — one row left-aligned and the next right-aligned in
+   the same block reads as a mistake rather than a choice. */
+.setting-row--left {
+  justify-content: flex-start;
+}
+
+.setting-row--left .setting-text {
+  flex: 0 1 auto;
 }
 
 .settings-stack {

@@ -834,7 +834,6 @@ async function renderDue(container) {
   const total = outstanding.reduce((sum, i) => sum + i.amount, 0);
   const overdue = outstanding.filter(i => isOverdue(i.dueDate));
   const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
-  const paidTotal = paid.reduce((sum, i) => sum + i.amount, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
@@ -852,8 +851,6 @@ async function renderDue(container) {
       ${overdue.length > 0
         ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>`
         : `<div class="stat-card-sub">${upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month'}</div>`}
-      ${paid.length > 0
-        ? `<div class="stat-card-sub">${paid.length} paid · ${currency(paidTotal)}</div>` : ''}
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
     </div>
@@ -896,10 +893,7 @@ async function renderDue(container) {
                 </div>
               </div>
             </div>
-            <div style="text-align: right;">
-              <div class="item-amount">${currency(item.amount)}</div>
-              <div class="stat-card-sub">${isPaid && item.date ? `Paid ${formatDate(item.date)}` : dueCountdown(item.dueDate)}</div>
-            </div>
+            <div class="item-amount">${currency(item.amount)}</div>
             <div class="item-actions">
               ${personDot(personById(item.personId))}
               ${receiptChip(item, isPaid ? 'spend' : 'due')}
@@ -908,6 +902,9 @@ async function renderDue(container) {
                 : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
                         aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
+            ${isPaid && item.date
+              ? `<div class="item-sub">Paid ${formatDate(item.date)}</div>`
+              : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
           </div>
         `;
       }).join('')}
@@ -1014,11 +1011,13 @@ async function renderReports(container) {
       <div class="report-card">
         <h2 class="report-title">Spending by Category</h2>
         ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
+        ${reportTotalRow('Total Spent', totalSpend, 'accent')}
       </div>
       
       <div class="report-card">
         <h2 class="report-title">Bills by Category</h2>
         ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue, 'danger')}
+        ${reportTotalRow('Total Due', totalDue, 'danger')}
       </div>
 
       <div class="report-card">
@@ -1029,25 +1028,21 @@ async function renderReports(container) {
       <div class="report-card">
         <h2 class="report-title">Savings by Goal</h2>
         ${renderSavingsBreakdown(savingsItems)}
+        ${reportTotalRow('Total Saved', totalSavings, 'success')}
       </div>
-      
-      <div class="report-card">
-        <h2 class="report-title">Summary</h2>
-        <div style="margin-top: 10px;">
-          <div class="kv-row">
-            <span class="kv-name">Total Spent</span>
-            <span class="kv-value">${currency(totalSpend)}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-name">Total Due</span>
-            <span class="kv-value">${currency(totalDue)}</span>
-          </div>
-          <div class="kv-row">
-            <span class="kv-name">Total Saved</span>
-            <span class="kv-value" style="color: var(--success)">${currency(totalSavings)}</span>
-          </div>
-        </div>
-      </div>
+    </div>
+  `;
+}
+
+// A card's own total, sitting under its breakdown. The separate Summary card
+// repeated all three in one place, which meant reading one number required
+// scrolling past two other cards to find it — and the total is the thing the
+// breakdown below it adds up to, so it belongs at the foot of that breakdown.
+function reportTotalRow(label, amount, tone) {
+  return `
+    <div class="report-total">
+      <span class="report-total-label">${escapeHTML(label)}</span>
+      <span class="report-total-value${tone ? ' tone-' + tone : ''}">${currency(amount)}</span>
     </div>
   `;
 }
@@ -1195,7 +1190,21 @@ function renderSettings(container) {
         <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
         <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
       </div>
-      
+
+      <div class="report-card">
+        <h2 class="report-title">Bill Reminders</h2>
+        ${notifySettingsHtml()}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Start Over</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 15px;">
+          Delete everything and start from empty. There's no undo and no backup
+          of its own — export first if you might want any of it.
+        </p>
+        <button class="btn btn-danger" onclick="confirmRemoveAllData(this)" style="width: 100%;">Delete all data</button>
+      </div>
+
       <div class="report-card">
         <h2 class="report-title">About</h2>
         <p style="color: var(--text-secondary);">
@@ -1207,6 +1216,114 @@ function renderSettings(container) {
       </div>
     </div>
   `;
+}
+
+// Two taps, like every other destructive control here, and the first one says
+// how much would go — a number is a far better speed bump than "are you sure".
+// A third step (type-to-confirm) felt like too much ceremony for something
+// reached from a settings page, but silently wiping someone's whole history on
+// a mis-tap is not a trade worth making.
+async function confirmRemoveAllData(btn) {
+  if (btn.dataset.confirming !== '1') {
+    const counts = await getAllData();
+    const total = Object.values(counts).reduce((a, b) => a + b.length, 0);
+    if (total === 0) {
+      showToast('Nothing to delete');
+      return;
+    }
+    btn.dataset.confirming = '1';
+    btn.textContent = `Delete ${total} items? Tap again`;
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Delete all data';
+    }, 6000);
+    return;
+  }
+
+  const result = await clearAllData();
+  // The PINs live in localStorage, not the database, and the people they
+  // belonged to are gone — leaving them would lock the app against nobody.
+  clearAllPersonPins();
+  // And the sample data comes back, so Settings isn't suddenly the only page
+  // with anything on it.
+  seedPromise = null;
+  closeModal();
+  navigate('dashboard');
+  await seedIfEmpty();
+  showToast(`${result.total} items deleted`);
+  await renderPage();
+}
+
+// Bill reminders, and the honest limits of them. There is no backend, so
+// nothing can fire at a set time in the background: the app checks when you put
+// it away and when you pick it up. Said here rather than left for the user to
+// discover, because "it didn't remind me" otherwise reads as a broken feature.
+function notifySettingsHtml() {
+  if (!notifySupported()) {
+    return '<p class="setting-hint">This browser has no notifications.</p>';
+  }
+
+  const on = isNotifyEnabled();
+  const permission = Notification.permission;
+  const leadRow = `
+    <div class="setting-row setting-row--left">
+      <div class="setting-text">
+        <div class="setting-label">Remind me</div>
+      </div>
+      <div class="setting-control">
+        <select class="form-input" id="notify-lead" style="width: auto;" onchange="setNotifyLeadDays(Number(this.value)); renderPage();">
+          ${NOTIFY_LEADS.map((l) => `<option value="${l.value}" ${l.value === getNotifyLeadDays() ? 'selected' : ''}>${l.label}</option>`).join('')}
+        </select>
+      </div>
+    </div>`;
+
+  if (permission === 'denied') {
+    return `
+      <p class="setting-hint">
+        Blocked for this site. Reminders have to be re-allowed in the browser's
+        own settings for this page before Sorted can use them.
+      </p>
+      ${leadRow}
+    `;
+  }
+
+  return `
+    <div class="setting-row">
+      <div class="setting-text">
+        <div class="setting-label">Remind me about bills</div>
+        <div class="setting-hint">${on
+          ? 'When a bill is coming due or already overdue'
+          : 'A system notification, on a phone only while Sorted is closed'}</div>
+      </div>
+      <div class="setting-control">
+        <button class="switch" role="switch" aria-checked="${on}" aria-label="Remind me about bills"
+                onclick="toggleNotifications(this)"></button>
+      </div>
+    </div>
+    ${on ? leadRow : ''}
+    ${on ? `<p class="setting-hint" style="margin-top: 12px;">
+      There's no server, so nothing can arrive at a set time on its own. Sorted
+      checks when you close it and when you open it again — install it to your
+      home screen and notifications will reach you.
+    </p>` : ''}
+  `;
+}
+
+async function toggleNotifications(switchEl) {
+  if (isNotifyEnabled()) {
+    disableNotifications();
+    renderPage();
+    return;
+  }
+  const result = await enableNotifications();
+  if (result === 'on') {
+    showToast('Bill reminders on');
+  } else if (result === 'denied') {
+    showToast('Notifications blocked for this site');
+  } else {
+    showToast('This browser has no notifications');
+  }
+  renderPage();
 }
 
 function peopleSettingsHtml() {
@@ -1224,23 +1341,10 @@ function peopleSettingsHtml() {
     </div>`).join('');
 
   return `
-    <div class="setting-row">
-      <div class="setting-text">
-        <div class="setting-label">Using the app as</div>
-        <div class="setting-hint">What new entries and bill payments get marked as</div>
-      </div>
-      <div class="setting-control">
-        <select class="form-input" id="current-person" style="width: auto;" onchange="setCurrentPersonId(this.value || null)">
-          <option value="" ${!current ? 'selected' : ''}>Anyone</option>
-          ${people.map((p) => `<option value="${p.id}" ${current === p.id ? 'selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
-        </select>
-      </div>
-    </div>
     ${rows}
     <div class="setting-row">
       <div class="setting-text">
         <div class="setting-label">Add someone</div>
-        <div class="setting-hint">A name and a colour, nothing more</div>
       </div>
       <div class="setting-control">
         <input type="text" class="form-input" id="new-person-name" placeholder="Name" maxlength="40" style="width: 130px;">
@@ -1372,7 +1476,7 @@ function passcodeSettings() {
   // in fact locking.
   const lockBlock = isLockEnabled() ? `
     <div class="setting-block">
-      <div class="setting-row">
+      <div class="setting-row setting-row--left">
         <div class="setting-text">
           <div class="setting-label">Lock after</div>
         </div>
@@ -1382,7 +1486,7 @@ function passcodeSettings() {
           </select>
         </div>
       </div>
-      <div class="setting-row">
+      <div class="setting-row setting-row--left">
         <div class="setting-text">
           <div class="setting-label">Lock now</div>
         </div>
@@ -1394,6 +1498,26 @@ function passcodeSettings() {
   ` : '';
 
   if (!isPasscodeSet()) {
+    // With people's PINs set and no app passcode, a "Require a passcode"
+    // switch that sits switched off but still locks the app is a lie the
+    // settings page tells — tapping it opened the set-a-passcode dialog, which
+    // reads as "you still need a passcode" right after they've already set PINs
+    // for everyone. So say what actually locks the app, and offer the way to
+    // turn that off instead.
+    if (anyPersonPins()) {
+      return `
+        <div class="setting-row">
+          <div class="setting-text">
+            <div class="setting-label">Locked by people's PINs</div>
+            <div class="setting-hint">The app asks for a PIN until the last one is removed</div>
+          </div>
+          <div class="setting-control">
+            <button class="btn btn-ghost" onclick="scrollToPeople()">People</button>
+          </div>
+        </div>
+        ${lockBlock}
+      `;
+    }
     return `
       <div class="setting-row">
         <div class="setting-text">
@@ -1421,6 +1545,15 @@ function passcodeSettings() {
     </div>
     ${lockBlock}
   `;
+}
+
+// Jumps to the People card, which is where PINs actually get removed. A toast
+// beats a link that leaves you hunting: turning the app passcode off does not
+// turn the lock off, and that needs saying rather than implying.
+function scrollToPeople() {
+  const card = [...document.querySelectorAll('.report-card')]
+    .find((c) => /People/.test(c.textContent));
+  if (card) card.scrollIntoView({ block: 'start' });
 }
 
 // Passcode setup is a modal rather than a field on the page: the toggle is the
@@ -1493,17 +1626,41 @@ function confirmRemovePasscode(switchEl) {
     return;
   }
   clearPasscode();
-  showToast('Passcode removed');
+  // Removing the app passcode does not unlock the app if people still have
+  // PINs, and the toast above would otherwise imply that it did.
+  showToast(anyPersonPins() ? 'Passcode removed — people’s PINs still lock it' : 'Passcode removed');
   renderPage();
 }
 
 // Modal Forms
-function buildForm(type, editId = null) {
+// The categories offered, in the order they're meant to be scanned. Bills get
+// the same list as spend: a bill is spending that hasn't happened yet, and two
+// lists meant the same word could break down differently in Reports.
+const CATEGORIES = ['Utilities', 'Motor', 'Entertainment', 'Shopping', 'General', 'Travel', 'One-Off'];
+
+// Anything an existing entry is already filed under stays offered, even once it
+// is off the list. Without this, editing an entry categorised "Food" or
+// "Mortgage" would show the select falling back to its first option, and
+// pressing Save would quietly rewrite the category — the dropdown would change
+// real data just because the list changed.
+function categoryOptionsHtml(extra) {
+  const current = extra && String(extra);
+  const list = current && !CATEGORIES.includes(current) ? [current, ...CATEGORIES] : CATEGORIES;
+  return list.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+}
+
+function buildForm(type, editId = null, existingCategory = null) {
   // Ids are UUID strings now, so they're interpolated as JSON rather than
   // dropped into the handler bare — a bare UUID would be a syntax error, and
   // Number() on one is NaN. JSON.stringify also quotes the older numeric ids
   // that predate the change.
-  const idArg = editId == null ? '' : JSON.stringify(editId);
+  //
+  // That JSON has to be HTML-escaped as well: the handler lives in a
+  // double-quoted attribute, so the JSON's own double quotes would close the
+  // attribute early and the button would carry a truncated, invalid handler.
+  // escapeHTML turns them into &quot;, which the parser turns back into "
+  // before the JS is compiled — so the value survives and the code stays valid.
+  const idArg = editId == null ? '' : escapeHTML(JSON.stringify(editId));
   const saveCall = editId == null
     ? `saveItem('${type}')`
     : `saveItem('${type}', ${idArg})`;
@@ -1547,13 +1704,7 @@ function buildForm(type, editId = null) {
         <div class="form-group">
           <label class="form-label">Category</label>
           <select class="form-input" id="form-category">
-            <option value="Utilities">Utilities</option>
-            <option value="Motor">Motor</option>
-            <option value="Entertainment">Entertainment</option>
-            <option value="Food">Food</option>
-            <option value="Health">Health</option>
-            <option value="Shopping">Shopping</option>
-            <option value="General">General</option>
+            ${categoryOptionsHtml(existingCategory)}
           </select>
         </div>
         <div class="form-group">
@@ -1587,11 +1738,7 @@ function buildForm(type, editId = null) {
         <div class="form-group">
           <label class="form-label">Category</label>
           <select class="form-input" id="form-category">
-            <option value="Mortgage">Mortgage</option>
-            <option value="Utilities">Utilities</option>
-            <option value="Motor">Motor</option>
-            <option value="Entertainment">Entertainment</option>
-            <option value="General">General</option>
+            ${categoryOptionsHtml(existingCategory)}
           </select>
         </div>
         <div class="form-group">
@@ -1658,7 +1805,7 @@ async function openEditModal(type, id) {
   currentReceipt = item.receipt || null;
   receiptRemoved = false;
   ocrStatusText = '';
-  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type, id));
+  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type, id, item.category));
   prefillForm(item);
   if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
@@ -2179,4 +2326,7 @@ async function viewItemReceipt(type, id) {
 // Initialize
 applyTheme();
 initLock();
+// Only starts anything if notifications were already switched on, so the
+// common case costs one function call and no listeners.
+initNotifications();
 renderPage();

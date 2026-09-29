@@ -121,8 +121,16 @@ async function updateItem(storeName, item) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readwrite');
     const store = tx.objectStore(storeName);
-    const request = store.put({ ...item, updatedAt: new Date().toISOString() });
-    request.onsuccess = () => resolve(request.result);
+    // The id has to be normalised here too, not just on read and delete. An
+    // edit arrives with the id as it came off a data attribute — a string —
+    // and putting a legacy row back under the string "3" when it was stored
+    // as the number 3 silently creates a *second* row instead of editing the
+    // first. The original keeps rendering unchanged, so the edit looks like it
+    // did nothing, and Delete then appears to do nothing too. Same trap as
+    // getItem/deleteItem, one layer up.
+    const record = { ...item, id: normaliseId(item.id), updatedAt: new Date().toISOString() };
+    const request = store.put(record);
+    request.onsuccess = () => resolve(record.id);
     request.onerror = () => reject(request.error);
   });
 }
@@ -203,6 +211,31 @@ async function getAllData() {
   const out = {};
   for (const name of STORES) out[name] = await getAll(name);
   return out;
+}
+
+// Wipe every store and start over: the "remove all data" action in Settings.
+// Clearing store by store rather than deleteDatabase(), because
+// deleteDatabase() blocks on this page's own open connection and the version
+// handshake would have to be redone. Records are counted first so the caller
+// can refuse an accidental wipe, and the result comes back for the toast.
+//
+// The people go too, deliberately: a "remove all data" that left everyone's
+// names behind wouldn't be one, and the PINs go with them (they're in
+// localStorage, dropped by the caller) or the app would sit locked against
+// people who no longer exist.
+async function clearAllData() {
+  const counts = {};
+  for (const name of STORES) counts[name] = (await getAll(name)).length;
+
+  const db = await openDB();
+  for (const name of STORES) {
+    const tx = db.transaction(name, 'readwrite');
+    tx.objectStore(name).clear();
+    await txDone(tx);
+  }
+
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  return { total, counts };
 }
 
 function txDone(tx) {
