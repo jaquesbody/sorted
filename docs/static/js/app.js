@@ -438,12 +438,22 @@ function billsForMonth(dueItems, date) {
   const now = new Date();
   const lookingBack = date.getFullYear() < now.getFullYear()
     || (date.getFullYear() === now.getFullYear() && date.getMonth() < now.getMonth());
+  // A recurring bill's next occurrences, so stepping forward through the
+  // months shows what they hold rather than an empty page. Kept out of
+  // `inMonth` so the Total Due card still counts only what is actually stored
+  // and actually owed — a projection is not a bill.
+  const projections = projectionsForMonth(dueItems, date, 'dueDate');
   const inMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
   const overdueElsewhere = lookingBack
     ? []
     : dueItems.filter((i) => isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
-  const items = [...inMonth, ...overdueElsewhere].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
-  return { items, inMonth, overdueElsewhere };
+  // Real and projected are handed back separately, never mixed into one list:
+  // anything that sums what a month costs has to be able to tell them apart,
+  // and a caller that can't is how a forecast ends up in a Total Due figure.
+  const byDate = (a, b) => new Date(a.dueDate) - new Date(b.dueDate);
+  const stored = [...inMonth, ...overdueElsewhere].sort(byDate);
+  const items = [...stored, ...projections].sort(byDate);
+  return { items, stored, projections, inMonth, overdueElsewhere };
 }
 
 function renderCategoryBreakdown(totals, grandTotal, tone) {
@@ -639,6 +649,11 @@ async function renderSpend(container) {
   // The totals follow the filters, so tapping a person chip changes what the
   // card is counting rather than leaving the household total above a list of
   // one person's items.
+  // A recurring subscription projects its own next occurrence forward, so
+  // stepping through the months shows what they'll hold. Projections sit
+  // outside the totals: a forecast isn't money spent, and adding it to "Monthly
+  // Total" would quietly overstate what has happened.
+  const projections = projectionsForMonth(items, viewedDate, 'date');
   const monthItems = applySpendFilter(inMonth);
   const yearItems = applySpendFilter(inYear);
   const monthTotal = monthItems.reduce((sum, i) => sum + i.amount, 0);
@@ -670,7 +685,7 @@ async function renderSpend(container) {
     </div>
     
     <div class="item-list" id="spend-list">
-      ${renderSpendList(monthItems, inMonth.length > 0, monthTotal)}
+      ${renderSpendList(monthItems, inMonth.length > 0, monthTotal, projections)}
     </div>
   `;
 }
@@ -683,13 +698,17 @@ function applySpendFilter(items) {
   return mine;
 }
 
-function renderSpendList(monthItems, monthHasAnything, monthTotal) {
+function renderSpendList(monthItems, monthHasAnything, monthTotal, projections = []) {
   // Something in the month, but nothing matching: the chips above already say
   // why, so there's no need to name the filter here as well.
   if (monthItems.length === 0 && monthHasAnything) {
     return '<div class="empty-state"><div class="empty-state-text">No items match</div></div>';
   }
-  return renderSpendItems(monthItems, monthTotal);
+  // Projections follow the real rows so a month that has both reads in date
+  // order rather than real-then-forecast.
+  const rows = [...monthItems, ...projections]
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  return renderSpendItems(rows, monthTotal);
 }
 
 function renderSpendItems(items, total) {
@@ -704,25 +723,30 @@ function renderSpendItems(items, total) {
   
   return items.map(item => {
     const pct = total > 0 ? Math.round((item.amount / total) * 100) : 0;
+    // Same as a bill: a projected occurrence has no record behind it, so it
+    // gets no actions and reads as a forecast rather than something to edit.
+    const projected = !!item.projected;
+    const editable = !projected && item.id;
     return `
-      <div class="item-row" data-edit-type="spend" data-edit-id="${item.id}">
+      <div class="item-row${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="spend" data-edit-id="${item.id}"` : ''}>
         <div class="item-row-main">
           <div class="item-info">
             <div class="item-title">${escapeHTML(item.title)}</div>
             <div class="item-meta">
               ${formatDate(item.date)} · ${escapeHTML(item.category)}
-              ${item.recurring ? '<span class="badge badge-recurring">Recurring</span>' : ''}
+              ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
+              ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
             </div>
           </div>
         </div>
         <div class="item-amount">${currency(item.amount)}</div>
         <div class="item-actions">
           ${personDot(personById(item.personId))}
-          ${receiptChip(item, 'spend')}
-          <button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
+          ${editable ? receiptChip(item, 'spend') : ''}
+          ${projected ? '' : `<button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
                   aria-pressed="${item.confirmed ? 'true' : 'false'}"
                   aria-label="${item.confirmed ? 'Unconfirm' : 'Confirm'} ${escapeHTML(item.title)}"
-                  title="${item.confirmed ? 'Confirmed — tap to undo' : 'Confirm'}">${TICK_SVG}</button>
+                  title="${item.confirmed ? 'Confirmed — tap to undo' : 'Confirm'}">${TICK_SVG}</button>`}
         </div>
       </div>
     `;
@@ -826,11 +850,17 @@ async function renderDue(container) {
   // visible — a bill is only ever stored with the date it's currently due,
   // so without stepping forward there was no way to see what the following
   // few months look like.
-  const { items: outstanding, inMonth, overdueElsewhere } = billsForMonth(all, dueViewedDate);
+  const { stored: outstanding, inMonth, overdueElsewhere, projections } = billsForMonth(all, dueViewedDate);
   const paid = paidBillsForMonth(spendItems, dueViewedDate);
-  const rows = applyDueFilter(outstanding, paid);
+  // Only the stored rows go through the filters; a forecast isn't a bill you
+  // can have confirmed or pay, and letting a status chip hide it would make a
+  // month look emptier than it is.
+  const rows = applyDueFilter(outstanding, paid)
+    .concat(projections.map((item) => ({ item, paid: false, projected: true })));
   
-  // The total is what's still owed, so a paid bill never inflates it.
+  // What's actually owed: the real stored rows only. Adding a forecast to this
+  // figure would report money that hasn't been billed yet as though it already
+  // were.
   const total = outstanding.reduce((sum, i) => sum + i.amount, 0);
   const overdue = outstanding.filter(i => isOverdue(i.dueDate));
   const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
@@ -878,17 +908,22 @@ async function renderDue(container) {
             ? '<p class="setting-hint" style="margin-bottom: 20px;">Use ◀ ▶ to see other months</p>'
             : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add First Bill</button>'}
         </div>
-      ` : rows.map(({ item, paid: isPaid }) => {
+      ` : rows.map(({ item, paid: isPaid, projected }) => {
         const days = daysUntil(item.dueDate);
-        const isOverdueItem = !isPaid && days < 0;
+        const isOverdueItem = !isPaid && !projected && days < 0;
+        // A projection has no id to pay, open or attach anything to, so it
+        // gets no buttons at all — clicking a forecast and finding you can't
+        // act on it would be worse than leaving it inert.
+        const editable = !projected && item.id;
         return `
-          <div class="item-row" data-edit-type="${isPaid ? 'spend' : 'due'}" data-edit-id="${item.id}" style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
+          <div class="item-row${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="${isPaid ? 'spend' : 'due'}" data-edit-id="${item.id}"` : ''} style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
                 <div class="item-meta">
-                  Due ${formatDate(item.dueDate)} · ${escapeHTML(item.category)}
-                  ${item.recurring ? '<span class="badge badge-recurring">Recurring</span>' : ''}
+                  ${projected ? 'Due' : 'Due'} ${formatDate(item.dueDate)} · ${escapeHTML(item.category)}
+                  ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
+                  ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
                   ${isPaid ? `<span class="badge badge-confirmed">Paid</span>` : ''}
                 </div>
               </div>
@@ -896,15 +931,19 @@ async function renderDue(container) {
             <div class="item-amount">${currency(item.amount)}</div>
             <div class="item-actions">
               ${personDot(personById(item.personId))}
-              ${receiptChip(item, isPaid ? 'spend' : 'due')}
+              ${editable ? receiptChip(item, isPaid ? 'spend' : 'due') : ''}
               ${isPaid
                 ? `<span class="confirm-btn is-done" aria-hidden="true">${TICK_SVG}</span>`
-                : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
+                : projected
+                  ? ''
+                  : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
                         aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
             ${isPaid && item.date
               ? `<div class="item-sub">Paid ${formatDate(item.date)}</div>`
-              : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
+              : projected
+                ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
+                : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
           </div>
         `;
       }).join('')}
@@ -948,8 +987,13 @@ async function renderSavings(container) {
         </div>
       ` : items.map(item => {
         const goalPct = item.target > 0 ? Math.round((item.current / item.target) * 100) : 0;
+        // Reached means current has met or beaten the target. The whole card
+        // turns green with the text flipped to black: a goal that's done
+        // should look done from across the room, and the usual green-on-green
+        // amount would be unreadable on a green card.
+        const done = item.target > 0 && item.current >= item.target;
         return `
-          <div class="item-row" data-edit-type="savings" data-edit-id="${item.id}">
+          <div class="item-row${done ? ' item-row--done' : ''}" data-edit-type="savings" data-edit-id="${item.id}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
@@ -957,14 +1001,15 @@ async function renderSavings(container) {
               </div>
             </div>
             <div style="text-align: right; min-width: 150px;">
-              <div class="item-amount" style="color: var(--success)">${currency(item.current)}</div>
+              <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
               <div class="stat-card-sub">of ${currency(item.target)}</div>
               <div class="stat-card-progress" style="margin-top: 8px;">
-                <div class="stat-card-progress-fill progress-savings" style="width: ${goalPct}%"></div>
+                <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
               </div>
             </div>
             <div class="item-actions">
               ${personDot(personById(item.personId))}
+              ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${TICK_SVG}</span>` : ''}
             </div>
           </div>
         `;
@@ -1176,11 +1221,6 @@ function renderSettings(container) {
 
       <div class="report-card">
         <h2 class="report-title">Passcode</h2>
-        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 15px;">
-          Locks the app on launch and after a period of inactivity. Your data stays
-          on this device either way — this only keeps the app closed when you're
-          not using it.
-        </p>
         ${passcodeSettings()}
       </div>
 
@@ -1244,12 +1284,13 @@ async function confirmRemoveAllData(btn) {
   // The PINs live in localStorage, not the database, and the people they
   // belonged to are gone — leaving them would lock the app against nobody.
   clearAllPersonPins();
-  // And the sample data comes back, so Settings isn't suddenly the only page
-  // with anything on it.
-  seedPromise = null;
+  // Deliberately no re-seed here. Put the sample data back and "delete all
+  // data" doesn't: every figure the user just wiped reappears, which is
+  // indistinguishable from the button not having worked. Empty is what empty
+  // means. The seed only ever runs on a first launch, from a database that has
+  // never had anything in it.
   closeModal();
   navigate('dashboard');
-  await seedIfEmpty();
   showToast(`${result.total} items deleted`);
   await renderPage();
 }
@@ -1352,7 +1393,6 @@ function peopleSettingsHtml() {
       </div>
     </div>
     ${people.length === 0 ? '<p class="setting-hint" style="margin-top: 12px;">Until you add anyone, entries are marked as Anyone\'s.</p>' : ''}
-    ${!isPasscodeSet() && anyPersonPins() ? '<p class="setting-hint" style="margin-top: 12px;">The app locks while a PIN is set.</p>' : ''}
   `;
 }
 
@@ -1498,26 +1538,6 @@ function passcodeSettings() {
   ` : '';
 
   if (!isPasscodeSet()) {
-    // With people's PINs set and no app passcode, a "Require a passcode"
-    // switch that sits switched off but still locks the app is a lie the
-    // settings page tells — tapping it opened the set-a-passcode dialog, which
-    // reads as "you still need a passcode" right after they've already set PINs
-    // for everyone. So say what actually locks the app, and offer the way to
-    // turn that off instead.
-    if (anyPersonPins()) {
-      return `
-        <div class="setting-row">
-          <div class="setting-text">
-            <div class="setting-label">Locked by people's PINs</div>
-            <div class="setting-hint">The app asks for a PIN until the last one is removed</div>
-          </div>
-          <div class="setting-control">
-            <button class="btn btn-ghost" onclick="scrollToPeople()">People</button>
-          </div>
-        </div>
-        ${lockBlock}
-      `;
-    }
     return `
       <div class="setting-row">
         <div class="setting-text">
@@ -1545,15 +1565,6 @@ function passcodeSettings() {
     </div>
     ${lockBlock}
   `;
-}
-
-// Jumps to the People card, which is where PINs actually get removed. A toast
-// beats a link that leaves you hunting: turning the app passcode off does not
-// turn the lock off, and that needs saying rather than implying.
-function scrollToPeople() {
-  const card = [...document.querySelectorAll('.report-card')]
-    .find((c) => /People/.test(c.textContent));
-  if (card) card.scrollIntoView({ block: 'start' });
 }
 
 // Passcode setup is a modal rather than a field on the page: the toggle is the
@@ -1633,20 +1644,104 @@ function confirmRemovePasscode(switchEl) {
 }
 
 // Modal Forms
+/* How often a recurring item repeats
+   --------------------------------------------------------------------------
+   Stored as `frequency` on the item: 'monthly' or 'annually', or absent for a
+   one-off. The older boolean `recurring` is still read and written, because
+   every store on a device already holds rows that predate this and nothing
+   should be rewritten to suit it — `recurring: true` with no frequency means
+   monthly, which is exactly how those items behaved before.
+
+   What the frequency buys is the future. A bill is only ever stored with the
+   date it's *currently* due, so stepping forward through the months used to
+   show nothing at all after the current one. A recurring item now projects its
+   own next occurrences into the months on screen, up to a year ahead.
+   ------------------------------------------------------------------------ */
+
+const RECURRING_HORIZON_MONTHS = 12;
+
+const FREQUENCY_CHOICES = [
+  { value: 'no', label: 'No' },
+  { value: 'monthly', label: 'Yes, monthly' },
+  { value: 'annually', label: 'Yes, annually' }
+];
+
+// Monthly is the fallback for anything that was already flagged recurring.
+function frequencyOf(item) {
+  if (item.frequency === 'monthly' || item.frequency === 'annually') return item.frequency;
+  return item.recurring === true ? 'monthly' : null;
+}
+
+function isRecurring(item) {
+  return frequencyOf(item) !== null;
+}
+
+// The ISO date this item would land on in the month on screen, or null if it
+// doesn't land there. Day-of-month is preserved and clamped to the target
+// month's length, so the 31st still means "the 31st" except where there isn't
+// one, exactly as the stored roll-forward already does.
+function occurrenceInMonth(startDate, frequency, viewDate) {
+  if (!startDate || !frequency) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
+  if (!m) return null;
+  const startYear = Number(m[1]);
+  const startMonth = Number(m[2]);
+  const startDay = Number(m[3]);
+
+  const gap = (viewDate.getFullYear() - startYear) * 12 + (viewDate.getMonth() + 1 - startMonth);
+  if (gap < 0) return null;                                   // the month is behind the item
+  if (gap === 0) return startDate;                            // the item's own month
+  if (frequency === 'annually' && gap % 12 !== 0) return null;
+  if (gap > RECURRING_HORIZON_MONTHS) return null;            // nothing projected a year out
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  return localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
+}
+
+// The projected rows for a month: one per recurring item that lands here and
+// isn't already stored here. The "isn't already stored" part is what stops a
+// bill showing twice — paying a recurring bill rolls its stored date forward
+// into the very month we're projecting, so without that check the paid bill
+// and its own projection would both appear.
+function projectionsForMonth(items, viewDate, dateKey) {
+  const rows = [];
+  for (const item of items) {
+    const frequency = frequencyOf(item);
+    if (!frequency) continue;
+    const stored = item[dateKey];
+    const occurrence = occurrenceInMonth(stored, frequency, viewDate);
+    if (!occurrence || occurrence === stored) continue;
+    rows.push({
+      ...item,
+      [dateKey]: occurrence,
+      id: null,
+      projected: true
+    });
+  }
+  return rows;
+}
+
 // The categories offered, in the order they're meant to be scanned. Bills get
 // the same list as spend: a bill is spending that hasn't happened yet, and two
 // lists meant the same word could break down differently in Reports.
 const CATEGORIES = ['Utilities', 'Motor', 'Entertainment', 'Shopping', 'General', 'Travel', 'One-Off'];
+
+// Savings goals are a separate list: they're savings for a purpose, not a
+// purchase, so "Utilities" or "Motor" never fit one. Reports breaks savings
+// down by goal rather than by category, so these are labels, not buckets.
+const SAVINGS_CATEGORIES = ['Holiday', 'Car', 'Christmas', 'One-Off', 'Other'];
 
 // Anything an existing entry is already filed under stays offered, even once it
 // is off the list. Without this, editing an entry categorised "Food" or
 // "Mortgage" would show the select falling back to its first option, and
 // pressing Save would quietly rewrite the category — the dropdown would change
 // real data just because the list changed.
-function categoryOptionsHtml(extra) {
+function categoryOptionsHtml(extra, list = CATEGORIES) {
   const current = extra && String(extra);
-  const list = current && !CATEGORIES.includes(current) ? [current, ...CATEGORIES] : CATEGORIES;
-  return list.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+  const options = current && !list.includes(current) ? [current, ...list] : list;
+  return options.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
 }
 
 function buildForm(type, editId = null, existingCategory = null) {
@@ -1708,10 +1803,9 @@ function buildForm(type, editId = null, existingCategory = null) {
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Recurring</label>
+          <label class="form-label">Repeats</label>
           <select class="form-input" id="form-recurring">
-            <option value="false">No</option>
-            <option value="true">Yes</option>
+            ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}">${f.label}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -1742,10 +1836,9 @@ function buildForm(type, editId = null, existingCategory = null) {
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Recurring</label>
+          <label class="form-label">Repeats</label>
           <select class="form-input" id="form-recurring">
-            <option value="false">No</option>
-            <option value="true">Yes</option>
+            ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}">${f.label}</option>`).join('')}
           </select>
         </div>
       </div>
@@ -1770,9 +1863,7 @@ function buildForm(type, editId = null, existingCategory = null) {
       <div class="form-group">
         <label class="form-label">Category</label>
         <select class="form-input" id="form-category">
-          <option value="Holiday">Holiday</option>
-          <option value="Car">Car</option>
-          <option value="General">General</option>
+          ${categoryOptionsHtml(existingCategory, SAVINGS_CATEGORIES)}
         </select>
       </div>
       ${personHtml}
@@ -1823,7 +1914,9 @@ function prefillForm(item) {
   setVal('form-current', item.current);
   setVal('form-target', item.target);
   const recurring = document.getElementById('form-recurring');
-  if (recurring && item.recurring !== undefined) recurring.value = String(item.recurring);
+  // A row that was saved with the old yes/no flag has no frequency, but it
+  // still repeats — monthly is what "yes" meant.
+  if (recurring) recurring.value = frequencyOf(item) || 'no';
   setVal('form-person', item.personId || '');
 }
 
@@ -2040,7 +2133,7 @@ async function saveItem(type, editId = null) {
   const amount = parseFloat(document.getElementById('form-amount')?.value || document.getElementById('form-current')?.value || 0);
   const target = parseFloat(document.getElementById('form-target')?.value || 0);
   const category = document.getElementById('form-category').value;
-  const recurring = document.getElementById('form-recurring')?.value === 'true';
+  const repeatChoice = document.getElementById('form-recurring')?.value || 'no';
   const personId = document.getElementById('form-person')?.value || null;
 
   if (!title) {
@@ -2049,7 +2142,14 @@ async function saveItem(type, editId = null) {
   }
 
   const fields = { title, category, personId };
-  if (type !== 'savings') fields.recurring = recurring;
+  if (type !== 'savings') {
+    // `recurring` is kept alongside the frequency so everything that already
+    // reads the boolean (the pay-a-bill roll-forward, the recurring filters,
+    // the Reports breakdowns) keeps working without a second pass over stored
+    // data.
+    fields.frequency = repeatChoice === 'no' ? null : repeatChoice;
+    fields.recurring = repeatChoice !== 'no';
+  }
   // Written only when the panel actually changed: an edit that leaves it alone
   // leaves the stored image alone (the merge below keeps it), and a removed
   // receipt is nulled out rather than left behind.
@@ -2083,6 +2183,7 @@ async function saveItem(type, editId = null) {
     }
   } else {
     if (type === 'spend') Object.assign(fields, { confirmed: false, paid: false });
+
     await addItem(type, fields);
   }
 

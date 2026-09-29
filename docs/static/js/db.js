@@ -146,9 +146,11 @@ async function deleteItem(storeName, id) {
   });
 }
 
-// Same day next month, clamped to the month's length (31 Jan → 28 Feb).
-// Missing/unparseable dueDates roll from today's date instead.
-function nextDueDate(dueDate) {
+// The next date this item is due, given how often it repeats. Monthly is the
+// default: every row that predates the frequency field is simply recurring,
+// and rolling a yearly bill forward a month at a time was the old behaviour for
+// all of them.
+function nextDueDate(dueDate, frequency) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueDate || '');
   let y, mo, d;
   if (m) {
@@ -157,8 +159,12 @@ function nextDueDate(dueDate) {
     const t = new Date();
     y = t.getFullYear(); mo = t.getMonth() + 1; d = t.getDate();
   }
-  const ny = mo === 12 ? y + 1 : y;
-  const nm = mo === 12 ? 1 : mo + 1;
+  // Annual keeps the month and the day and only moves the year, so a bill due
+  // 29 February rolls to 28 February rather than into March.
+  const stepMonths = frequency === 'annually' ? 12 : 1;
+  const total = (y * 12 + (mo - 1)) + stepMonths;
+  const ny = Math.floor(total / 12);
+  const nm = (total % 12) + 1;
   const lastDay = new Date(ny, nm, 0).getDate();
   return localISO(new Date(ny, nm - 1, Math.min(d, lastDay)));
 }
@@ -194,7 +200,8 @@ async function markDuePaid(dueItem, payerId) {
     tx.objectStore('due').put({
       ...rest,
       id,
-      dueDate: nextDueDate(rest.dueDate),
+      // Rolled by how often it repeats, not always a month.
+      dueDate: nextDueDate(rest.dueDate, dueItem.frequency),
       updatedAt: now
     });
   } else {
@@ -500,6 +507,13 @@ function stripSourceId(item, personMap) {
   return { id: newId(), ...rest };
 }
 
+// Samples are a first-run thing and stay that way, so the record of "this
+// device has already been seeded" has to outlive the page — a per-load memo
+// isn't enough. Deleting all the data leaves the database empty, and without
+// this the next launch would see an empty database, helpfully re-seed it, and
+// put every figure the user had just wiped straight back.
+const SEEDED_KEY = 'sorted-seeded';
+
 // Seeding runs at most once per page load, shared across callers. The
 // pre-memo version awaited getAll() inside each call, so two renders
 // interleave could both see an empty store and seed the samples twice;
@@ -518,13 +532,21 @@ function seedIfEmpty() {
 }
 
 async function doSeed() {
+  // Already seeded on this device, at any point in its life. Deliberately
+  // never cleared by clearAllData(): wiping your data must not re-arm the
+  // samples, because the whole point of that button is an empty app.
+  if (localStorage.getItem(SEEDED_KEY) === 'true') return;
+
   const [spend, due, savings] = await Promise.all([
     getAll('spend'), getAll('due'), getAll('savings')
   ]);
   // Only a genuinely untouched database gets samples — checking spend
   // alone used to re-seed everything (duplicate bills included) whenever
   // only the spend entries had been cleared.
-  if (spend.length > 0 || due.length > 0 || savings.length > 0) return;
+  if (spend.length > 0 || due.length > 0 || savings.length > 0) {
+    localStorage.setItem(SEEDED_KEY, 'true');
+    return;
+  }
 
   // Dates are generated relative to today so a fresh install always looks
   // current: spend lands inside the current month and the bills sit one
@@ -610,4 +632,6 @@ async function doSeed() {
     current: 40.00,
     target: 500.00,
   });
+
+  localStorage.setItem(SEEDED_KEY, 'true');
 }

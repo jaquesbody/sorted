@@ -769,6 +769,84 @@ body {
   align-items: center;
 }
 
+/* A recurring item's next occurrence, shown in a month it isn't actually
+   stored in. Deliberately inert and visibly not-real: it's a forecast of one
+   bill or subscription, so it has no buttons to press, no row to open, and it
+   must never be mistaken for something already owed or already spent. */
+.item-row--projected {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-strong);
+  cursor: default;
+}
+
+.item-row--projected:hover {
+  background: transparent;
+  border-color: var(--border-strong);
+}
+
+.item-row--projected .item-title,
+.item-row--projected .item-amount {
+  color: var(--text-secondary);
+}
+
+.badge-projected {
+  background: var(--border);
+  color: var(--text-secondary);
+}
+
+/* A savings goal that's been reached. The whole card goes green and the text
+   flips to black — a green amount on a green card is unreadable, and the
+   usual green is reserved for progress-in-progress.
+
+   Its own green, not --success: that token darkens for the light theme, and
+   near-black text on a dark green is worse than the white-on-green it replaced.
+   This one is fixed so the black text is legible in both themes (~11:1). */
+.item-row--done {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+
+.item-row--done:hover {
+  background: #2bcf69;
+  border-color: #2bcf69;
+}
+
+.item-row--done .item-title,
+.item-row--done .item-meta,
+.item-row--done .item-amount,
+.item-row--done .stat-card-sub {
+  color: #06180d;
+}
+
+/* The progress bar on a reached card would be invisible green-on-green, so it
+   turns into the dark text colour and reads as a full black bar. */
+.item-row--done .stat-card-progress-fill {
+  background: #06180d;
+}
+
+.item-row--done .stat-card-progress {
+  background: rgba(6, 24, 13, 0.22);
+}
+
+/* The tick added to a reached goal. Sits beside the person dot rather than
+   replacing it — a completed goal still belongs to whoever's goal it is. */
+.goal-tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  color: #06180d;
+}
+
+.goal-tick svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 3;
+}
+
 /* The foot of a Reports card: the total its own breakdown adds up to. */
 .report-total {
   display: flex;
