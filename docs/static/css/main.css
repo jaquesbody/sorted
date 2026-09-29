@@ -829,8 +829,17 @@ body {
   background: rgba(6, 24, 13, 0.22);
 }
 
-/* The tick added to a reached goal. Sits beside the person dot rather than
-   replacing it — a completed goal still belongs to whoever's goal it is. */
+/* The tick added to a reached goal. Sits above the person dot rather than
+   beside it: one fixed-width column, so the two marks line up down the page
+   instead of shifting sideways depending on whether a goal has been reached. */
+.item-actions--stack {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 30px;
+  margin-left: 10px;
+}
+
 .goal-tick {
   display: inline-flex;
   align-items: center;
@@ -842,9 +851,14 @@ body {
 }
 
 .goal-tick svg {
-  width: 22px;
-  height: 22px;
-  stroke-width: 3;
+  width: 26px;
+  height: 26px;
+  /* Stated here as well as on the element, so a mark that means "reached"
+     can't be recoloured or filled by whatever class wraps it later. */
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* The foot of a Reports card: the total its own breakdown adds up to. */

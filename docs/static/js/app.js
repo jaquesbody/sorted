@@ -605,6 +605,15 @@ function onThemeChanged() {
 // than as a tick.
 const TICK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>';
 
+// A reached savings goal. Its own path rather than TICK_SVG, and the stroke
+// attributes are on the element itself: TICK_SVG relies on .confirm-btn svg to
+// set fill:none and stroke:currentColor, so reusing it under a different class
+// filled the polyline solid and it rendered as a little black arrow rather than
+// a tick. Stating them here means the mark looks the same wherever it's used.
+const GOAL_TICK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"'
+  + ' stroke-width="3" stroke-linecap="round" stroke-linejoin="round">'
+  + '<polyline points="20 6.5 9.5 17 4 11.5"></polyline></svg>';
+
 // Paperclip shown on rows that have a stored receipt.
 const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>';
 
@@ -1000,16 +1009,16 @@ async function renderSavings(container) {
                 <div class="item-meta">${escapeHTML(item.category)} · ${goalPct}% complete</div>
               </div>
             </div>
-            <div style="text-align: right; min-width: 150px;">
+            <div style="text-align: right; min-width: 130px;">
               <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
               <div class="stat-card-sub">of ${currency(item.target)}</div>
               <div class="stat-card-progress" style="margin-top: 8px;">
                 <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
               </div>
             </div>
-            <div class="item-actions">
+            <div class="item-actions item-actions--stack">
+              ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${GOAL_TICK_SVG}</span>` : ''}
               ${personDot(personById(item.personId))}
-              ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${TICK_SVG}</span>` : ''}
             </div>
           </div>
         `;
