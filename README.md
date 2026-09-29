@@ -20,7 +20,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
 - Marking a bill paid records who paid it, which can be someone other than the bill's owner
 - Spend, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
-- Recurring bills: marking one paid copies the payment into Spend and rolls the due date a month forward
+- Recurring: say whether something repeats monthly or annually. It rolls its due date forward by that much when paid, and projects its own next occurrences into the months ahead — twelve months for monthly, the same time next year for annual — so stepping forward shows what those months hold instead of an empty page. Projected rows are dashed, marked, and have no buttons: they're a forecast, not something to pay
 - A month selector on Dashboard, Spend and Bills, all the same width; tap the month name to jump back to the current one
 - Bills filters — All, Confirmed, Pending, Recurring — over the month's bills paid as well as unpaid, so a month you've already dealt with is still worth looking at
 - Reports: spending, bills and savings goals broken down by category, over all time, this month or this year. Each card carries its own total underneath its breakdown
@@ -28,7 +28,8 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - Start Over: delete everything and start from empty, in Settings
 - A "Who Spent What" report: one bar per person, its length their share of the household total, split blue for what they spent and red for what they owe. Money nobody is marked against is its own row, so the card adds up to the summary
 - Month navigation and status filters
-- Categories: Utilities, Motor, Entertainment, Shopping, General, Travel, One-Off — the same list for bills as for spend, and anything an entry is already filed under stays offered
+- Categories: Utilities, Motor, Entertainment, Shopping, General, Travel, One-Off — the same list for bills as for spend, and anything an entry is already filed under stays offered. Savings goals have their own: Holiday, Car, Christmas, One-Off, Other
+- A savings goal you've reached turns the whole card green with the text in black and a tick beside it
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
 - Light, dark, or follow-the-system theme, set in Settings and applied before the first paint
@@ -58,7 +59,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.4.0-debug.apk`](sorted-v2-2.4.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.5.0-debug.apk`](sorted-v2-2.5.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
