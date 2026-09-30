@@ -902,6 +902,16 @@ body {
   min-width: 0;
 }
 
+/* A paid bill's line. It used to sit under a green "Paid" lozenge that said
+   the same thing, so the lozenge went and the date carries the state itself —
+   which is why this one is green and left-aligned: a settled bill reads as a
+   fact about the row, not a caption hanging off the amount. */
+.item-sub--paid {
+  text-align: left;
+  color: var(--success);
+  font-weight: 600;
+}
+
 /* Month Navigator */
 /* A fixed width, so the selector is the same shape on Dashboard, Spend and
    Bills — it used to stretch on wide screens and shrink on narrow ones.

@@ -933,7 +933,6 @@ async function renderDue(container) {
                   ${projected ? 'Due' : 'Due'} ${formatDate(item.dueDate)} · ${escapeHTML(item.category)}
                   ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
                   ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
-                  ${isPaid ? `<span class="badge badge-confirmed">Paid</span>` : ''}
                 </div>
               </div>
             </div>
@@ -949,7 +948,7 @@ async function renderDue(container) {
                         aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
             ${isPaid && item.date
-              ? `<div class="item-sub">Paid ${formatDate(item.date)}</div>`
+              ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date)}</div>`
               : projected
                 ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
                 : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
