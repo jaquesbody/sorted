@@ -364,6 +364,22 @@ body {
   border-radius: 2px;
 }
 
+/* A dashed legend key for the balance line. Drawn as a dash pattern rather
+   than a border so it matches the canvas exactly — a bordered box next to a
+   dashed line tells you the two disagree. */
+.split-swatch.is-dashed {
+  width: 12px;
+  height: 2px;
+  border-radius: 0;
+  vertical-align: middle;
+  background-image: repeating-linear-gradient(
+    to right, currentColor 0 4px, transparent 4px 7px
+  );
+  background-color: transparent !important;
+}
+
+.split-swatch.is-dashed.tone-success { color: var(--success); }
+
 /* The forecast chart's one-line verdict. Not a card and not a banner: it's a
    sentence about the chart sitting directly beneath it. */
 .forecast-note {
