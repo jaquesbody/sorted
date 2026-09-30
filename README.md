@@ -61,12 +61,20 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 Grab [`sorted-v2-2.5.1-debug.apk`](sorted-v2-2.5.1-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
+### Updating an installed copy
+
+Sideloading a new APK over the old one **keeps your data** — Android replaces the app but leaves its storage, which is where the app's IndexedDB lives. Just install the newer file over the older one; don't uninstall first, because uninstalling is what deletes the data.
+
+Exported before upgrading is the belt to that braces: the export is a JSON file you can import again if a build turns out to be broken.
+
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
     npm install
     npx cap sync android
     cd android
     ./gradlew assembleDebug
+
+The signing key is committed at `android/debug.keystore` and pinned in `build.gradle`, so any machine can build an APK that installs as an update over an existing one. Android rejects an update signed with a different key, so if you ever change that file the next install will be refused and the only fix would be an uninstall — which deletes the data. Its fingerprint is recorded in `build.gradle`; if a build ever starts failing to install, check that the APK's certificate still matches the keystore's.
 
 Note: importing JSON works on every platform. Export uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
 

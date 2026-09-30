@@ -23,6 +23,15 @@ Last updated 28th September 2026
 - Multi-layout dashboard, government announcements, granular receipt-level search — all nice-to-haves, not started
 - Per-person accounts/logins. Multi-user arrived in v2.1.0, but as *attribution* — a name and a colour on an entry, with anyone able to switch who they're being — so the no-backend, no-login stance in §5 still holds. Real accounts would reverse it.
 
+**4b. Android Release Procedure**
+- Sideloading a new APK over the old one keeps the data. Android replaces the APK and leaves `/data/data/com.jaquesbody.sorted/` — where the WebView's IndexedDB lives — untouched. Two things have to hold, and both are now pinned in the repo: `applicationId` is the literal `com.jaquesbody.sorted` in `capacitor.config.json` and `build.gradle`, and the APK is signed with `android/debug.keystore`.
+- **No auto-update, deliberately.** An updater swaps the code that reads the data before the user has seen it work, so a migration bug becomes data loss instead of "I hadn't installed that one yet". Rollback also gets worse, and it would need a delivery mechanism — Play Store, or a self-hosted updater with its own APK and a real signing key — which breaks the no-backend property in §5. The manual install is the safety property, not an inconvenience.
+- The real data risk is not the update mechanism. In order: a migration bug in a new build (ours, not Android's — so run it against a *copy* of real data first); forgetting to export; and a keystore that quietly changes.
+- The signing key is committed, and it is a *debug* key signing nothing anyone cares about. That is the point: it makes the repo buildable into an installable update from any machine.
+- The key silently rotated once, between 2.3.0 and 2.4.0 — 2.0.4–2.3.0 are signed `44:00:1E:44…` and 2.4.0 onward `F8:35:75:56…`. Anything on 2.3.0 or earlier could not have updated to 2.4.0 without an uninstall, which is the one thing that does wipe the data. Caught by comparing `apksigner` digests against `keytool`; two different `debug.keystore` files existed (`~/.android` and `~/.config/.android`) and the build was using the one the repo knew nothing about. Now pinned, and the fingerprint is written into `build.gradle` so a change is obvious.
+- After any build, check the signature still matches: `apksigner verify --print-certs sorted-v2-<ver>-debug.apk` against `keytool -list -v -keystore android/debug.keystore -storepass android`. Two different digests means the next install will be rejected.
+- Release builds are deliberately left unsigned. A release would need a real key, which is a genuine security boundary; the app is sideloaded and doesn't need one.
+
 **5. Architecture Decisions**
 - No backend, no cloud storage, no login
 - OCR: Tesseract.js, client-side
