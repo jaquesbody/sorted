@@ -392,6 +392,7 @@ body {
 
 .page-toolbar--end {
   justify-content: flex-end;
+  gap: 10px;
 }
 
 .page-toolbar > .filter-bar {
@@ -767,6 +768,144 @@ body {
   /* With the row top-aligned, the actions have to line up with the title's
      first line rather than float in the middle of the block. */
   align-items: center;
+}
+
+/* Section headings on the Savings page, which now carries two lists. */
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 24px 0 10px;
+}
+
+.section-head:first-of-type {
+  margin-top: 4px;
+}
+
+.section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+/* An account row on the Savings page. */
+/* An account row on the Savings page. Tappable like every other row, so it
+   keeps the hover rather than opting out of it. */
+
+/* Where Your Money Is: a balance, then the four numbers that made it. */
+.account-total {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-total:last-of-type {
+  border-bottom: none;
+}
+
+.account-total-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.account-total-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.account-total-amount {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* An overdrawn account. The one place red means "wrong" rather than "bills". */
+.account-total-amount.is-negative {
+  color: var(--danger);
+}
+
+.account-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.account-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.account-seg-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.account-seg-swatch.tone-accent { background: var(--accent); }
+.account-seg-swatch.tone-danger { background: var(--danger); }
+.account-seg-swatch.tone-success { background: var(--success); }
+.account-seg-swatch.tone-muted { background: var(--text-secondary); }
+
+.split-swatch.tone-muted { background: var(--text-secondary); }
+
+/* Cashflow: two bars a month, in and out. Fixed-height columns so a month
+   with almost nothing still reads as a bar rather than a speck. */
+.flow-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 130px;
+  padding-top: 8px;
+}
+
+.flow-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.flow-pair {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  height: 100px;
+}
+
+.flow-bar {
+  width: 42%;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  /* A month with a £2 movement still shows something. */
+  min-width: 4px;
+}
+
+.flow-bar--in { background: var(--text-secondary); }
+.flow-bar--out { background: var(--danger); }
+
+/* A month with no movement still occupies its slot, but a faint stub rather
+   than a coloured bar — a 2px red mark reads as a small amount, and a small
+   amount is a claim. */
+.flow-bar.is-empty {
+  background: var(--border);
+}
+
+.flow-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
 }
 
 /* A recurring item's next occurrence, shown in a month it isn't actually

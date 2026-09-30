@@ -32,6 +32,131 @@ let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
 
 const CURRENT_PERSON_KEY = 'sorted-current-person';
 
+/* Accounts
+   --------------------------------------------------------------------------
+   A pool of money: a bank account, or the notes in your wallet. Cash is not a
+   separate concept bolted onto this — it's an account whose type is 'cash',
+   so "paid cash" is an allocation like any other and there's one thing to learn
+   rather than two.
+
+   An account's balance is never stored. What a person types is the opening
+   balance plus an adjustment (transfers, interest, fees — anything the app
+   can't infer), and the balance shown is derived from those plus the activity
+   that follows. Storing the balance instead would mean every spend entry
+   silently overwrote a manual correction, which is the one thing an editable
+   number has to not do.
+   -------------------------------------------------------------------------- */
+
+// The Cash account has to exist for every install, including the ones that
+// were seeded long before accounts existed — so this runs on boot rather than
+// as part of the sample data, which only ever runs once on a fresh database.
+async function ensureDefaults() {
+  const accounts = await getAll('accounts');
+  if (!accounts.some((a) => a.type === CASH_TYPE)) {
+    await addItem('accounts', { name: 'Cash', type: CASH_TYPE, opening: 0, adjustment: 0, personId: null });
+  }
+}
+
+let accountsCache = new Map();
+
+async function loadAccounts() {
+  const accounts = await getAll('accounts');
+  accounts.sort((a, b) => {
+    // Cash first among the cash accounts, then bank ones, each group by name.
+    const aCash = a.type === CASH_TYPE ? 0 : 1;
+    const bCash = b.type === CASH_TYPE ? 0 : 1;
+    return aCash - bCash || String(a.name).localeCompare(String(b.name));
+  });
+  accountsCache = new Map(accounts.map((a) => [a.id, a]));
+  return accountsCache;
+}
+
+function accountById(id) {
+  return id ? accountsCache.get(id) || null : null;
+}
+
+function accountName(id) {
+  const a = accountById(id);
+  return a ? a.name : 'Unassigned';
+}
+
+// What an account holds, derived rather than stored. Money out is spend (which
+// already includes paid bills, since paying one writes a spend record) and
+// anything put into a savings goal, because that money left the account to sit
+// somewhere else. Money in is transfers arriving and the manual adjustment.
+async function accountBalances() {
+  const [accounts, spend, savings, transfers] = await Promise.all([
+    getAll('accounts'), getAll('spend'), getAll('savings'), getAll('transfers')
+  ]);
+
+  // Read straight from the store rather than the cache, so this is the order
+  // the file happens to be in — which is neither stable nor the one the list
+  // shows. Sorted here to match: cash first, then bank accounts by name.
+  accounts.sort((a, b) => {
+    const aCash = a.type === CASH_TYPE ? 0 : 1;
+    const bCash = b.type === CASH_TYPE ? 0 : 1;
+    return aCash - bCash || String(a.name).localeCompare(String(b.name));
+  });
+
+  const out = new Map();
+  for (const a of accounts) {
+    out.set(a.id, { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, transferIn: 0, transferOut: 0, balance: 0 });
+  }
+
+  const get = (id) => (id ? out.get(id) || null : null);
+
+  for (const item of spend) {
+    const row = get(item.accountId);
+    if (!row) continue;
+    // A paid bill's payment is a spend record, so it's already counted here.
+    // Splitting it out is for display only — it never leaves the account twice.
+    if (item.paid) row.bills += item.amount;
+    else row.spend += item.amount;
+  }
+  for (const goal of savings) {
+    const row = get(goal.accountId);
+    if (row) row.savings += goal.current || 0;
+  }
+  for (const t of transfers) {
+    const from = get(t.fromId);
+    const to = get(t.toId);
+    if (from) from.transferOut += t.amount;
+    if (to) to.transferIn += t.amount;
+  }
+
+  for (const row of out.values()) {
+    row.balance = row.opening + row.adjustment
+      + row.transferIn - row.transferOut
+      - row.spend - row.bills - row.savings;
+  }
+  return [...out.values()];
+}
+
+// Returns the new account's id, or null when it couldn't be added. The id
+// rather than a bare true, because a caller that just added an account almost
+// always wants to do something with it next — and a boolean that gets passed
+// to deleteItem() as an id fails at the point of use, not here.
+async function addAccount(name, type, opening) {
+  const clean = String(name || '').trim().slice(0, 40);
+  if (!clean) return null;
+  const accounts = await getAll('accounts');
+  if (accounts.some((a) => a.type === type && String(a.name).toLowerCase() === clean.toLowerCase())) return null;
+  return addItem('accounts', {
+    name: clean,
+    type: type === CASH_TYPE ? CASH_TYPE : 'bank',
+    opening: Number.isFinite(Number(opening)) ? Number(opening) : 0,
+    adjustment: 0,
+    personId: null
+  });
+}
+
+// Removing an account must not delete the money it was holding, and it must
+// not silently unallocate it either: the entries keep pointing at a row that no
+// longer exists, and the app says "Unassigned" until someone re-picks one.
+async function removeAccount(id) {
+  await deleteItem('accounts', id);
+}
+
 function getCurrentPersonId() {
   const id = localStorage.getItem(CURRENT_PERSON_KEY);
   return id || null;
@@ -299,6 +424,8 @@ async function renderPage() {
   // Every page needs the people list: to resolve a row's dot, to offer the
   // filter, or to stamp a form. One read, shared by the render below.
   await loadPeople();
+  // Same for accounts — a row's allocation and every form's dropdown need them.
+  await loadAccounts();
   renderPersonChip();
 
   switch(currentPage) {
@@ -968,11 +1095,17 @@ async function renderSavings(container) {
   const totalCurrent = items.reduce((sum, i) => sum + i.current, 0);
   const totalTarget = items.reduce((sum, i) => sum + i.target, 0);
   const pct = totalTarget > 0 ? Math.round((totalCurrent / totalTarget) * 100) : 0;
+  // Accounts live here because this is the page about where your money sits,
+  // not because a current account is a savings goal — hence a separate section
+  // rather than mixed into the goals list.
+  const balances = await accountBalances();
+  const totalBalance = balances.reduce((n, b) => n + b.balance, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-toolbar page-toolbar--end">
       <button class="btn btn-primary" onclick="openAddModal('savings')">+ Add Goal</button>
+      <button class="btn btn-ghost" onclick="openAccountSetup()">+ Add Account</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px;">
@@ -987,6 +1120,21 @@ async function renderSavings(container) {
       </div>
     </div>
     
+    <div class="section-head">
+      <span class="section-title">Accounts</span>
+      <span class="stat-card-sub">${currency(totalBalance)} across ${balances.length}</span>
+    </div>
+    <div class="item-list">
+      ${balances.map(renderAccountRow).join('')}
+    </div>
+
+    <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
+      <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
+    </div>
+
+    <div class="section-head">
+      <span class="section-title">Goals</span>
+    </div>
     <div class="item-list">
       ${items.length === 0 ? `
         <div class="empty-state">
@@ -1026,14 +1174,205 @@ async function renderSavings(container) {
   `;
 }
 
+// An account row. No progress bar — a balance isn't progress towards anything,
+// and a bar drawn across a number that goes up and down would imply a target
+// that doesn't exist. What it does show is the three things that moved it, so
+// the number can be argued with.
+function renderAccountRow(row) {
+  const account = accountById(row.id);
+  const over = row.balance < 0;
+  const parts = [
+    ['Spend', row.spend],
+    ['Bills', row.bills],
+    ['Goals', row.savings]
+  ].filter(([, v]) => v > 0);
+
+  return `
+    <div class="item-row item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
+      <div class="item-row-main">
+        <div class="item-info">
+          <div class="item-title">${escapeHTML(row.name)}</div>
+          <div class="item-meta">
+            ${row.type === CASH_TYPE ? 'Cash' : 'Bank'}
+            ${account ? personDot(personById(account.personId), 14, true) : ''}
+            ${parts.length
+              ? ` · ${parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · ')}`
+              : ''}
+          </div>
+        </div>
+      </div>
+      <div style="text-align: right; min-width: 120px;">
+        <div class="item-amount" style="color: ${over ? 'var(--danger)' : 'var(--text-primary)'};">
+          ${currency(row.balance)}
+        </div>
+        ${row.transferIn || row.transferOut || row.adjustment
+          ? `<div class="stat-card-sub">${transferSummary(row)}</div>`
+          : ''}
+      </div>
+    </div>
+  `;
+}
+
+// What else moved this balance, in one line. Only the parts that happened.
+function transferSummary(row) {
+  const bits = [];
+  if (row.transferIn) bits.push(`${currency(row.transferIn)} in`);
+  if (row.transferOut) bits.push(`${currency(row.transferOut)} out`);
+  if (row.adjustment) bits.push(`${currency(row.adjustment)} adjusted`);
+  return bits.join(' · ');
+}
+
+// Adding or editing an account. The opening balance is what it holds today, not
+// what it held when the app started tracking: transactions that predate the
+// account are not allocated to it, so an opening figure from months ago would
+// double-count everything since.
+function openAccountSetup(id) {
+  const account = id ? accountById(id) : null;
+  const isCash = account ? account.type === CASH_TYPE : false;
+
+  openModal(account ? `Edit ${escapeHTML(account.name)}` : 'Add an account', `
+    <div class="form-group">
+      <label class="form-label" for="account-name">Name</label>
+      <input type="text" class="form-input" id="account-name" maxlength="40"
+             placeholder="${isCash ? 'Cash' : 'e.g. Current account'}" value="${escapeHTML(account ? account.name : '')}">
+    </div>
+    ${account ? '' : `
+    <div class="form-group">
+      <label class="form-label" for="account-type">Type</label>
+      <select class="form-input" id="account-type">
+        <option value="bank">Bank account</option>
+        <option value="cash"${isCash ? ' selected' : ''}>Cash</option>
+      </select>
+    </div>`}
+    <div class="form-group">
+      <label class="form-label" for="account-opening">Balance now</label>
+      <input type="number" class="form-input" id="account-opening" step="0.01"
+             value="${account ? account.opening : ''}" placeholder="0.00">
+    </div>
+    ${account ? `
+    <div class="form-group">
+      <label class="form-label" for="account-adjustment">Adjustments</label>
+      <input type="number" class="form-input" id="account-adjustment" step="0.01"
+             value="${account.adjustment}" placeholder="0.00">
+    </div>` : ''}
+    ${account ? `
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveAccount('${account.id}')">Save</button>
+    <button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveAccount('${account.id}', this, true)">Remove account</button>`
+    : '<button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveAccount()">Add account</button>'}
+  `);
+}
+
+async function saveAccount(id) {
+  const name = document.getElementById('account-name').value;
+  const opening = document.getElementById('account-opening').value;
+  if (!String(name || '').trim()) return showFormError('Please enter a name', 'account-name');
+
+  if (id) {
+    const account = accountById(id);
+    const adjustment = document.getElementById('account-adjustment')?.value;
+    await updateItem('accounts', {
+      ...account,
+      name: String(name).trim().slice(0, 40),
+      opening: Number.parseFloat(opening) || 0,
+      adjustment: Number.parseFloat(adjustment) || 0
+    });
+    showToast('Account updated');
+  } else {
+    const type = document.getElementById('account-type')?.value === CASH_TYPE ? CASH_TYPE : 'bank';
+    const added = await addAccount(name, type, opening);
+    if (!added) return showFormError('An account with that name already exists', 'account-name');
+    showToast('Account added');
+  }
+  closeModal();
+  await renderPage();
+}
+
+// Two-step, like every other destructive control here. Reached from the account
+// editor, so the modal is open and has to close on the way out.
+async function confirmRemoveAccount(id, btn, fromModal) {
+  const account = accountById(id);
+  if (!account) return;
+  if (btn.dataset.confirming !== '1') {
+    const balances = await accountBalances();
+    const row = balances.find((b) => b.id === id);
+    const spent = (row.spend || 0) + (row.bills || 0) + (row.savings || 0);
+    btn.dataset.confirming = '1';
+    // Say what happens to the money, not just that the row goes. Entries keep
+    // their history and show "Unassigned" until someone re-picks an account.
+    btn.textContent = spent > 0
+      ? `Unassign ${currency(spent)}? Tap again`
+      : 'Tap again to remove';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Remove';
+    }, 5000);
+    return;
+  }
+  await removeAccount(id);
+  if (fromModal) closeModal();
+  showToast(`${account.name} removed`);
+  await renderPage();
+}
+
+function openTransferModal() {
+  const accounts = [...accountsCache.values()];
+  if (accounts.length < 2) {
+    showToast('Add another account first');
+    return;
+  }
+  const options = (exclude) => accounts
+    .filter((a) => a.id !== exclude)
+    .map((a) => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('');
+
+  openModal('Move money', `
+    <div class="form-group">
+      <label class="form-label" for="transfer-amount">Amount</label>
+      <input type="number" class="form-input" id="transfer-amount" step="0.01" min="0" placeholder="0.00">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label" for="transfer-from">From</label>
+        <select class="form-input" id="transfer-from">${options()}</select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="transfer-to">To</label>
+        <select class="form-input" id="transfer-to">${options(accounts[0].id)}</select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="transfer-date">Date</label>
+      <input type="date" class="form-input" id="transfer-date" value="${localISO()}">
+    </div>
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveTransfer()">Move</button>
+  `);
+}
+
+async function saveTransfer() {
+  const amount = Number.parseFloat(document.getElementById('transfer-amount').value);
+  const fromId = document.getElementById('transfer-from').value;
+  const toId = document.getElementById('transfer-to').value;
+  const date = document.getElementById('transfer-date').value;
+
+  if (!(amount > 0)) return showFormError('Please enter an amount greater than 0', 'transfer-amount');
+  if (fromId === toId) return showFormError('Pick two different accounts', 'transfer-to');
+  if (!date) return showFormError('Please enter a date', 'transfer-date');
+
+  await addItem('transfers', { amount, fromId, toId, date, note: '' });
+  closeModal();
+  showToast(`${currency(amount)} moved`);
+  await renderPage();
+}
+
 // Reports Page
 async function renderReports(container) {
   const token = renderToken;
-  const [spendItems, dueItems, savingsItems] = await Promise.all([
+  const [spendItems, dueItems, savingsItems, transferItems] = await Promise.all([
     getAll('spend'),
     getAll('due'),
-    getAll('savings')
+    getAll('savings'),
+    getAll('transfers')
   ]);
+  const balances = await accountBalances();
 
   // Range chips scope spending and bills; savings goals have no dates,
   // so their total stays lifetime.
@@ -1042,6 +1381,7 @@ async function renderReports(container) {
     : isThisYear(dateStr);
   const rangedSpend = spendItems.filter(i => inRange(i.date));
   const rangedDue = dueItems.filter(i => inRange(i.dueDate));
+  const rangedTransfers = transferItems.filter(t => inRange(t.date));
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -1076,6 +1416,16 @@ async function renderReports(container) {
       <div class="report-card">
         <h2 class="report-title">Who Spent What</h2>
         ${renderPersonBreakdown(rangedSpend, rangedDue)}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Where Your Money Is</h2>
+        ${renderBalanceBreakdown(balances)}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Cashflow</h2>
+        ${renderCashflowChart(rangedSpend, rangedTransfers, savingsItems, reportRange)}
       </div>
 
       <div class="report-card">
@@ -1145,6 +1495,111 @@ function renderReportBreakdown(totals, grandTotal, tone) {
       </div>
     `;
   }).join('');
+}
+
+// Each account's balance, with the three things that moved it. A balance on its
+// own can't be argued with — a number that doesn't show its working is a
+// number you have to trust.
+function renderBalanceBreakdown(balances) {
+  if (!balances.length) {
+    return '<div style="color: var(--text-secondary); padding: 20px 0;">No accounts yet</div>';
+  }
+  const total = balances.reduce((n, b) => n + b.balance, 0);
+  return `
+    ${balances.map((b) => {
+      // Only the things that actually moved. A row reading "Bills £0.00,
+      // Goals £0.00, In £0.00" says nothing — four zeros beside the number
+      // that's already there is just noise competing with it.
+      const parts = [
+        ['Spend', b.spend, 'accent'],
+        ['Bills', b.bills, 'danger'],
+        ['Goals', b.savings, 'success'],
+        ['In', b.transferIn, 'muted']
+      ].filter(([, v]) => v > 0);
+      return `
+        <div class="account-total">
+          <div class="account-total-top">
+            <span class="account-total-name">${escapeHTML(b.name)}</span>
+            <span class="account-total-amount${b.balance < 0 ? ' is-negative' : ''}">${currency(b.balance)}</span>
+          </div>
+          <div class="account-split">
+            ${parts.length
+              ? parts.map(([label, value, tone]) => balanceSegment(label, value, tone)).join('')
+              : '<span class="account-seg">Nothing recorded yet</span>'}
+          </div>
+        </div>
+      `;
+    }).join('')}
+    ${reportTotalRow('Total', total, null)}
+  `;
+}
+
+function balanceSegment(label, value, tone) {
+  return `<span class="account-seg">
+    <i class="account-seg-swatch tone-${tone}"></i>${label} ${currency(value)}
+  </span>`;
+}
+
+// Cashflow: money in against money out, month by month. What counts as "in" is
+// transfers between accounts, because the app doesn't track income yet — so
+// this shows money moving around inside the accounts against money leaving
+// them, and the note says so rather than letting someone read it as a salary.
+function renderCashflowChart(spend, transfers, savings, range) {
+  const months = [];
+  if (range === 'month') {
+    const now = new Date();
+    months.push({ y: now.getFullYear(), m: now.getMonth() + 1, label: new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString('en-GB', { month: 'short' }) });
+  } else {
+    const now = new Date();
+    const count = range === 'year' ? 12 : 6;
+    for (let i = count - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({ y: d.getFullYear(), m: d.getMonth() + 1, label: d.toLocaleDateString('en-GB', { month: 'short' }) });
+    }
+  }
+  const inMonth = (iso, y, m) => {
+    const mm = /^(\d{4})-(\d{2})/.exec(iso || '');
+    return !!mm && Number(mm[1]) === y && Number(mm[2]) === m;
+  };
+
+  const rows = months.map((mo) => {
+    // A transfer between two of your own accounts is money arriving somewhere,
+    // not new money: counting the outgoing side too would show the same £500
+    // twice, once in and once out, in the same month.
+    const out = spend
+      .filter((i) => inMonth(i.date, mo.y, mo.m))
+      .reduce((n, i) => n + i.amount, 0);
+    const movedIn = transfers
+      .filter((t) => inMonth(t.date, mo.y, mo.m))
+      .reduce((n, t) => n + t.amount, 0);
+    return { ...mo, in: movedIn, out };
+  });
+
+  const max = Math.max(1, ...rows.map((r) => Math.max(r.in, r.out)));
+  const hasAny = rows.some((r) => r.in > 0 || r.out > 0);
+
+  return `
+    <div class="split-legend">
+      <span class="split-key"><i class="split-swatch tone-muted"></i>Moved in</span>
+      <span class="split-key"><i class="split-swatch tone-danger"></i>Spent and saved</span>
+    </div>
+    ${hasAny ? `
+      <div class="flow-bars">
+        ${rows.map((r) => `
+          <div class="flow-col">
+            <div class="flow-pair">
+              <div class="flow-bar flow-bar--in${r.in ? '' : ' is-empty'}" style="height: ${(r.in / max) * 100}%" title="${escapeHTML(r.label)} in ${currency(r.in)}"></div>
+              <div class="flow-bar flow-bar--out${r.out ? '' : ' is-empty'}" style="height: ${(r.out / max) * 100}%" title="${escapeHTML(r.label)} out ${currency(r.out)}"></div>
+            </div>
+            <span class="flow-label">${escapeHTML(r.label)}</span>
+          </div>
+        `).join('')}
+      </div>
+    ` : '<div style="color: var(--text-secondary); padding: 20px 0;">Nothing in this range</div>'}
+    <p class="setting-hint" style="margin-top: 14px;">
+      Money in is transfers between accounts. Salary isn't tracked yet.
+    </p>
+  `;
 }
 
 // Who spent what: one bar per person, split between what they spent and what
@@ -1784,6 +2239,17 @@ function buildForm(type, editId = null, existingCategory = null) {
           ${peopleOptions.map((p) => `<option value="${p.id}">${escapeHTML(p.name)}</option>`).join('')}
         </select>
       </div>`;
+  // Where the money came out of. Kept apart from "Whose" on purpose: whose it
+  // was and where it came from are different questions, and a shared joint
+  // account can't be expressed if one field has to answer both.
+  const accountHtml = `
+      <div class="form-group">
+        <label class="form-label" for="form-account">${type === 'savings' ? 'From account' : 'From account'}</label>
+        <select class="form-input" id="form-account">
+          <option value="">Not from an account</option>
+          ${[...accountsCache.values()].map((a) => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('')}
+        </select>
+      </div>`;
   const deleteBtn = editId == null ? '' : `
       <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${idArg}, this)">Delete</button>`;
   const forms = {
@@ -1818,6 +2284,7 @@ function buildForm(type, editId = null, existingCategory = null) {
         </div>
       </div>
       ${personHtml}
+      ${accountHtml}
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     due: `
@@ -1851,6 +2318,7 @@ function buildForm(type, editId = null, existingCategory = null) {
         </div>
       </div>
       ${personHtml}
+      ${accountHtml}
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     savings: `
@@ -1875,6 +2343,7 @@ function buildForm(type, editId = null, existingCategory = null) {
         </select>
       </div>
       ${personHtml}
+      ${accountHtml}
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `
   };
@@ -1926,6 +2395,7 @@ function prefillForm(item) {
   // still repeats — monthly is what "yes" meant.
   if (recurring) recurring.value = frequencyOf(item) || 'no';
   setVal('form-person', item.personId || '');
+  setVal('form-account', item.accountId || '');
 }
 
 /* -----------------------------------------------------------------------------
@@ -2143,13 +2613,14 @@ async function saveItem(type, editId = null) {
   const category = document.getElementById('form-category').value;
   const repeatChoice = document.getElementById('form-recurring')?.value || 'no';
   const personId = document.getElementById('form-person')?.value || null;
+  const accountId = document.getElementById('form-account')?.value || null;
 
   if (!title) {
     showFormError('Please enter a title', 'form-title');
     return;
   }
 
-  const fields = { title, category, personId };
+  const fields = { title, category, personId, accountId };
   if (type !== 'savings') {
     // `recurring` is kept alongside the frequency so everything that already
     // reads the boolean (the pay-a-bill roll-forward, the recurring filters,
@@ -2435,6 +2906,9 @@ async function viewItemReceipt(type, id) {
 // Initialize
 applyTheme();
 initLock();
+// Cash has to exist before anything renders, including on an install that was
+// seeded before accounts were a thing.
+ensureDefaults();
 // Only starts anything if notifications were already switched on, so the
 // common case costs one function call and no listeners.
 initNotifications();

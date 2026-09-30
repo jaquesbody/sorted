@@ -1,11 +1,18 @@
 // Sorted v2 - IndexedDB Database Layer
 
 const DB_NAME = 'sorted-v2-db';
-// v2 adds the `people` store. Nothing else changed: new rows get their own
-// generated id, so the existing stores keep the key generator they were
-// created with and no record has to be rewritten.
-const DB_VERSION = 2;
-const STORES = ['spend', 'due', 'savings', 'recurring', 'people'];
+// v2 added `people`; v3 adds `accounts` and `transfers`. Neither bump changed
+// an existing store: new rows get their own generated id, so the old stores
+// keep the key generator they were created with and no record is rewritten.
+// Adding a store is the cheapest migration IndexedDB offers — creating one
+// touches nothing else.
+const DB_VERSION = 3;
+const STORES = ['spend', 'due', 'savings', 'recurring', 'people', 'accounts', 'transfers'];
+
+// Cash isn't a payment method, it's an account with notes in it. Same concept
+// as a bank account, so it goes through the same code rather than being a
+// special case threaded through every form and report.
+const CASH_TYPE = 'cash';
 
 // A globally unique id for new rows. The stores were created with
 // autoIncrement, so old rows keep their numbers — but two devices would
@@ -42,10 +49,12 @@ function openDB() {
       const db = event.target.result;
       STORES.forEach(name => {
         if (!db.objectStoreNames.contains(name)) {
-          // People always get an explicit id (a person's row is created with
-          // one already), so there's no reason to give this store a key
-          // generator. Nothing else changes: existing stores are left alone.
-          const store = db.createObjectStore(name, name === 'people'
+          // People and accounts always get an explicit id (their rows are
+          // created with one already), so there's no reason to give those
+          // stores a key generator. Transfers can arrive by import with an id
+          // already attached, so it gets one too. Nothing else changes:
+          // existing stores are left alone.
+          const store = db.createObjectStore(name, ['people', 'accounts', 'transfers'].includes(name)
             ? { keyPath: 'id' }
             : { keyPath: 'id', autoIncrement: true });
           store.createIndex('category', 'category', { unique: false });
@@ -301,10 +310,51 @@ function sanitizeItem(storeName, item) {
     return out;
   }
 
+  if (storeName === 'accounts') {
+    const name = str(item.name).slice(0, 40);
+    if (!name) return null;
+    out.name = name;
+    // Anything that isn't 'cash' is a bank account. An unknown type would
+    // otherwise produce an account that behaves like neither.
+    out.type = str(item.type) === CASH_TYPE ? CASH_TYPE : 'bank';
+    // Opening and adjustment are the two things a person types; the balance
+    // shown is derived from them plus activity, so neither is ever stored as
+    // a result. Coerced here so a hand-edited file can't make a balance NaN.
+    const money = (v) => { const n = num(v); return n === null ? 0 : n; };
+    out.opening = money(item.opening);
+    out.adjustment = money(item.adjustment);
+    if ('personId' in item) out.personId = item.personId || null;
+    if (typeof item.archived === 'boolean') out.archived = item.archived;
+    return out;
+  }
+
+  if (storeName === 'transfers') {
+    const amount = num(item.amount);
+    const fromId = str(item.fromId);
+    const toId = str(item.toId);
+    // A transfer that isn't money moving between two places isn't a transfer.
+    if (!amount || amount <= 0) return null;
+    if (!fromId || !toId || fromId === toId) return null;
+    out.amount = amount;
+    out.fromId = fromId;
+    out.toId = toId;
+    // A transfer with no date lands today rather than being dropped: it still
+    // moves the balances, and a balance that ignores an untdated movement is
+    // worse than one dated approximately.
+    out.date = isoDate(item.date) || localISO();
+    if (item.note !== undefined) out.note = str(item.note).slice(0, 100);
+    return out;
+  }
+
   // Who this entry belongs to. The value is kept as it came: on import,
   // stripSourceId() translates the file's id into one of this device's, and
   // anything it can't match ends up null rather than dangling.
   out.personId = item.personId || null;
+  // Which account the money came out of, for the same reason. Kept separate
+  // from personId: whose it was, and where it came from, are different
+  // questions and conflating them would make a shared joint account
+  // impossible to express.
+  out.accountId = item.accountId || null;
 
   out.title = str(item.title).slice(0, 100);
   if (!out.title) return null;
@@ -415,61 +465,47 @@ async function importDataToDB(data, mode = 'merge') {
   let imported = 0;
   let skipped = 0;
 
-  const personMap = {};
-  // Only merge needs to know who this device already holds; replace wipes them.
-  const sourceByName = mode === 'merge'
-    ? new Map((await getAll('people')).map((p) => [p.name.toLowerCase(), p.id]))
-    : new Map();
+  // People and accounts are both matched by name, and both have to be written
+  // before anything that references them. Doing that for two stores with one
+  // helper is what keeps them from drifting apart — accounts started life as a
+  // copy of the people code and would have needed the same id-map plumbing in
+  // a third place.
+  const idMaps = {};
+  const NAMED = {
+    people: (r) => r.name.toLowerCase(),
+    // Type is part of the key so two bank accounts that happen to share a name
+    // stay two accounts, while "Cash" on two devices is still one Cash.
+    accounts: (r) => `${r.type || 'bank'}|${r.name.toLowerCase()}`
+  };
+
+  for (const storeName of ['people', 'accounts']) {
+    idMaps[storeName] = await writeNamedStore(storeName, NAMED[storeName], usable[storeName], mode, fileStores.includes(storeName));
+    imported += idMaps[storeName].imported;
+    skipped += idMaps[storeName].skipped;
+  }
+  // The .idMap, not the wrapper: the wrapper is the write's bookkeeping, the
+  // map is the translation from the file's ids to ours.
+  const personMap = idMaps.people.idMap;
+  const accountMap = idMaps.accounts.idMap;
+
+  const remaining = STORES.filter((name) => name !== 'people' && name !== 'accounts');
 
   if (mode === 'replace') {
-    // Everything is the file's, including the people.
-    const peopleTx = db.transaction('people', 'readwrite');
-    const peopleStore = peopleTx.objectStore('people');
-    peopleStore.clear();
-    (usable.people || []).forEach((person) => {
-      const record = stripSourceId(person);
-      peopleStore.add(record);
-      personMap[person._sourceId] = record.id;
-      imported++;
-    });
-    await txDone(peopleTx);
-
-    for (const storeName of STORES) {
-      if (storeName === 'people') continue;
+    // Everything is the file's. The named stores are already written above.
+    for (const storeName of remaining) {
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
       store.clear();
       (usable[storeName] || []).forEach((item) => {
-        store.add(stripSourceId(item, personMap));
+        const record = stripSourceId(item, personMap, accountMap);
+        if (storeName === 'transfers' && (!record.fromId || !record.toId)) { skipped++; return; }
+        store.add(record);
         imported++;
       });
       await txDone(tx);
     }
   } else {
-    // People first, so their local ids exist before the entries use them.
-    const known = new Set(sourceByName.keys());
-    const tx = db.transaction('people', 'readwrite');
-    const store = tx.objectStore('people');
-    (usable.people || []).forEach((person) => {
-      const key = person.name.toLowerCase();
-      if (known.has(key)) {
-        // Already have this person (in this file twice, or already stored):
-        // point at the one we hold rather than making a second.
-        personMap[person._sourceId] = sourceByName.get(key);
-        skipped++;
-        return;
-      }
-      known.add(key);
-      const record = stripSourceId(person);
-      store.add(record);
-      personMap[person._sourceId] = record.id;
-      sourceByName.set(key, record.id);
-      imported++;
-    });
-    await txDone(tx);
-
-    for (const storeName of fileStores) {
-      if (storeName === 'people') continue;
+    for (const storeName of fileStores.filter((n) => remaining.includes(n))) {
       // Read existing keys on their own transaction first — mixing an await
       // into the readwrite transaction below would let it auto-commit early.
       const seen = new Set((await getAll(storeName)).map(importKeyOf));
@@ -478,13 +514,27 @@ async function importDataToDB(data, mode = 'merge') {
       const store = tx.objectStore(storeName);
 
       usable[storeName].forEach(item => {
+        // A transfer whose endpoints didn't resolve to accounts we hold would
+        // move money between places that don't exist. Drop it: a missing
+        // transfer is visible and fixable, a balance that silently drifts
+        // because of one is neither.
+        if (storeName === 'transfers') {
+          const mapped = stripSourceId(item, personMap, accountMap);
+          if (!mapped.fromId || !mapped.toId || mapped.fromId === mapped.toId) { skipped++; return; }
+          const key = importKeyOf(mapped);
+          if (seen.has(key)) { skipped++; return; }
+          seen.add(key);
+          store.add(mapped);
+          imported++;
+          return;
+        }
         const key = importKeyOf(item);
         if (seen.has(key)) {
           skipped++;
           return;
         }
         seen.add(key);
-        store.add(stripSourceId(item, personMap));
+        store.add(stripSourceId(item, personMap, accountMap));
         imported++;
       });
 
@@ -496,14 +546,61 @@ async function importDataToDB(data, mode = 'merge') {
   return { imported, skipped, dropped };
 }
 
-// Drop the bookkeeping fields before a row is stored, and point its personId
-// at whichever local person the file's id turned out to mean. Imported rows
-// are new rows on this device, so they get a fresh id from the same generator
+// Writes one name-keyed store (people, accounts) and returns a map from the
+// file's ids to this device's. In replace mode the store is wiped and every
+// row in the file is written; in merge mode a row whose name we already hold
+// points at the one we have rather than making a second.
+async function writeNamedStore(storeName, keyOf, rows, mode, inFile) {
+  const db = await openDB();
+  const idMap = {};
+  let imported = 0;
+  let skipped = 0;
+
+  if (!inFile) return { idMap, imported, skipped };
+
+  // Only merge needs to know what this device already holds; replace wipes it.
+  const existing = mode === 'merge'
+    ? new Map((await getAll(storeName)).map((r) => [keyOf(r), r.id]))
+    : new Map();
+
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  if (mode === 'replace') store.clear();
+
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (existing.has(key)) {
+      idMap[row._sourceId] = existing.get(key);
+      skipped++;
+      continue;
+    }
+    const record = stripSourceId(row);
+    store.add(record);
+    idMap[row._sourceId] = record.id;
+    existing.set(key, record.id);
+    imported++;
+  }
+
+  await txDone(tx);
+  return { idMap, imported, skipped };
+}
+
+// Drop the bookkeeping fields before a row is stored, and point its references
+// at whichever local rows the file's ids turned out to mean. Imported rows are
+// new rows on this device, so they get a fresh id from the same generator
 // addItem() uses — leaving them to the store's counter would put numbers back
 // into a store that's meant to hold UUIDs.
-function stripSourceId(item, personMap) {
+function stripSourceId(item, personMap, accountMap) {
   const { _sourceId, ...rest } = item;
   if (personMap && 'personId' in rest) rest.personId = personMap[item.personId] || null;
+  if (accountMap) {
+    if ('accountId' in rest) rest.accountId = accountMap[item.accountId] || null;
+    // A transfer names its two endpoints. An endpoint we can't match means the
+    // movement would land in an account that doesn't exist, so the transfer is
+    // dropped rather than half-applied.
+    if (rest.fromId !== undefined) rest.fromId = accountMap[rest.fromId] || null;
+    if (rest.toId !== undefined) rest.toId = accountMap[rest.toId] || null;
+  }
   return { id: newId(), ...rest };
 }
 
