@@ -1,13 +1,13 @@
 // Sorted v2 - IndexedDB Database Layer
 
 const DB_NAME = 'sorted-v2-db';
-// v2 added `people`; v3 adds `accounts` and `transfers`. Neither bump changed
-// an existing store: new rows get their own generated id, so the old stores
-// keep the key generator they were created with and no record is rewritten.
-// Adding a store is the cheapest migration IndexedDB offers — creating one
-// touches nothing else.
-const DB_VERSION = 3;
-const STORES = ['spend', 'due', 'savings', 'recurring', 'people', 'accounts', 'transfers'];
+// v2 added `people`; v3 `accounts` and `transfers`; v4 `income`. None of the
+// bumps changed an existing store: new rows get their own generated id, so the
+// old stores keep the key generator they were created with and no record is
+// rewritten. Adding a store is the cheapest migration IndexedDB offers —
+// creating one touches nothing else.
+const DB_VERSION = 4;
+const STORES = ['spend', 'due', 'savings', 'recurring', 'people', 'accounts', 'transfers', 'income'];
 
 // Cash isn't a payment method, it's an account with notes in it. Same concept
 // as a bank account, so it goes through the same code rather than being a
@@ -54,7 +54,7 @@ function openDB() {
           // stores a key generator. Transfers can arrive by import with an id
           // already attached, so it gets one too. Nothing else changes:
           // existing stores are left alone.
-          const store = db.createObjectStore(name, ['people', 'accounts', 'transfers'].includes(name)
+          const store = db.createObjectStore(name, ['people', 'accounts', 'transfers', 'income'].includes(name)
             ? { keyPath: 'id' }
             : { keyPath: 'id', autoIncrement: true });
           store.createIndex('category', 'category', { unique: false });
@@ -328,6 +328,22 @@ function sanitizeItem(storeName, item) {
     return out;
   }
 
+  if (storeName === 'income') {
+    const title = str(item.title).slice(0, 100);
+    const amount = num(item.amount);
+    const date = isoDate(item.date);
+    // No title, no money or no date is not an income entry. The date matters
+    // most: income drives the whole forecast, and an undated entry would land
+    // in a month the arithmetic has no way to choose.
+    if (!title || amount === null || amount <= 0 || !date) return null;
+    out.title = title;
+    out.amount = amount;
+    out.date = date;
+    out.category = ['salary', 'sale', 'other'].includes(str(item.category)) ? str(item.category) : 'other';
+    if (item.frequency === 'monthly' || item.frequency === 'annually') out.frequency = item.frequency;
+    return out;
+  }
+
   if (storeName === 'transfers') {
     const amount = num(item.amount);
     const fromId = str(item.fromId);
@@ -390,6 +406,13 @@ function sanitizeItem(storeName, item) {
     if (target === null || target <= 0) return null;
     out.target = target;
     out.current = current !== null && current >= 0 ? current : 0;
+    // A monthly contribution, so the forecast can draw a savings line instead
+    // of guessing at a schedule the goal doesn't carry. Absent means "work it
+    // out from what's left and the time remaining", which is why null and 0 are
+    // different: 0 is a goal you're deliberately not putting into.
+    if (typeof item.monthly === 'number' && Number.isFinite(item.monthly) && item.monthly >= 0) {
+      out.monthly = Math.round(item.monthly * 100) / 100;
+    }
   }
 
   if ('notes' in item) out.notes = str(item.notes).slice(0, 1000);

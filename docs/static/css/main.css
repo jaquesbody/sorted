@@ -353,6 +353,32 @@ body {
 
 .split-swatch.tone-accent { background: var(--accent); }
 .split-swatch.tone-danger { background: var(--danger); }
+.split-swatch.tone-success { background: var(--success); }
+
+/* A bold legend key for the two totals — the same swatch drawn thicker, so the
+   eye can tell "this is everything" from "this is one part of it" without
+   reading the label. */
+.split-swatch.is-bold {
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* The forecast chart's one-line verdict. Not a card and not a banner: it's a
+   sentence about the chart sitting directly beneath it. */
+.forecast-note {
+  margin: 14px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.forecast-note--short {
+  color: var(--danger);
+}
+
+.forecast-note strong {
+  color: inherit;
+}
 
 .category-amount {
   font-size: 0.85rem;
@@ -393,6 +419,16 @@ body {
 .page-toolbar--end {
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* Three buttons side by side don't fit a 412px phone, so they wrap rather than
+   shrinking to something untappable. */
+.page-toolbar--wrap {
+  flex-wrap: wrap;
+}
+
+.page-toolbar--wrap .btn {
+  flex: 1 1 auto;
 }
 
 .page-toolbar > .filter-bar {
@@ -856,57 +892,6 @@ body {
 .account-seg-swatch.tone-muted { background: var(--text-secondary); }
 
 .split-swatch.tone-muted { background: var(--text-secondary); }
-
-/* Cashflow: two bars a month, in and out. Fixed-height columns so a month
-   with almost nothing still reads as a bar rather than a speck. */
-.flow-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-  height: 130px;
-  padding-top: 8px;
-}
-
-.flow-col {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.flow-pair {
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 3px;
-  width: 100%;
-  height: 100px;
-}
-
-.flow-bar {
-  width: 42%;
-  min-height: 2px;
-  border-radius: 2px 2px 0 0;
-  /* A month with a £2 movement still shows something. */
-  min-width: 4px;
-}
-
-.flow-bar--in { background: var(--text-secondary); }
-.flow-bar--out { background: var(--danger); }
-
-/* A month with no movement still occupies its slot, but a faint stub rather
-   than a coloured bar — a 2px red mark reads as a small amount, and a small
-   amount is a claim. */
-.flow-bar.is-empty {
-  background: var(--border);
-}
-
-.flow-label {
-  font-size: 0.7rem;
-  color: var(--text-secondary);
-}
 
 /* A recurring item's next occurrence, shown in a month it isn't actually
    stored in. Deliberately inert and visibly not-real: it's a forecast of one

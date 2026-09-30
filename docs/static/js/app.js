@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.6.0';
+const APP_VERSION = '2.7.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -85,8 +85,8 @@ function accountName(id) {
 // anything put into a savings goal, because that money left the account to sit
 // somewhere else. Money in is transfers arriving and the manual adjustment.
 async function accountBalances() {
-  const [accounts, spend, savings, transfers] = await Promise.all([
-    getAll('accounts'), getAll('spend'), getAll('savings'), getAll('transfers')
+  const [accounts, spend, savings, transfers, income] = await Promise.all([
+    getAll('accounts'), getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income')
   ]);
 
   // Read straight from the store rather than the cache, so this is the order
@@ -100,7 +100,7 @@ async function accountBalances() {
 
   const out = new Map();
   for (const a of accounts) {
-    out.set(a.id, { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, transferIn: 0, transferOut: 0, balance: 0 });
+    out.set(a.id, { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, income: 0, transferIn: 0, transferOut: 0, balance: 0 });
   }
 
   const get = (id) => (id ? out.get(id) || null : null);
@@ -117,6 +117,11 @@ async function accountBalances() {
     const row = get(goal.accountId);
     if (row) row.savings += goal.current || 0;
   }
+  // Income is the one thing that arrives rather than leaves.
+  for (const item of income) {
+    const row = get(item.accountId);
+    if (row) row.income += item.amount;
+  }
   for (const t of transfers) {
     const from = get(t.fromId);
     const to = get(t.toId);
@@ -125,7 +130,7 @@ async function accountBalances() {
   }
 
   for (const row of out.values()) {
-    row.balance = row.opening + row.adjustment
+    row.balance = row.opening + row.adjustment + row.income
       + row.transferIn - row.transferOut
       - row.spend - row.bills - row.savings;
   }
@@ -724,6 +729,7 @@ window.addEventListener('resize', () => {
 // with colours read out of the CSS variables, so a restyle isn't enough.
 function onThemeChanged() {
   if (currentPage === 'dashboard' && lastTrendItems) drawTrendChart(lastTrendItems, lastTrendFocus);
+  if (currentPage === 'reports' && lastForecast) drawForecastChart(lastForecast);
 }
 
 // A single crisp tick, shared by the confirm (Spend) and mark-as-paid (Bills
@@ -1100,12 +1106,16 @@ async function renderSavings(container) {
   // rather than mixed into the goals list.
   const balances = await accountBalances();
   const totalBalance = balances.reduce((n, b) => n + b.balance, 0);
+  const incomeItems = (await getAll('income'))
+    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const incomeTotal = incomeItems.reduce((n, i) => n + i.amount, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar page-toolbar--end">
-      <button class="btn btn-primary" onclick="openAddModal('savings')">+ Add Goal</button>
-      <button class="btn btn-ghost" onclick="openAccountSetup()">+ Add Account</button>
+    <div class="page-toolbar page-toolbar--end page-toolbar--wrap">
+      <button class="btn btn-primary" onclick="openAccountSetup()">+ Account</button>
+      <button class="btn btn-primary" onclick="openIncomeSetup()">+ Income</button>
+      <button class="btn btn-primary" onclick="openAddModal('savings')">+ Goal</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px;">
@@ -1130,6 +1140,16 @@ async function renderSavings(container) {
 
     <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
       <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
+    </div>
+
+    <div class="section-head">
+      <span class="section-title">Income</span>
+      <span class="stat-card-sub">${currency(incomeTotal)} over ${incomeItems.length} ${incomeItems.length === 1 ? 'entry' : 'entries'}</span>
+    </div>
+    <div class="item-list">
+      ${incomeItems.length === 0
+        ? '<div class="empty-state"><div class="empty-state-text">No income recorded</div></div>'
+        : incomeItems.map(renderIncomeRow).join('')}
     </div>
 
     <div class="section-head">
@@ -1226,6 +1246,138 @@ function transferSummary(row) {
 // what it held when the app started tracking: transactions that predate the
 // account are not allocated to it, so an opening figure from months ago would
 // double-count everything since.
+// An income row. Tappable to edit, like the account rows beside it — the page
+// is one place for all three, so all three behave the same way.
+function renderIncomeRow(item) {
+  const recurring = !!item.frequency;
+  return `
+    <div class="item-row" onclick="openIncomeSetup('${item.id}')">
+      <div class="item-row-main">
+        <div class="item-info">
+          <div class="item-title">${escapeHTML(item.title)}</div>
+          <div class="item-meta">
+            ${formatDate(item.date)} · ${escapeHTML(incomeCategoryLabel(item.category))}
+            ${personDot(personById(item.personId), 14, true)}
+          </div>
+        </div>
+      </div>
+      <div style="text-align: right; min-width: 120px;">
+        <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
+        <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
+      </div>
+    </div>
+  `;
+}
+
+async function openIncomeSetup(id) {
+  const item = id ? await getItem('income', id) : null;
+  if (id && !item) return;
+  const accounts = [...accountsCache.values()];
+  const people = [...peopleCache.values()];
+
+  openModal(item ? 'Edit income' : 'Add income', `
+    <div class="form-group">
+      <label class="form-label" for="income-title">What for</label>
+      <input type="text" class="form-input" id="income-title" maxlength="100"
+             placeholder="e.g., Salary" value="${escapeHTML(item ? item.title : '')}">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="income-amount">Amount</label>
+      <input type="number" class="form-input" id="income-amount" step="0.01" min="0"
+             value="${item ? item.amount : ''}" placeholder="0.00">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label" for="income-category">Kind</label>
+        <select class="form-input" id="income-category">
+          ${INCOME_CATEGORIES.map(([v, label]) => `<option value="${v}"${item && item.category === v ? ' selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="income-frequency">Repeats</label>
+        <select class="form-input" id="income-frequency">
+          ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}"${(item ? (item.frequency || 'no') : 'no') === f.value ? ' selected' : ''}>${f.label}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="income-date">Date</label>
+      <input type="date" class="form-input" id="income-date" value="${item ? item.date : localISO()}">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="income-account">Into account</label>
+      <select class="form-input" id="income-account">
+        <option value="">Not into an account</option>
+        ${accounts.map((a) => `<option value="${a.id}"${item && item.accountId === a.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="income-person">Whose</label>
+      <select class="form-input" id="income-person">
+        <option value="">Anyone</option>
+        ${people.map((p) => `<option value="${p.id}"${item && item.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+      </select>
+    </div>
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveIncome('${id || ''}')">${item ? 'Save' : 'Add income'}</button>
+    ${item ? `<button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveIncome('${item.id}', this)">Delete</button>` : ''}
+  `);
+}
+
+async function saveIncome(id) {
+  const title = document.getElementById('income-title').value;
+  const amount = Number.parseFloat(document.getElementById('income-amount').value);
+  const category = document.getElementById('income-category').value;
+  const frequency = document.getElementById('income-frequency').value;
+  const date = document.getElementById('income-date').value;
+  const accountId = document.getElementById('income-account').value || null;
+  const personId = document.getElementById('income-person').value || null;
+
+  if (!String(title || '').trim()) return showFormError('Please enter what it was for', 'income-title');
+  if (!(amount > 0)) return showFormError('Please enter an amount greater than 0', 'income-amount');
+  if (!date) return showFormError('Please enter a date', 'income-date');
+
+  const fields = {
+    title: String(title).trim().slice(0, 100),
+    amount,
+    category,
+    frequency: frequency === 'no' ? null : frequency,
+    date,
+    accountId,
+    personId
+  };
+
+  if (id) {
+    const item = await getItem('income', id);
+    if (!item) return;
+    await updateItem('income', { ...item, ...fields, id });
+    showToast('Income updated');
+  } else {
+    await addIncome(fields);
+    showToast('Income added');
+  }
+  closeModal();
+  await renderPage();
+}
+
+async function confirmRemoveIncome(id, btn) {
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Really delete? Click again';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Delete';
+    }, 4000);
+    return;
+  }
+  await removeIncome(id);
+  closeModal();
+  showToast('Income deleted');
+  await renderPage();
+}
+
 function openAccountSetup(id) {
   const account = id ? accountById(id) : null;
   const isCash = account ? account.type === CASH_TYPE : false;
@@ -1366,13 +1518,17 @@ async function saveTransfer() {
 // Reports Page
 async function renderReports(container) {
   const token = renderToken;
-  const [spendItems, dueItems, savingsItems, transferItems] = await Promise.all([
+  const [spendItems, dueItems, savingsItems] = await Promise.all([
     getAll('spend'),
     getAll('due'),
-    getAll('savings'),
-    getAll('transfers')
+    getAll('savings')
   ]);
   const balances = await accountBalances();
+  // The forecast is always the twelve months ahead of you, so it ignores the
+  // range chips — asking "this month" of a chart about next year is a question
+  // with no answer, not a chart with an empty bar.
+  const forecast = await buildForecast();
+  lastForecast = forecast;
 
   // Range chips scope spending and bills; savings goals have no dates,
   // so their total stays lifetime.
@@ -1381,7 +1537,6 @@ async function renderReports(container) {
     : isThisYear(dateStr);
   const rangedSpend = spendItems.filter(i => inRange(i.date));
   const rangedDue = dueItems.filter(i => inRange(i.dueDate));
-  const rangedTransfers = transferItems.filter(t => inRange(t.date));
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -1424,8 +1579,8 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Cashflow</h2>
-        ${renderCashflowChart(rangedSpend, rangedTransfers, savingsItems, reportRange)}
+        <h2 class="report-title">Forecast</h2>
+        ${renderForecastCard(forecast)}
       </div>
 
       <div class="report-card">
@@ -1435,6 +1590,8 @@ async function renderReports(container) {
       </div>
     </div>
   `;
+
+  if (token === renderToken) drawForecastChart(forecast);
 }
 
 // A card's own total, sitting under its breakdown. The separate Summary card
@@ -1514,7 +1671,8 @@ function renderBalanceBreakdown(balances) {
         ['Spend', b.spend, 'accent'],
         ['Bills', b.bills, 'danger'],
         ['Goals', b.savings, 'success'],
-        ['In', b.transferIn, 'muted']
+        ['Income', b.income, 'muted'],
+        ['Moved in', b.transferIn, 'muted']
       ].filter(([, v]) => v > 0);
       return `
         <div class="account-total">
@@ -1540,66 +1698,404 @@ function balanceSegment(label, value, tone) {
   </span>`;
 }
 
-// Cashflow: money in against money out, month by month. What counts as "in" is
-// transfers between accounts, because the app doesn't track income yet — so
-// this shows money moving around inside the accounts against money leaving
-// them, and the note says so rather than letting someone read it as a salary.
-function renderCashflowChart(spend, transfers, savings, range) {
-  const months = [];
-  if (range === 'month') {
-    const now = new Date();
-    months.push({ y: now.getFullYear(), m: now.getMonth() + 1, label: new Date(now.getFullYear(), now.getMonth(), 1).toLocaleDateString('en-GB', { month: 'short' }) });
-  } else {
-    const now = new Date();
-    const count = range === 'year' ? 12 : 6;
-    for (let i = count - 1; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      months.push({ y: d.getFullYear(), m: d.getMonth() + 1, label: d.toLocaleDateString('en-GB', { month: 'short' }) });
-    }
-  }
-  const inMonth = (iso, y, m) => {
-    const mm = /^(\d{4})-(\d{2})/.exec(iso || '');
-    return !!mm && Number(mm[1]) === y && Number(mm[2]) === m;
-  };
+/* Forecast
+   --------------------------------------------------------------------------
+   Twelve months forward, not twelve months back. The question it answers is
+   "when do I run out", which is the only question a spending app is asked once
+   the entering has stopped being interesting.
 
-  const rows = months.map((mo) => {
-    // A transfer between two of your own accounts is money arriving somewhere,
-    // not new money: counting the outgoing side too would show the same £500
-    // twice, once in and once out, in the same month.
-    const out = spend
-      .filter((i) => inMonth(i.date, mo.y, mo.m))
-      .reduce((n, i) => n + i.amount, 0);
-    const movedIn = transfers
-      .filter((t) => inMonth(t.date, mo.y, mo.m))
-      .reduce((n, t) => n + t.amount, 0);
-    return { ...mo, in: movedIn, out };
+   Five lines, and the relationship between them is the whole point:
+
+     Total money     bold green   what you'd have, month by month
+     Total est costs bold red     everything projected to leave, cumulatively
+     Spend           thin         the one number you have to guess at
+     Bills           thin         known, because a bill has a date
+     Savings         thin         your own plan, per goal
+
+   The two bold lines crossing is the answer. Everything below them exists so
+   you can see which of the three is responsible.
+
+   Transfers are absent on purpose. Money moving between your own accounts is
+   not income, and counting both sides of it makes the chart say you earn what
+   you spend.
+
+   Two inputs can't be derived honestly, so both are derived anyway and both
+   are editable — see `forecastSpendEstimate` and `goalMonthlyContribution`.
+   ---------------------------------------------------------------------------*/
+
+const FORECAST_MONTHS = 12;
+const FORECAST_SPEND_KEY = 'sorted-forecast-spend';
+// Six months is long enough to smooth a single expensive week and short enough
+// that a year ago has no vote.
+const FORECAST_SPEND_MONTHS = 6;
+
+function forecastMonths(count = FORECAST_MONTHS) {
+  const now = new Date();
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    out.push({
+      y: d.getFullYear(),
+      m: d.getMonth() + 1,
+      date: d,
+      label: d.toLocaleDateString('en-GB', { month: 'short' })
+    });
+  }
+  return out;
+}
+
+// The average of your non-recurring spending over the last six months.
+//
+// Averaged over the months that actually have entries, not over the whole
+// window: someone who started logging three months ago shouldn't have their
+// spending halved by two months nobody wrote anything down.
+//
+// This is a bad forecast and it is labelled as one. A boiler or a car in the
+// window turns every month on the chart wrong, which is exactly why it can be
+// overwritten.
+function averageNonRecurringSpend(spendItems) {
+  const now = new Date();
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - (FORECAST_SPEND_MONTHS - 1), 1);
+  const inWindow = spendItems.filter((i) => {
+    const d = new Date(i.date + 'T00:00:00');
+    return !Number.isNaN(d.getTime()) && d >= cutoff && d <= now;
+  });
+  if (inWindow.length === 0) return 0;
+  const months = new Set(inWindow.map((i) => i.date.slice(0, 7))).size;
+  return inWindow.reduce((n, i) => n + i.amount, 0) / months;
+}
+
+function getForecastSpendOverride() {
+  const raw = localStorage.getItem(FORECAST_SPEND_KEY);
+  if (raw === null) return null;
+  const n = Number.parseFloat(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+// Removed rather than stored as null: "use the average" and "I've decided it's
+// zero" are different answers, and only one of them is a number.
+function setForecastSpendOverride(value) {
+  if (value === null || !Number.isFinite(value) || value < 0) {
+    localStorage.removeItem(FORECAST_SPEND_KEY);
+  } else {
+    localStorage.setItem(FORECAST_SPEND_KEY, String(Math.round(value * 100) / 100));
+  }
+}
+
+function forecastSpendEstimate(spendItems) {
+  const override = getForecastSpendOverride();
+  return override === null ? averageNonRecurringSpend(spendItems) : override;
+}
+
+// A goal's default contribution: what's left to save, spread evenly from the
+// month it was created to the end of the horizon. A goal created years ago
+// therefore spreads over the whole horizon, which is right — it's a plan you're
+// making now for money you haven't saved yet, not one that started years ago.
+function defaultGoalMonthly(goal, horizonEnd) {
+  const remaining = Math.max(0, (goal.target || 0) - (goal.current || 0));
+  if (remaining <= 0) return 0;
+  const created = new Date(String(goal.createdAt || '').slice(0, 10) + 'T00:00:00');
+  if (Number.isNaN(created.getTime())) return remaining / FORECAST_MONTHS;
+  const months = (horizonEnd.getFullYear() - created.getFullYear()) * 12
+    + (horizonEnd.getMonth() - created.getMonth()) + 1;
+  return remaining / Math.max(1, months);
+}
+
+function goalMonthlyContribution(goal, horizonEnd) {
+  if (typeof goal.monthly === 'number' && Number.isFinite(goal.monthly) && goal.monthly >= 0) {
+    return goal.monthly;
+  }
+  return defaultGoalMonthly(goal, horizonEnd);
+}
+
+function yearMonthIndex(date) {
+  return date.getFullYear() * 12 + date.getMonth();
+}
+
+async function buildForecast() {
+  const [incomeItems, dueItems, spendItems, savingsItems] = await Promise.all([
+    getAll('income'), getAll('due'), getAll('spend'), getAll('savings')
+  ]);
+  const balances = await accountBalances();
+  const opening = balances.reduce((n, b) => n + b.balance, 0);
+  const months = forecastMonths();
+  const horizonEnd = months[months.length - 1].date;
+  const spendEstimate = forecastSpendEstimate(spendItems);
+
+  // A goal only starts costing money in the month it was created.
+  const savingsStart = savingsItems.map((goal) => {
+    const created = new Date(String(goal.createdAt || '').slice(0, 10) + 'T00:00:00');
+    return {
+      goal,
+      monthly: goalMonthlyContribution(goal, horizonEnd),
+      from: Number.isNaN(created.getTime()) ? 0 : Math.max(0, yearMonthIndex(created) - yearMonthIndex(months[0].date))
+    };
   });
 
-  const max = Math.max(1, ...rows.map((r) => Math.max(r.in, r.out)));
-  const hasAny = rows.some((r) => r.in > 0 || r.out > 0);
+  const rows = months.map((mo, i) => {
+    // Recurring income lands on its own projected date; a one-off only counts
+    // in the month it was actually recorded.
+    let income = 0;
+    for (const item of incomeItems) {
+      const frequency = frequencyOf(item);
+      if (frequency) {
+        if (occurrenceInMonth(item.date, frequency, mo.date)) income += item.amount;
+      } else if (isSameMonth(item.date, mo.date)) {
+        income += item.amount;
+      }
+    }
+
+    const { stored, projections } = billsForMonth(dueItems, mo.date);
+    const bills = [...stored, ...projections].reduce((n, b) => n + b.amount, 0);
+
+    const savings = savingsStart
+      .filter((s) => s.monthly > 0 && i >= s.from)
+      .reduce((n, s) => n + s.monthly, 0);
+
+    return { ...mo, income, bills, spend: spendEstimate, savings };
+  });
+
+  // Cumulative, because "total money" and "total est costs" are totals. The
+  // thin lines are cumulative too — a line that went down and up again would
+  // read as a monthly cost that shrinks, which isn't what the chart is about.
+  let cumIncome = 0;
+  let cumSpend = 0;
+  let cumBills = 0;
+  let cumSavings = 0;
+  const series = rows.map((r) => {
+    cumIncome += r.income;
+    cumSpend += r.spend;
+    cumBills += r.bills;
+    cumSavings += r.savings;
+    const costs = cumSpend + cumBills + cumSavings;
+    return {
+      label: r.label,
+      money: opening + cumIncome - costs,
+      costs,
+      spend: cumSpend,
+      bills: cumBills,
+      savings: cumSavings,
+      income: cumIncome
+    };
+  });
+
+  return {
+    series,
+    opening,
+    spendEstimate,
+    average: averageNonRecurringSpend(spendItems),
+    overridden: getForecastSpendOverride() !== null,
+    // The first month the money line goes under zero, which is the answer.
+    short: series.find((p) => p.money < 0) || null
+  };
+}
+
+function renderForecastCard(data) {
+  const { series, opening, short } = data;
+  const hasAnything = series.some((p) => p.income > 0 || p.costs > 0);
+
+  const legend = [
+    ['Total money', 'success', true],
+    ['Total est costs', 'danger', true],
+    ['Spend', 'accent', false],
+    ['Bills', 'danger', false],
+    ['Savings', 'success', false]
+  ].map(([label, tone, bold]) => `
+    <span class="split-key"><i class="split-swatch tone-${tone}${bold ? ' is-bold' : ''}"></i>${label}</span>
+  `).join('');
 
   return `
-    <div class="split-legend">
-      <span class="split-key"><i class="split-swatch tone-muted"></i>Moved in</span>
-      <span class="split-key"><i class="split-swatch tone-danger"></i>Spent and saved</span>
-    </div>
-    ${hasAny ? `
-      <div class="flow-bars">
-        ${rows.map((r) => `
-          <div class="flow-col">
-            <div class="flow-pair">
-              <div class="flow-bar flow-bar--in${r.in ? '' : ' is-empty'}" style="height: ${(r.in / max) * 100}%" title="${escapeHTML(r.label)} in ${currency(r.in)}"></div>
-              <div class="flow-bar flow-bar--out${r.out ? '' : ' is-empty'}" style="height: ${(r.out / max) * 100}%" title="${escapeHTML(r.label)} out ${currency(r.out)}"></div>
-            </div>
-            <span class="flow-label">${escapeHTML(r.label)}</span>
-          </div>
-        `).join('')}
-      </div>
-    ` : '<div style="color: var(--text-secondary); padding: 20px 0;">Nothing in this range</div>'}
-    <p class="setting-hint" style="margin-top: 14px;">
-      Money in is transfers between accounts. Salary isn't tracked yet.
+    <p class="setting-hint" style="margin-bottom: 12px;">
+      ${hasAnything
+        ? `You have ${currency(opening)} now. This runs ${FORECAST_MONTHS} months forward.`
+        : `Nothing recorded yet, so nothing to project. Add income, bills or a goal and this fills in.`}
     </p>
+    ${hasAnything ? `
+      <canvas id="forecast-chart" class="chart-canvas" style="height: 230px;"></canvas>
+      <div class="split-legend">${legend}</div>
+      ${short
+        ? `<p class="forecast-note forecast-note--short">Based on these numbers you run out in <strong>${escapeHTML(short.label)}</strong>.</p>`
+        : '<p class="forecast-note">Income covers the projected costs across the whole year.</p>'}
+    ` : ''}
+    <div class="setting-row" style="margin-top: 14px;">
+      <div class="setting-text">
+        <div class="setting-label">Monthly spending</div>
+        <div class="setting-hint">
+          ${data.overridden
+            ? 'Set by you'
+            : `Averaged from your last ${FORECAST_SPEND_MONTHS} months`}
+        </div>
+      </div>
+      <div class="setting-control">
+        <input type="number" step="0.01" min="0" id="forecast-spend-input" class="form-input"
+               style="width: 110px; text-align: right;" value="${round2(data.spendEstimate)}">
+        <button class="btn btn-primary" onclick="saveForecastSpend()">Save</button>
+        ${data.overridden ? `<button class="btn btn-ghost" onclick="useAverageSpend()">Average</button>` : ''}
+      </div>
+    </div>
   `;
+}
+
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function saveForecastSpend() {
+  const input = document.getElementById('forecast-spend-input');
+  const value = Number.parseFloat(input.value);
+  if (!(value >= 0)) {
+    showToast('Enter an amount of 0 or more');
+    input.value = round2(getForecastSpendOverride() ?? 0);
+    return;
+  }
+  setForecastSpendOverride(value);
+  showToast(`Monthly spending set to ${currency(value)}`);
+  renderPage();
+}
+
+function useAverageSpend() {
+  setForecastSpendOverride(null);
+  showToast('Using your average again');
+  renderPage();
+}
+
+// Stashed so a resize or theme change can repaint without re-reading the
+// database — same arrangement as the dashboard's trend chart.
+let lastForecast = null;
+let forecastResizeTimer = null;
+window.addEventListener('resize', () => {
+  if (currentPage !== 'reports' || !lastForecast) return;
+  clearTimeout(forecastResizeTimer);
+  forecastResizeTimer = setTimeout(() => drawForecastChart(lastForecast), 150);
+});
+
+function drawForecastChart(data) {
+  const canvas = document.getElementById('forecast-chart');
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const w = rect.width;
+  const h = rect.height;
+
+  const css = getComputedStyle(document.documentElement);
+  const surface = css.getPropertyValue('--bg-card').trim() || '#222228';
+  const accent = css.getPropertyValue('--accent').trim() || '#3d8bfd';
+  const danger = css.getPropertyValue('--danger').trim() || '#ef4444';
+  const success = css.getPropertyValue('--success').trim() || '#22c55e';
+  const muted = css.getPropertyValue('--text-secondary').trim() || '#8b8b96';
+  const grid = css.getPropertyValue('--border').trim() || '#2b2b33';
+  const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
+
+  ctx.fillStyle = surface;
+  ctx.fillRect(0, 0, w, h);
+
+  const padL = 8;
+  const padR = 8;
+  const padT = 12;
+  const padB = 24;
+  const plotW = w - padL - padR;
+  const plotH = h - padT - padB;
+
+  const values = [];
+  for (const p of data.series) {
+    values.push(p.money, p.costs, p.spend, p.bills, p.savings);
+  }
+  let min = Math.min(0, ...values);
+  let max = Math.max(0, ...values);
+  if (max === min) max = min + 1;
+  const headroom = (max - min) * 0.08;
+  max += headroom;
+  if (min < 0) min -= headroom;
+
+  // The zero line sits inside the plot rather than at its edge, because a chart
+  // whose money line crosses zero is the normal case here, not the exception.
+  const y = (v) => padT + plotH - ((v - min) / (max - min)) * plotH;
+  const x = (i) => padL + (data.series.length === 1 ? plotW / 2 : (i / (data.series.length - 1)) * plotW);
+
+  // Grid: zero, and the extremes of the scale, so the eye has something to
+  // measure the lines against without the chart turning into graph paper.
+  ctx.strokeStyle = grid;
+  ctx.lineWidth = 1;
+  [0, max, min].forEach((v) => {
+    if (v < min || v > max) return;
+    ctx.beginPath();
+    ctx.moveTo(padL, Math.round(y(v)) + 0.5);
+    ctx.lineTo(w - padR, Math.round(y(v)) + 0.5);
+    ctx.stroke();
+  });
+
+  // Labels for the top of the scale, the baseline and the bottom if it goes
+  // negative. Without the zero the chart is a set of guesses between two
+  // unlabelled lines.
+  ctx.font = `11px ${bodyFont}`;
+  ctx.fillStyle = muted;
+  ctx.textAlign = 'right';
+  ctx.fillText(compactMoney(max), w - padR, Math.max(9, y(max) - 4));
+  if (min < 0) ctx.fillText(compactMoney(min), w - padR, Math.min(h - padB + 12, y(min) + 12));
+  if (max > 0 && min < 0) ctx.fillText('0', w - padR, y(0) + 4);
+
+  // Weight, not colour, is what separates the totals from their parts: savings
+  // and total money are both green, and bills and total est costs are both red.
+  // If the two weights are close the chart reads as three green lines and three
+  // red ones, which is the one thing it must not do.
+  const lines = [
+    { key: 'money', colour: success, width: 3 },
+    { key: 'costs', colour: danger, width: 3 },
+    { key: 'spend', colour: accent, width: 1 },
+    { key: 'bills', colour: danger, width: 1 },
+    { key: 'savings', colour: success, width: 1 }
+  ];
+
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  for (const line of lines) {
+    ctx.strokeStyle = line.colour;
+    ctx.lineWidth = line.width;
+    ctx.beginPath();
+    data.series.forEach((p, i) => {
+      const px = x(i);
+      const py = y(p[line.key]);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  }
+
+  // Month labels. Twelve of them don't fit a phone, so every other one goes
+  // unless there's genuinely room for all of them.
+  const step = plotW / data.series.length >= 26 ? 1 : 2;
+  ctx.textAlign = 'center';
+  // The first and last months sit on the plot's edges, so their labels have to
+  // be pulled inward by half their own width or they render half off the canvas
+  // — which is how "Sept" and "Aug" came out as "ept" and "ug".
+  const clamp = (cx, text) => {
+    const half = ctx.measureText(text).width / 2;
+    return Math.min(Math.max(cx, half + 1), w - half - 1);
+  };
+  data.series.forEach((p, i) => {
+    if (i % step !== 0 && i !== data.series.length - 1) return;
+    ctx.fillStyle = muted;
+    ctx.fillText(p.label, clamp(x(i), p.label), h - 8);
+  });
+}
+
+// Axis figures are estimates of a total, so they can run to five figures. The
+// full currency() string stops the chart, not the number.
+function compactMoney(value) {
+  const n = Number(value) || 0;
+  const abs = Math.abs(n);
+  if (abs >= 1000) {
+    const k = n / 1000;
+    return `${Math.abs(k) >= 10 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+  }
+  return String(Math.round(n));
 }
 
 // Who spent what: one bar per person, split between what they spent and what
@@ -2186,6 +2682,56 @@ function projectionsForMonth(items, viewDate, dateKey) {
   return rows;
 }
 
+/* Income
+   --------------------------------------------------------------------------
+   The only thing that arrives rather than leaves. It exists so the forecast has
+   a real "in" side — until this, the cashflow chart's income column was
+   transfers between your own accounts, which is the same money counted twice.
+
+   Salary, sale and other are categories rather than different types of entry:
+   the form and the forecast treat all three identically, and the category is
+   there so "how much of this was a one-off sale" is answerable later without
+   another field.
+   -------------------------------------------------------------------------- */
+
+const INCOME_CATEGORIES = [
+  ['salary', 'Salary'],
+  ['sale', 'Sale'],
+  ['other', 'Other']
+];
+
+function incomeCategoryLabel(value) {
+  const found = INCOME_CATEGORIES.find(([v]) => v === value);
+  return found ? found[1] : 'Other';
+}
+
+async function addIncome(entry) {
+  return addItem('income', entry);
+}
+
+async function removeIncome(id) {
+  await deleteItem('income', id);
+}
+
+async function toggleIncomeRecurring(id, btn) {
+  if (btn.dataset.confirming !== '1') {
+    const item = await getItem('income', id);
+    if (!item) return;
+    btn.dataset.confirming = '1';
+    btn.textContent = item.frequency ? 'Stop repeating' : 'Repeat monthly';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = item.frequency ? 'Monthly' : 'One-off';
+      renderPage();
+    }, 4000);
+    return;
+  }
+  const item = await getItem('income', id);
+  if (!item) return;
+  await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
+  renderPage();
+}
+
 // The categories offered, in the order they're meant to be scanned. Bills get
 // the same list as spend: a bill is spending that hasn't happened yet, and two
 // lists meant the same word could break down differently in Reports.
@@ -2337,6 +2883,11 @@ function buildForm(type, editId = null, existingCategory = null) {
         </div>
       </div>
       <div class="form-group">
+        <label class="form-label">Monthly (£) — leave blank to work it out</label>
+        <input type="number" class="form-input" id="form-monthly" step="0.01" min="0"
+               placeholder="Worked out from what's left and the time remaining">
+      </div>
+      <div class="form-group">
         <label class="form-label">Category</label>
         <select class="form-input" id="form-category">
           ${categoryOptionsHtml(existingCategory, SAVINGS_CATEGORIES)}
@@ -2390,6 +2941,10 @@ function prefillForm(item) {
   setVal('form-category', item.category);
   setVal('form-current', item.current);
   setVal('form-target', item.target);
+  // Blank is a real answer here: it means "work it out". Null is what an
+  // untouched goal stores, and prefill skips nulls, so the field stays empty
+  // and the placeholder keeps explaining itself.
+  setVal('form-monthly', item.monthly);
   const recurring = document.getElementById('form-recurring');
   // A row that was saved with the old yes/no flag has no frequency, but it
   // still repeats — monthly is what "yes" meant.
@@ -2651,6 +3206,13 @@ async function saveItem(type, editId = null) {
   } else {
     if (!(target > 0)) { showFormError('Please enter a target greater than 0', 'form-target'); return; }
     Object.assign(fields, { current: Number.isFinite(amount) ? amount : 0, target });
+    // Empty means "work it out", and it has to be stored as absent rather than
+    // as 0 — 0 would be a goal you've decided to stop putting money into, which
+    // is a different instruction and would quietly flatten the forecast's
+    // savings line to nothing.
+    const monthlyRaw = (document.getElementById('form-monthly')?.value || '').trim();
+    const monthly = Number.parseFloat(monthlyRaw);
+    fields.monthly = monthlyRaw !== '' && Number.isFinite(monthly) && monthly >= 0 ? monthly : null;
   }
   
   if (editId != null) {
@@ -2658,7 +3220,11 @@ async function saveItem(type, editId = null) {
     // (confirmed, paid, frequency) survive an edit.
     const existing = await getItem(type, editId);
     if (existing) {
-      await updateItem(type, { ...existing, ...fields, id: editId });
+      const merged = { ...existing, ...fields, id: editId };
+      // A field cleared back to "work it out" is dropped rather than stored as
+      // null, so the record looks the same as one that never had the setting.
+      if (merged.monthly === null) delete merged.monthly;
+      await updateItem(type, merged);
     }
   } else {
     if (type === 'spend') Object.assign(fields, { confirmed: false, paid: false });
