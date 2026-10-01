@@ -355,6 +355,156 @@ body {
   color: var(--text-primary);
 }
 
+/* Where a value sits in a row, everywhere in the app.
+   One class rather than an inline text-align on each row: continuity of
+   position is the whole point, and inline styles drift the moment someone
+   adds a row. Fixed minimum width so a £9.99 and a £1,204.00 still start their
+   digits in the same column. */
+.value-cell {
+  text-align: right;
+  min-width: 108px;
+  flex: 0 0 auto;
+  margin-left: 10px;
+}
+
+.value-cell--wide {
+  min-width: 132px;
+}
+
+/* The small explanatory line under a value shares the value's right edge, so
+   the two read as one unit rather than as two unrelated columns. */
+.value-cell .stat-card-sub {
+  text-align: right;
+}
+
+/* Actions sit left of the value, never inside it. A tick that shifts the number
+   it belongs to is the clearest possible way to lose a row's reading. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-right: 10px;
+}
+
+/* A goal's tick and its person's dot stacked above one another, which is how
+   they were before the value moved to the right: they share a left edge, so
+   the column of icons lines up whatever is or isn't reached. */
+.row-actions--stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  /* Fixed, so a goal with a tick above its dot starts its icons in the same
+     place as one with only a dot. Content-sized, the tick SVG is zero-width and
+     the column shifted by the width of a dot. */
+  width: 26px;
+  min-width: 26px;
+}
+
+/* The three Savings buttons share a row and share their text alignment. */
+.page-toolbar--wrap .btn {
+  text-align: center;
+  justify-content: center;
+}
+
+/* A section heading that goes somewhere says so. */
+.report-title--link {
+  cursor: pointer;
+}
+
+.report-title--link:hover {
+  color: var(--accent);
+}
+
+/* The "i" that explains what a page is for. A dot rather than a button that
+   looks like it does something else on tap. */
+.info-tip {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+.info-tip-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.info-tip-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Absolutely placed so it can never push the month stepper or the add button
+   sideways when it opens. Sits below the dot and to its right, which on a
+   narrow phone keeps it on screen instead of off the edge. */
+.info-tip-body {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  z-index: 60;
+  width: 250px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--bg-surface));
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.info-tip-body.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* In a page toolbar the panel is positioned against the *toolbar*, not against
+   the little dot. Anchored to the dot it hung 22px off the left edge of a 412px
+   screen: a 250px panel aligned to a dot only 228px in. The toolbar's right edge
+   is the only edge on that row with room to the left of it.
+   .info-tip drops its own positioning so the toolbar can be the containing
+   block, and the width is capped by the viewport as a second guard. */
+.page-toolbar {
+  position: relative;
+}
+
+.page-toolbar > .info-tip {
+  position: static;
+}
+
+.page-toolbar > .info-tip .info-tip-body {
+  left: auto;
+  right: 4px;
+  transform: translateY(-4px);
+  max-width: min(272px, calc(100vw - 24px));
+}
+
+.page-toolbar > .info-tip .info-tip-body.is-open {
+  transform: translateY(0);
+}
+
 .split-swatch {
   width: 9px;
   height: 9px;
@@ -861,15 +1011,6 @@ body {
   text-align: right;
 }
 
-.item-actions {
-  display: flex;
-  gap: 8px;
-  margin-left: 15px;
-  /* With the row top-aligned, the actions have to line up with the title's
-     first line rather than float in the middle of the block. */
-  align-items: center;
-}
-
 /* Section headings on the Savings page, which now carries two lists. */
 .section-head {
   display: flex;
@@ -1019,15 +1160,6 @@ body {
 
 /* The tick added to a reached goal. Sits above the person dot rather than
    beside it: one fixed-width column, so the two marks line up down the page
-   instead of shifting sideways depending on whether a goal has been reached. */
-.item-actions--stack {
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  width: 30px;
-  margin-left: 10px;
-}
-
 .goal-tick {
   display: inline-flex;
   align-items: center;

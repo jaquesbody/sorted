@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.8.3';
+const APP_VERSION = '2.9.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -826,7 +826,8 @@ async function renderSpend(container) {
   container.innerHTML = `
     <div class="page-toolbar">
       ${monthNavHtml('spend', viewedDate)}
-      <button class="btn btn-primary" onclick="openAddModal('spend')">+ Add Spend</button>
+      ${infoTipButton('spend-tip', 'Record your day-to-day or one-off spending here, then tick them off once paid. Bills that repeat every month belong on the Bills tab.')}
+      <button class="btn btn-primary" onclick="openAddModal('spend')">+ Spend</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px;">
@@ -841,7 +842,6 @@ async function renderSpend(container) {
       <span class="filter-chip ${spendFilter === 'all' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('all')">All</span>
       <span class="filter-chip ${spendFilter === 'confirmed' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('confirmed')">Confirmed</span>
       <span class="filter-chip ${spendFilter === 'pending' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('pending')">Pending</span>
-      <span class="filter-chip ${spendFilter === 'recurring' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('recurring')">Recurring</span>
     </div>
     <div class="filter-bar filter-bar--people" aria-label="Person">
       ${personChipsHtml()}
@@ -902,8 +902,7 @@ function renderSpendItems(items, total) {
             </div>
           </div>
         </div>
-        <div class="item-amount">${currency(item.amount)}</div>
-        <div class="item-actions">
+        <div class="row-actions">
           ${personDot(personById(item.personId))}
           ${editable ? receiptChip(item, 'spend') : ''}
           ${projected ? '' : `<button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
@@ -911,6 +910,7 @@ function renderSpendItems(items, total) {
                   aria-label="${item.confirmed ? 'Unconfirm' : 'Confirm'} ${escapeHTML(item.title)}"
                   title="${item.confirmed ? 'Confirmed — tap to undo' : 'Confirm'}">${TICK_SVG}</button>`}
         </div>
+        <div class="value-cell">${currency(item.amount)}</div>
       </div>
     `;
   }).join('');
@@ -1039,7 +1039,8 @@ async function renderDue(container) {
   container.innerHTML = `
     <div class="page-toolbar">
       ${monthNavHtml('due', dueViewedDate)}
-      <button class="btn btn-primary" onclick="openAddModal('due')">+ Add Bill</button>
+      ${infoTipButton('bill-tip', 'Record your recurring bills here, then tick them off once paid. Anything one-off and irregular belongs on the Spend tab.')}
+      <button class="btn btn-primary" onclick="openAddModal('due')">+ Bill</button>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
@@ -1097,8 +1098,7 @@ async function renderDue(container) {
                 </div>
               </div>
             </div>
-            <div class="item-amount">${currency(item.amount)}</div>
-            <div class="item-actions">
+            <div class="row-actions">
               ${personDot(personById(item.personId))}
               ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
               ${isPaid
@@ -1108,6 +1108,7 @@ async function renderDue(container) {
                   : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
                         aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
+            <div class="value-cell">${currency(item.amount)}</div>
             ${isPaid && (item.date || item.dueDate)
               // A settled bill is dated by its due date; the old Spend copy of a
               // payment had a date of its own. Both are read here, because
@@ -1164,7 +1165,7 @@ async function renderSavings(container) {
     
     <div class="section-head">
       <span class="section-title">Accounts</span>
-      <span class="stat-card-sub">${currency(totalBalance)} across ${balances.length}</span>
+      <span class="stat-card-sub">${currency(totalBalance)}</span>
     </div>
     <div class="item-list">
       ${balances.map(renderAccountRow).join('')}
@@ -1176,7 +1177,7 @@ async function renderSavings(container) {
 
     <div class="section-head">
       <span class="section-title">Income</span>
-      <span class="stat-card-sub">${currency(incomeTotal)} over ${incomeItems.length} ${incomeItems.length === 1 ? 'entry' : 'entries'}</span>
+      <span class="stat-card-sub">${currency(incomeTotal)}</span>
     </div>
     <div class="item-list">
       ${incomeItems.length === 0
@@ -1184,7 +1185,7 @@ async function renderSavings(container) {
         : incomeItems.map(renderIncomeRow).join('')}
     </div>
 
-    <div class="section-head">
+    <div class="section-head" id="goals-section">
       <span class="section-title">Goals</span>
     </div>
     <div class="item-list">
@@ -1208,16 +1209,16 @@ async function renderSavings(container) {
                 <div class="item-meta">${escapeHTML(item.category)} · ${goalPct}% complete</div>
               </div>
             </div>
-            <div style="text-align: right; min-width: 130px;">
+            <div class="row-actions row-actions--stack">
+              ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${GOAL_TICK_SVG}</span>` : ''}
+              ${personDot(personById(item.personId))}
+            </div>
+            <div class="value-cell value-cell--wide">
               <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
               <div class="stat-card-sub">of ${currency(item.target)}</div>
               <div class="stat-card-progress" style="margin-top: 8px;">
                 <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
               </div>
-            </div>
-            <div class="item-actions item-actions--stack">
-              ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${GOAL_TICK_SVG}</span>` : ''}
-              ${personDot(personById(item.personId))}
             </div>
           </div>
         `;
@@ -1246,14 +1247,13 @@ function renderAccountRow(row) {
           <div class="item-title">${escapeHTML(row.name)}</div>
           <div class="item-meta">
             ${row.type === CASH_TYPE ? 'Cash' : 'Bank'}
-            ${account ? personDot(personById(account.personId), 14, true) : ''}
             ${parts.length
               ? ` · ${parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · ')}`
               : ''}
           </div>
         </div>
       </div>
-      <div style="text-align: right; min-width: 120px;">
+      <div class="value-cell value-cell--wide">
         <div class="item-amount" style="color: ${over ? 'var(--danger)' : 'var(--text-primary)'};">
           ${currency(row.balance)}
         </div>
@@ -1289,16 +1289,16 @@ function renderIncomeRow(item) {
           <div class="item-title">${escapeHTML(item.title)}</div>
           <div class="item-meta">
             ${formatDate(item.date)} · ${escapeHTML(incomeCategoryLabel(item.category))}
-            ${personDot(personById(item.personId), 14, true)}
           </div>
         </div>
       </div>
-      <div style="text-align: right; min-width: 120px;">
+      <div class="row-actions">
+        ${personDot(personById(item.personId))}
+        <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
+      </div>
+      <div class="value-cell value-cell--wide">
         <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
         <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
-      </div>
-      <div class="item-actions">
-        <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
       </div>
     </div>
   `;
@@ -1571,6 +1571,34 @@ async function saveTransfer() {
   await renderPage();
 }
 
+// The small "i" that sits between a month stepper and its add button, on the
+// two pages that mean different things by an entry: Spend is the one-offs,
+// Bills is what repeats.
+function infoTipButton(id, text) {
+  return `<span class="info-tip">
+    <button class="info-tip-btn" aria-label="What is this page for"
+            aria-describedby="${id}" onclick="toggleInfoTip('${id}', this)">i</button>
+    <span class="info-tip-body" id="${id}" role="tooltip">${escapeHTML(text)}</span>
+  </span>`;
+}
+
+function toggleInfoTip(id, btn) {
+  const body = document.getElementById(id);
+  if (!body) return;
+  const open = body.classList.toggle('is-open');
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  // One at a time. Two open at once on a phone means they overlap the thing
+  // they are explaining.
+  if (open) {
+    document.querySelectorAll('.info-tip-body.is-open').forEach((el) => {
+      if (el.id !== id) {
+        el.classList.remove('is-open');
+        el.previousElementSibling?.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+}
+
 // Reports Page
 async function renderReports(container) {
   const token = renderToken;
@@ -1644,7 +1672,9 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Savings by Goal</h2>
+        <h2 class="report-title report-title--link" role="button" tabindex="0"
+            onclick="goToGoals()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToGoals();}"
+            title="Go to your goals">Savings by Goal</h2>
         ${renderSavingsBreakdown(savingsItems)}
         ${reportTotalRow('Total Saved', totalSavings, 'success')}
       </div>
@@ -1686,6 +1716,18 @@ function renderSavingsBreakdown(goals) {
       </div>
     `;
   }).join('');
+}
+
+// From a Reports summary to the list it summarises.
+function goToGoals() {
+  closeModal();
+  navigate('savings');
+  // The goals are below the accounts and income on that page, so open straight
+  // onto them rather than making someone scroll past both to get there.
+  requestAnimationFrame(() => {
+    const goals = document.getElementById('goals-section');
+    if (goals) goals.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
 }
 
 function setReportRange(range) {
@@ -1925,8 +1967,14 @@ function setForecastRange(value) {
   renderPage();
 }
 
-function stepForecastMonth(delta) {
-  const next = forecastOffset + delta;
+// `forward` counts months back, which reads backwards at the call site, so it
+// is spelled out here once: stepForecastMonth(-1) moves towards the present,
+// +1 moves away from it. The two were the wrong way round — "back" clamped
+// itself to a no-op at the current month while "forward" walked further into
+// the past, so one arrow did nothing and the other did the opposite of what it
+// said.
+function stepForecastMonth(forward) {
+  const next = forecastOffset + forward;
   // Bounded at twelve months back. Beyond that the reconstruction is guesswork
   // dressed as history, and a control that can reach the previous decade
   // invites someone to trust it.
@@ -2136,8 +2184,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
 }
 
 function renderForecastCard(data) {
-  const { series, rangeMonths, startOffset, low, short } = data;
-  const last = series[series.length - 1] || {};
+  const { series, rangeMonths, startOffset } = data;
 
   const rangeChips = FORECAST_RANGES.map((r) => `
     <option value="${r.value}"${Number(rangeMonths) === r.value ? ' selected' : ''}>${r.label}</option>
@@ -2157,48 +2204,30 @@ function renderForecastCard(data) {
   const from = data.days[0];
   const to = data.days[data.days.length - 1];
   const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  // Only true when the whole window sits behind today. A window that straddles
-  // today is mostly recorded but partly projected, and saying otherwise about
-  // it — while quoting a low point from its projected end — contradicts itself.
-  const allRecorded = series.length > 0 && series[series.length - 1].actual;
 
   return `
     <div class="forecast-nav">
-      <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(-1)"
+      <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(1)"
               aria-label="Back one month"${startOffset >= 12 ? ' disabled' : ''}>&larr;</button>
       <div class="forecast-when">
         <div class="forecast-range">
-          <label class="form-label" for="forecast-range-select">Window</label>
-          <select class="form-input" id="forecast-range-select" onchange="setForecastRange(this.value)">
+          <select class="form-input" id="forecast-range-select" aria-label="How far ahead to project" onchange="setForecastRange(this.value)">
             ${rangeChips}
           </select>
         </div>
         <div class="forecast-span">${escapeHTML(fmt(from))} &ndash; ${escapeHTML(fmt(to))}</div>
       </div>
-      <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(1)"
+      <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(-1)"
               aria-label="Forward one month"${startOffset <= 0 ? ' disabled' : ''}>&rarr;</button>
     </div>
 
     <canvas id="forecast-chart" class="chart-canvas" style="height: 240px;"></canvas>
     <div class="split-legend">${legend}</div>
 
-    <p class="forecast-note${short ? ' forecast-note--short' : ''}">
-      ${short
-        ? `On these numbers you go under on <strong>${escapeHTML(short.label)}</strong>.`
-        : low
-          ? `Lowest point is <strong>${currency(low.balance)}</strong> on <strong>${escapeHTML(low.label)}</strong>.`
-          : 'Nothing to project yet.'}
-      ${allRecorded ? ' These are recorded days, not a forecast.' : ''}
-    </p>
-
     <div class="setting-row" style="margin-top: 14px;">
       <div class="setting-text">
-        <div class="setting-label">Monthly spending</div>
-        <div class="setting-hint">
-          ${data.overridden
-            ? 'Set by you'
-            : `Averaged from your last ${FORECAST_SPEND_MONTHS} complete months`}
-        </div>
+        <div class="setting-label">Monthly spending (${data.overridden ? 'set by you' : `${FORECAST_SPEND_MONTHS} month average`})</div>
+        <div class="setting-hint">edit to see how it impacts your forecast</div>
       </div>
       <div class="setting-control">
         <input type="number" step="0.01" min="0" id="forecast-spend-input" class="form-input"
