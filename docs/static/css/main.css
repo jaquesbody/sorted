@@ -366,6 +366,27 @@ body {
 .split-swatch.tone-danger { background: var(--danger); }
 .split-swatch.tone-success { background: var(--success); }
 
+/* A dashed legend key, matching the savings line exactly. Drawn as a dash
+   pattern rather than a border so the key and the line agree — a bordered box
+   beside a dashed line says the two disagree.
+
+   The extra .split-key is deliberate: .split-swatch.tone-success sets the
+   `background` shorthand, and a shorthand resets background-image to none. At
+   equal specificity this rule came first and lost, leaving the savings swatch
+   invisible while every other key drew fine. */
+.split-key .split-swatch.is-dashed {
+  width: 12px;
+  height: 2px;
+  border-radius: 0;
+  vertical-align: middle;
+  background-color: transparent;
+  background-image: repeating-linear-gradient(to right, var(--success) 0 4px, transparent 4px 7px);
+}
+
+.split-key .split-swatch.is-dashed.tone-muted {
+  background-image: repeating-linear-gradient(to right, var(--text-secondary) 0 4px, transparent 4px 7px);
+}
+
 /* A bold legend key for the two totals — the same swatch drawn thicker, so the
    eye can tell "this is everything" from "this is one part of it" without
    reading the label. */

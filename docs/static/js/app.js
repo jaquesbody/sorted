@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.8.0';
+const APP_VERSION = '2.8.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2005,7 +2005,13 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
 
   const daysInMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
   const series = [];
-  let cumIncome = 0, cumBills = 0, cumSpend = 0, cumSavings = 0;
+  let cumIncome = 0, cumSavings = 0;
+  // Bills and spending are month to date, and reset on the first. A running
+  // total across the whole window climbs without limit, so by August the line
+  // said "you have spent £21,000" — which is not a comparison of anything, just
+  // a bigger number. What is worth reading is how far into this month you are,
+  // so each month starts again at nothing and climbs to what that month costs.
+  let mtdBills = 0, mtdSpend = 0;
 
   for (const d of days) {
     const iso = localISO(d);
@@ -2039,9 +2045,12 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     // in it.
     running += income + savings - bills - spend;
     cumIncome += income;
-    cumBills += bills;
-    cumSpend += spend;
     cumSavings += savings;
+
+    // Month to date, reset at the turn of the month.
+    if (d.getDate() === 1) { mtdBills = 0; mtdSpend = 0; }
+    mtdBills += bills;
+    mtdSpend += spend;
 
     series.push({
       date: iso,
@@ -2049,10 +2058,13 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
       label: d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
       balance: running,
       income: cumIncome,
-      bills: cumBills,
-      spend: cumSpend,
+      // Month to date, so they fall back to nothing on the 1st and tell you
+      // how the current month is going rather than how far into the window you
+      // have got.
+      bills: mtdBills,
+      spend: mtdSpend,
       savings: cumSavings,
-      costs: cumBills + cumSpend,
+      costs: mtdBills + mtdSpend,
       actual
     });
   }
@@ -2085,12 +2097,15 @@ function renderForecastCard(data) {
     <option value="${r.value}"${Number(rangeMonths) === r.value ? ' selected' : ''}>${r.label}</option>
   `).join('');
 
+  // Savings is dashed, income solid. Two greens on one chart is a coin toss
+  // without it, and dashes say "this one is different" in a way a third hue
+  // would not — green is green because both are money you keep.
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
     ['Spend', 'accent', ''],
     ['Bills', 'danger', ''],
-    ['Savings', 'success', ''],
+    ['Savings', 'success', 'is-dashed'],
     ['Income', 'success', '']
   ].map(([label, tone, mod]) => `
     <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
@@ -2306,13 +2321,15 @@ function drawForecastChart(data) {
     { key: 'costs', colour: danger, width: 2.5 },
     { key: 'spend', colour: accent, width: 1 },
     { key: 'bills', colour: danger, width: 1 },
-    { key: 'savings', colour: success, width: 1 },
-    { key: 'income', colour: success, width: 1 }
+    { key: 'savings', colour: success, width: 1.25, dash: [5, 4] },
+    { key: 'income', colour: success, width: 1.25 }
   ];
 
   ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
+  ctx.lineCap = 'butt';
   for (const line of lines) {
+    // Dashes need a butt cap or the ends blob and the rhythm disappears.
+    ctx.setLineDash(line.dash || []);
     ctx.strokeStyle = line.colour;
     ctx.lineWidth = line.width;
     ctx.beginPath();
@@ -2324,6 +2341,7 @@ function drawForecastChart(data) {
     });
     ctx.stroke();
   }
+  ctx.setLineDash([]);
 
   // Date labels, thinned to whatever the width allows. A year of daily points
   // is 365 marks and about a dozen labels.
