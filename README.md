@@ -32,7 +32,7 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - A savings goal you've reached turns the whole card green with the text in black and a tick beside it
 - Bank accounts, and cash as an account rather than a separate payment method. The Savings page lists them above your goals, each with a balance and the spend, bills and goal amounts that moved it. Spending, paying a bill or putting money into a goal says which account it came from, and the balance follows on its own
 - Move money between accounts when you transfer it for real, and adjust a balance by hand for anything the app can't infer (interest, fees, a correction)
-- Reports gains a "Where Your Money Is" card and a Cashflow chart
+- Reports gains a "Where Your Money Is" card and a Forecast chart
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
 - Light, dark, or follow-the-system theme, set in Settings and applied before the first paint
@@ -62,7 +62,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.6.0-debug.apk`](sorted-v2-2.6.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.7.2-debug.apk`](sorted-v2-2.7.2-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
@@ -93,7 +93,7 @@ Note: importing JSON works on every platform. Export uses the native save dialog
 
 No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
 
-Accounts and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere. Salary isn't tracked yet, so the cashflow chart shows money moved between your accounts against money spent and saved.
+Accounts, income and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere. The Forecast card projects twelve months forward from your balances, your income, your recurring bills and an average of your other spending, so it can tell you whether a month covers itself.
 
 People are labels, not accounts: a person is a name and a colour, and anyone can switch who they're being. That makes attribution useful on a shared device and useless against anyone determined — it is not access control.
 

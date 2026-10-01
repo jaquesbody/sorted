@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.7.1';
+const APP_VERSION = '2.7.2';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1863,19 +1863,29 @@ async function buildForecast() {
   //
   // The balance is the one line that genuinely has to accumulate: you don't
   // un-spend last month's money. It rides along as its own dashed line.
-  let balance = opening;
+  // Each month stands on its own. This is deliberately not a running total:
+  // the balance is adjusted by the month, not accumulated across months, so a
+  // month that nets £50 shows £50 however good the month before it was. What
+  // you had last month is already in `opening`.
   const series = rows.map((r) => {
-    const costs = r.spend + r.bills + r.savings;
-    balance += r.income - costs;
+    // Savings is not a cost. Putting money in a jar does not spend it, and
+    // charging it as one both inflated this figure and counted it twice: a goal
+    // that isn't attached to an account never left the balances to begin with,
+    // so the balance card and this card disagreed about whether it was still
+    // yours. It stays on the money side, where it belongs.
+    const costs = r.spend + r.bills;
+    const money = opening + r.income + r.savings;
     return {
       label: r.label,
-      money: r.income,
+      money,
       costs,
       spend: r.spend,
       bills: r.bills,
       savings: r.savings,
       income: r.income,
-      balance
+      // Kept for the verdict, not drawn: what is left once the month's costs
+      // come out of it.
+      after: money - costs
     };
   });
 
@@ -1885,45 +1895,48 @@ async function buildForecast() {
     spendEstimate,
     average: averageNonRecurringSpend(spendItems),
     overridden: getForecastSpendOverride() !== null,
-    // Two different questions, so two different answers. The dashed balance
-    // going under zero is when you're actually stuck; a single month where
-    // costs exceed income is only a problem if the balance can't absorb it.
-    short: series.find((p) => p.balance < 0) || null,
-    tight: series.find((p) => p.costs > p.money) || null,
-    endBalance: balance,
-    endMoney: series.length ? series[series.length - 1].money : 0,
-    endCosts: series.length ? series[series.length - 1].costs : 0
+    // The month the month's costs outrun everything available to cover them.
+    tight: series.find((p) => p.costs > p.money) || null
   };
 }
 
 function renderForecastCard(data) {
-  const { series, opening, short, tight, endBalance } = data;
+  const { series, opening, tight } = data;
   const hasAnything = series.some((p) => p.income > 0 || p.costs > 0);
 
-  // Weight for the two monthly totals, thin for the three that make one of
-  // them up, and dashes for the balance — which is the only line here that
-  // accumulates, so it's the only one that shouldn't be read as "this month".
+  // Weight for the two totals, thin for the three that make one of them up.
+  // No dashes: nothing on this chart accumulates, so every line describes one
+  // month and they belong on the same axis.
+  //
+  // The three cost lines carry their figure in the legend because the chart
+  // cannot. A balance of a few thousand dwarfs a £75 savings contribution, so
+  // those three lines land within a few pixels of each other and of the
+  // baseline — and three lines you cannot tell apart are worse than no lines.
+  // The last month is used as the steady state: bills can differ in the first
+  // month, and by the twelfth they are what they repeat at.
+  const last = series[series.length - 1] || {};
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
-    ['Spend', 'accent', ''],
-    ['Bills', 'danger', ''],
-    ['Savings', 'success', ''],
-    ['Balance', 'success', 'is-dashed']
-  ].map(([label, tone, mod]) => `
-    <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
+    ['Spend', 'accent', '', last.spend],
+    ['Bills', 'danger', '', last.bills],
+    ['Savings', 'success', '', last.savings]
+  ].map(([label, tone, mod, value]) => `
+    <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}${
+      value > 0 ? ` <b>${currency(value)}</b>` : ''
+    }</span>
   `).join('');
 
   return `
     <p class="setting-hint" style="margin-bottom: 12px;">
       ${hasAnything
-        ? `You have ${currency(opening)} now. This runs ${FORECAST_MONTHS} months forward.`
+        ? `Each month starts from the ${currency(opening)} you hold now. This runs ${FORECAST_MONTHS} months forward.`
         : `Nothing recorded yet, so nothing to project. Add income, bills or a goal and this fills in.`}
     </p>
     ${hasAnything ? `
       <canvas id="forecast-chart" class="chart-canvas" style="height: 230px;"></canvas>
       <div class="split-legend">${legend}</div>
-      ${forecastVerdict(short, tight, endBalance)}
+      ${forecastVerdict(tight, opening)}
     ` : ''}
     <div class="setting-row" style="margin-top: 14px;">
       <div class="setting-text">
@@ -1944,18 +1957,13 @@ function renderForecastCard(data) {
   `;
 }
 
-// Which of the two questions is the answer, and why. A month where costs
-// outrun income is only news if the balance can't cover it — with a few thousand
-// in the bank a bad month is a bad month, not a crisis, and saying otherwise
-// would cry wolf every time a big bill lands.
-function forecastVerdict(short, tight, endBalance) {
-  if (short) {
-    return `<p class="forecast-note forecast-note--short">On these numbers your balance runs out in <strong>${escapeHTML(short.label)}</strong>.</p>`;
+// The one thing worth saying out loud: does a month's outgoings fit inside what
+// that month has available? Everything else is already on the chart.
+function forecastVerdict(tight, opening) {
+  if (tight) {
+    return `<p class="forecast-note forecast-note--short">From <strong>${escapeHTML(tight.label)}</strong> the projected costs are more than the month has to cover them.</p>`;
   }
-  const months = [];
-  if (tight) months.push(`costs outrun income from <strong>${escapeHTML(tight.label)}</strong>`);
-  const lead = months.length ? `Your ${months.join(', and ')}, but the balance covers it, ending at <strong>${currency(endBalance)}</strong>.` : '';
-  return `<p class="forecast-note">${lead || `Income covers the projected costs every month, leaving <strong>${currency(endBalance)}</strong> by the end.`}</p>`;
+  return `<p class="forecast-note">Every month covers its own costs, on top of the ${currency(opening)} you already hold.</p>`;
 }
 
 function round2(n) {
@@ -2025,96 +2033,73 @@ function drawForecastChart(data) {
   const plotW = w - padL - padR;
   const plotH = h - padT - padB;
 
-  // Two scales, because a running balance and a month's spending are different
-  // kinds of quantity. Twelve months of saving ends around seventeen thousand
-  // while a month costs under two, so on one axis the five monthly lines all
-  // collapse into the bottom sixth of the chart and become three
-  // indistinguishable threads. That defeats the point of drawing them per month.
-  //
-  // The balance gets its own axis on the right, tinted with the same green as
-  // its dashed line, so the pairing is obvious without a second sentence of
-  // explanation. The five monthly lines share the left axis, which starts at
-  // zero — they are all amounts out of the same pocket in the same month.
-  const flow = [];
-  const stock = [];
+  // One scale. Every line here is money available to or leaving the same
+  // pocket in the same month, so they are directly comparable and belong
+  // together. Nothing accumulates, which is what makes that true — an earlier
+  // running-balance line ran to five figures while a month cost under two, and
+  // needed a second axis to be visible at all.
+  const values = [];
   for (const p of data.series) {
-    flow.push(p.money, p.costs, p.spend, p.bills, p.savings);
-    stock.push(p.balance);
+    values.push(p.money, p.costs, p.spend, p.bills, p.savings);
   }
-  let flowMin = 0;
-  let flowMax = Math.max(0, ...flow);
-  if (flowMax === 0) flowMax = 1;
-  flowMax += flowMax * 0.12;
+  let min = 0;
+  let max = Math.max(0, ...values);
+  if (max === 0) max = 1;
+  max += max * 0.12;
 
-  let stockMin = Math.min(0, ...stock);
-  let stockMax = Math.max(0, ...stock);
-  if (stockMax === stockMin) stockMax = stockMin + 1;
-  const stockHead = (stockMax - stockMin) * 0.08;
-  stockMax += stockHead;
-  if (stockMin < 0) stockMin -= stockHead;
-
-  const y = (v) => padT + plotH - ((v - flowMin) / (flowMax - flowMin)) * plotH;
-  const yStock = (v) => padT + plotH - ((v - stockMin) / (stockMax - stockMin)) * plotH;
+  const y = (v) => padT + plotH - ((v - min) / (max - min)) * plotH;
   const x = (i) => padL + (data.series.length === 1 ? plotW / 2 : (i / (data.series.length - 1)) * plotW);
 
-  ctx.strokeStyle = grid;
+  // Zero gets a stronger line than the rest. The smaller monthly figures sit
+  // close enough to the baseline that with every gridline the same weight they
+  // read as negative — a £75 savings line and a £0 line look identical.
+  const borderStrong = css.getPropertyValue('--border-strong').trim() || grid;
   ctx.lineWidth = 1;
-  [0, flowMax / 2, flowMax].forEach((v) => {
+  [max / 2, max].forEach((v) => {
+    ctx.strokeStyle = grid;
     ctx.beginPath();
     ctx.moveTo(padL, Math.round(y(v)) + 0.5);
     ctx.lineTo(w - padR, Math.round(y(v)) + 0.5);
     ctx.stroke();
   });
+  ctx.strokeStyle = borderStrong;
+  ctx.beginPath();
+  ctx.moveTo(padL, Math.round(y(0)) + 0.5);
+  ctx.lineTo(w - padR, Math.round(y(0)) + 0.5);
+  ctx.stroke();
 
-  // Left axis: the month's own figures. Right axis: the balance, in the same
-  // green as its line. Two axes with no label are the single easiest way to
-  // make a chart lie, so both ends of both are written down.
   ctx.font = `11px ${bodyFont}`;
   ctx.fillStyle = muted;
-  ctx.textAlign = 'left';
-  ctx.fillText(compactMoney(flowMax), padL, Math.max(9, y(flowMax) - 4));
-
-  ctx.fillStyle = success;
   ctx.textAlign = 'right';
-  ctx.fillText(compactMoney(stockMax), w - padR, Math.max(9, yStock(stockMax) - 4));
-  if (stockMin < 0) {
-    ctx.fillText(compactMoney(stockMin), w - padR, Math.min(h - padB + 12, yStock(stockMin) + 12));
-  }
+  ctx.fillText(compactMoney(max), w - padR, Math.max(9, y(max) - 4));
+  if (min < 0) ctx.fillText(compactMoney(min), w - padR, Math.min(h - padB - 4, y(min) + 12));
 
-  // Four different treatments, because there are four different kinds of line
-  // here and colour alone can't carry that: weight separates the two monthly
-  // totals from the three that make one of them up (savings is green like total
-  // money, bills is red like total est costs), and dashes mark the balance as
-  // the one line that accumulates rather than describing a single month.
+  // Weight, not colour, separates the two totals from the three that make one
+  // of them up — savings is green like total money, bills is red like total est
+  // costs, so if the two weights were close the chart would read as three green
+  // lines and three red ones.
   const lines = [
     { key: 'money', colour: success, width: 3 },
     { key: 'costs', colour: danger, width: 3 },
     { key: 'spend', colour: accent, width: 1 },
     { key: 'bills', colour: danger, width: 1 },
-    { key: 'savings', colour: success, width: 1 },
-    { key: 'balance', colour: success, width: 2, dash: [6, 5], stock: true }
+    { key: 'savings', colour: success, width: 1 }
   ];
 
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   for (const line of lines) {
-    // The balance draws under the monthlies: it is the background picture of
-    // where you end up, not the thing being compared month to month.
-    ctx.globalAlpha = line.dash ? 0.85 : 1;
-    ctx.setLineDash(line.dash || []);
     ctx.strokeStyle = line.colour;
     ctx.lineWidth = line.width;
     ctx.beginPath();
     data.series.forEach((p, i) => {
       const px = x(i);
-      const py = line.stock ? yStock(p[line.key]) : y(p[line.key]);
+      const py = y(p[line.key]);
       if (i === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     });
     ctx.stroke();
   }
-  ctx.setLineDash([]);
-  ctx.globalAlpha = 1;
 
   // Month labels. Twelve of them don't fit a phone, so every other one goes
   // unless there's genuinely room for all of them.
