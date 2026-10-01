@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.8.1';
+const APP_VERSION = '2.8.2';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2097,16 +2097,11 @@ function renderForecastCard(data) {
     <option value="${r.value}"${Number(rangeMonths) === r.value ? ' selected' : ''}>${r.label}</option>
   `).join('');
 
-  // Savings is dashed, income solid. Two greens on one chart is a coin toss
-  // without it, and dashes say "this one is different" in a way a third hue
-  // would not — green is green because both are money you keep.
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
     ['Spend', 'accent', ''],
-    ['Bills', 'danger', ''],
-    ['Savings', 'success', 'is-dashed'],
-    ['Income', 'success', '']
+    ['Bills', 'danger', '']
   ].map(([label, tone, mod]) => `
     <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
   `).join('');
@@ -2241,7 +2236,7 @@ function drawForecastChart(data) {
   const plotH = h - padT - padB;
 
   const values = [];
-  for (const p of series) values.push(p.balance, p.costs, p.spend, p.bills, p.savings, p.income);
+  for (const p of series) values.push(p.balance, p.costs, p.spend, p.bills);
   let min = Math.min(0, ...values);
   let max = Math.max(0, ...values);
   if (max === min) max = min + 1;
@@ -2313,23 +2308,19 @@ function drawForecastChart(data) {
     ctx.fillText('today', Math.min(tx + 4, w - padR - 26), padT + 7);
   }
 
-  // Weight separates the two totals from the running totals that make one of
-  // them up — savings and income are green like total money, bills is red like
-  // total est costs.
+  // Weight separates the two totals from the parts that make one of them up —
+  // bills is red like total est costs, so colour alone will not tell them
+  // apart.
   const lines = [
     { key: 'balance', colour: success, width: 2.5 },
     { key: 'costs', colour: danger, width: 2.5 },
     { key: 'spend', colour: accent, width: 1 },
-    { key: 'bills', colour: danger, width: 1 },
-    { key: 'savings', colour: success, width: 1.25, dash: [5, 4] },
-    { key: 'income', colour: success, width: 1.25 }
+    { key: 'bills', colour: danger, width: 1 }
   ];
 
   ctx.lineJoin = 'round';
-  ctx.lineCap = 'butt';
+  ctx.lineCap = 'round';
   for (const line of lines) {
-    // Dashes need a butt cap or the ends blob and the rhythm disappears.
-    ctx.setLineDash(line.dash || []);
     ctx.strokeStyle = line.colour;
     ctx.lineWidth = line.width;
     ctx.beginPath();
@@ -2341,7 +2332,6 @@ function drawForecastChart(data) {
     });
     ctx.stroke();
   }
-  ctx.setLineDash([]);
 
   // Date labels, thinned to whatever the width allows. A year of daily points
   // is 365 marks and about a dozen labels.
