@@ -187,34 +187,56 @@ function nextDueDate(dueDate, frequency) {
 // (passed in as payerId) — "who paid for it" is the whole point of the
 // attribution — falling back to the bill's own person when nobody is
 // selected, which is a better guess than nobody.
+// Paying a bill settles it where it stands. It used to instead write a
+// *payment* into Spend, roll the bill forward and delete it if it was one-off —
+// and that single decision produced the duplicate this release exists to fix.
+//
+// A bill that has been paid is still a bill. Moving its payment into Spend
+// meant the same money sat in two categories at once: the payment counted in
+// the spending average, while the bill counted again as a bill in every month
+// it projected into. On a £500 rent that is £500 of forecast costs that was
+// never going to be spent, every month, forever.
+//
+// So the bill stays in Bills and is marked paid. Two consequences, both
+// handled here rather than left to the caller:
+//
+//   - A past month stays reviewable. This was the original reason for the
+//     Spend copy, and it is why the bill is kept rather than deleted.
+//   - A recurring bill must leave a *fresh payable row* behind. If it only
+//     stayed put, its next occurrence would exist purely as an inert
+//     projection — nothing to tap, so next month's rent could never be
+//     settled. A recurring bill therefore becomes two rows: this one, settled,
+//     and the next one, real.
 async function markDuePaid(dueItem, payerId) {
   const { id, ...rest } = dueItem;
   const db = await openDB();
-  const tx = db.transaction(['spend', 'due'], 'readwrite');
+  const tx = db.transaction('due', 'readwrite');
+  const store = tx.objectStore('due');
   const now = new Date().toISOString();
 
-  tx.objectStore('spend').add({
-    // An id of its own, like any other new row — left to the store's counter
-    // this would be the one row in the app that came out as a number.
-    id: newId(),
+  store.put({
     ...rest,
-    personId: payerId || rest.personId || null,
-    date: localISO(),
-    confirmed: true,
+    id,
     paid: true,
-    createdAt: now
+    personId: payerId || rest.personId || null,
+    updatedAt: now
   });
 
-  if (dueItem.recurring) {
-    tx.objectStore('due').put({
+  const repeats = dueItem.frequency === 'monthly'
+    || dueItem.frequency === 'annually'
+    || dueItem.recurring === true;
+
+  if (repeats) {
+    store.add({
       ...rest,
-      id,
-      // Rolled by how often it repeats, not always a month.
+      // An id of its own, like any other new row — left to the store's counter
+      // this would be the one row in the app that came out as a number.
+      id: newId(),
+      paid: false,
+      personId: payerId || rest.personId || null,
       dueDate: nextDueDate(rest.dueDate, dueItem.frequency),
-      updatedAt: now
+      createdAt: now
     });
-  } else {
-    tx.objectStore('due').delete(id);
   }
 
   await txDone(tx);

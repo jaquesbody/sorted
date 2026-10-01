@@ -105,6 +105,10 @@ async function checkBillNotifications() {
   try {
     for (const bill of await getAll('due')) {
       if (!bill.dueDate) continue;
+      // A paid bill stays in Bills now rather than being deleted, so without
+      // this it would remind you about rent you have already paid — and keep
+      // doing it, every day, because its date never rolls forward again.
+      if (bill.paid === true) continue;
       const days = daysUntil(bill.dueDate);
       // Anything overdue is in range whatever the lead time, because a negative
       // number is always <= lead. Nothing further forward than the lead is.

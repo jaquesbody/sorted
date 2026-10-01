@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.8.2';
+const APP_VERSION = '2.8.3';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -88,8 +88,9 @@ function accountName(id) {
 let accountBalanceCache = new Map();
 
 async function accountBalances() {
-  const [accounts, spend, savings, transfers, income] = await Promise.all([
-    getAll('accounts'), getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income')
+  const [accounts, spend, savings, transfers, income, dueItems] = await Promise.all([
+    getAll('accounts'), getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income'),
+    getAll('due')
   ]);
 
   // Read straight from the store rather than the cache, so this is the order
@@ -111,10 +112,19 @@ async function accountBalances() {
   for (const item of spend) {
     const row = get(item.accountId);
     if (!row) continue;
-    // A paid bill's payment is a spend record, so it's already counted here.
-    // Splitting it out is for display only — it never leaves the account twice.
+    // Rows written before 2.8.3 paid a bill by writing its payment into
+    // Spend. Those are still in people's data, so they are still read as bills
+    // here — otherwise every bill they have already paid would silently vanish
+    // from their balances. New payments never produce one of these.
     if (item.paid) row.bills += item.amount;
     else row.spend += item.amount;
+  }
+  // A bill that has been paid leaves the account from Bills, which is where it
+  // now stays. Only paid ones count: an unpaid bill has not been paid yet.
+  for (const item of dueItems) {
+    if (item.paid !== true) continue;
+    const row = get(item.accountId);
+    if (row) row.bills += item.amount;
   }
   for (const goal of savings) {
     const row = get(goal.accountId);
@@ -582,10 +592,14 @@ function billsForMonth(dueItems, date) {
   // `inMonth` so the Total Due card still counts only what is actually stored
   // and actually owed — a projection is not a bill.
   const projections = projectionsForMonth(dueItems, date, 'dueDate');
-  const inMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
+  const inMonth = dueItems.filter((i) => i.paid !== true && isSameMonth(i.dueDate, date));
+  // A paid bill is not overdue and is not outstanding. Left in, every future
+  // month would carry this month's settled bill *and* project the next
+  // occurrence of it — the same money twice, which is precisely what this
+  // function's separation of stored from projected exists to prevent.
   const overdueElsewhere = lookingBack
     ? []
-    : dueItems.filter((i) => isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
+    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
   // Real and projected are handed back separately, never mixed into one list:
   // anything that sums what a month costs has to be able to tell them apart,
   // and a caller that can't is how a forecast ends up in a Total Due figure.
@@ -943,13 +957,20 @@ function monthNavHtml(which, date) {
   `;
 }
 
-// Bills already paid, read back out of Spend. markDuePaid() writes the payment
-// into Spend before rolling or removing the bill, so that copy is the only
-// record a paid bill leaves behind — this is what makes a past month reviewable
-// rather than just a date you stepped back to.
-function paidBillsForMonth(spendItems, date) {
-  return spendItems
-    .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date))
+// Bills already paid in a given month, read out of Bills itself — that is where
+// a settled bill lives now, so a past month stays reviewable rather than being
+// just a date you stepped back to.
+//
+// Rows written before 2.8.3 paid a bill by writing its payment into Spend and
+// rolling or deleting the bill, so those months have no paid bill here at all.
+// They are still read from Spend as before, which is the only way a person's
+// existing history stays visible after the model changed underneath it.
+function paidBillsForMonth(dueItems, spendItems, date) {
+  const settled = dueItems
+    .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date));
+  const legacy = spendItems
+    .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date));
+  return [...settled, ...legacy]
     .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
 }
 
@@ -1000,7 +1021,7 @@ async function renderDue(container) {
   // so without stepping forward there was no way to see what the following
   // few months look like.
   const { stored: outstanding, inMonth, overdueElsewhere, projections } = billsForMonth(all, dueViewedDate);
-  const paid = paidBillsForMonth(spendItems, dueViewedDate);
+  const paid = paidBillsForMonth(all, spendItems, dueViewedDate);
   // Only the stored rows go through the filters; a forecast isn't a bill you
   // can have confirmed or pay, and letting a status chip hide it would make a
   // month look emptier than it is.
@@ -1079,7 +1100,7 @@ async function renderDue(container) {
             <div class="item-amount">${currency(item.amount)}</div>
             <div class="item-actions">
               ${personDot(personById(item.personId))}
-              ${editable ? receiptChip(item, isPaid ? 'spend' : 'due') : ''}
+              ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
               ${isPaid
                 ? `<span class="confirm-btn is-done" aria-hidden="true">${TICK_SVG}</span>`
                 : projected
@@ -1087,8 +1108,12 @@ async function renderDue(container) {
                   : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
                         aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
-            ${isPaid && item.date
-              ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date)}</div>`
+            ${isPaid && (item.date || item.dueDate)
+              // A settled bill is dated by its due date; the old Spend copy of a
+              // payment had a date of its own. Both are read here, because
+              // anyone's existing paid rows are the Spend kind and anything
+              // paid from 2.8.3 is the other.
+              ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date || item.dueDate)}</div>`
               : projected
                 ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
                 : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
@@ -1567,7 +1592,11 @@ async function renderReports(container) {
     : reportRange === 'month' ? isThisMonth(dateStr)
     : isThisYear(dateStr);
   const rangedSpend = spendItems.filter(i => inRange(i.date));
-  const rangedDue = dueItems.filter(i => inRange(i.dueDate));
+  // What is owed, so a bill already settled is out of it. A paid bill used to
+  // be deleted on payment; it now stays in this store marked paid, which
+  // means without this filter every past month stepped back to would report
+  // rent as still due.
+  const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -1800,6 +1829,12 @@ function averageNonRecurringSpend(spendItems) {
   // ruinous month. An unfinished month simply does not vote.
   const cutoff = new Date(now.getFullYear(), now.getMonth() - FORECAST_SPEND_MONTHS, 1);
   const inWindow = spendItems.filter((i) => {
+    // Bill payments are excluded, and this is the fix for the duplication.
+    // Pre-2.8.3 rows marked a bill paid by writing its payment into Spend, so
+    // averaging those alongside real spending teaches the forecast to pay the
+    // same rent twice: once as a projected bill, once inside the average.
+    // New payments never land here at all.
+    if (i.paid === true) return false;
     const d = new Date(String(i.date || '') + 'T00:00:00');
     return !Number.isNaN(d.getTime()) && d >= cutoff && d < new Date(now.getFullYear(), now.getMonth(), 1);
   });
@@ -1944,7 +1979,15 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const realIncome = new Map();
   for (const item of spendItems) add(realSpend, String(item.date || '').slice(0, 10), item.amount);
   for (const item of incomeItems) add(realIncome, String(item.date || '').slice(0, 10), item.amount);
-  for (const item of dueItems) add(realBills, String(item.dueDate || '').slice(0, 10), item.amount);
+  // Paid bills only, so this agrees with accountBalances, which also only
+  // deducts bills that have actually been paid. Counting an unpaid one would
+  // mean the forecast started from a different balance than the balance card
+  // shows, which is the sort of disagreement nobody notices until the numbers
+  // are £500 apart.
+  for (const item of dueItems) {
+    if (item.paid !== true) continue;
+    add(realBills, String(item.dueDate || '').slice(0, 10), item.amount);
+  }
 
   // What's coming. Built per month so a recurring bill lands on its own day,
   // which is the entire reason for this chart existing: a bill on the 1st and
@@ -1963,7 +2006,10 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     const rows = monthDate < new Date(today.getFullYear(), today.getMonth(), 1)
       ? inMonth
       : [...inMonth, ...projections];
-    for (const row of rows) add(plannedBills, String(row.dueDate || '').slice(0, 10), row.amount);
+    for (const row of rows) {
+      if (row.paid === true) continue;
+      add(plannedBills, String(row.dueDate || '').slice(0, 10), row.amount);
+    }
   }
 
   // Income is projected only for dates that have not happened yet. This is the
@@ -2930,6 +2976,11 @@ function occurrenceInMonth(startDate, frequency, viewDate) {
 function projectionsForMonth(items, viewDate, dateKey) {
   const rows = [];
   for (const item of items) {
+    // A settled bill has no future occurrences. Paying one leaves a fresh row
+    // for the next date, and that row is what projects from then on — so
+    // projecting the settled bill as well put the same occurrence in the month
+    // twice, once real and once as a forecast.
+    if (item.paid === true) continue;
     const frequency = frequencyOf(item);
     if (!frequency) continue;
     const stored = item[dateKey];
