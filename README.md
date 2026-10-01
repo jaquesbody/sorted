@@ -62,7 +62,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.7.2-debug.apk`](sorted-v2-2.7.2-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.8.0-debug.apk`](sorted-v2-2.8.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
@@ -93,7 +93,7 @@ Note: importing JSON works on every platform. Export uses the native save dialog
 
 No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
 
-Accounts, income and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere. The Forecast card projects twelve months forward from your balances, your income, your recurring bills and an average of your other spending, so it can tell you whether a month covers itself.
+Accounts, income and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere. The Forecast card projects your balance **day by day** over a window you choose — 1, 3, 6 or 12 months — from your balances, your income's dates, your bills' dates and an average of your other spending. Step it back a month and it shows days you actually recorded rather than a projection. It tells you the lowest point your balance reaches and when, which is usually just before payday.
 
 People are labels, not accounts: a person is a name and a colour, and anyone can switch who they're being. That makes attribution useful on a shared device and useless against anyone determined — it is not access control.
 

@@ -375,6 +375,59 @@ body {
   border-radius: 2px;
 }
 
+/* The window controls: back, the window itself, forward. The arrows are the
+   whole of the navigation, so they are given a fixed square to sit in rather
+   than whatever width their glyph happens to be. */
+.forecast-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.forecast-step {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  justify-content: center;
+}
+
+.forecast-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.forecast-when {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+.forecast-range {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.forecast-range .form-label {
+  margin: 0;
+}
+
+.forecast-range .form-input {
+  width: auto;
+  padding: 6px 10px;
+}
+
+.forecast-span {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+
 /* The forecast chart's one-line verdict. Not a card and not a banner: it's a
    sentence about the chart sitting directly beneath it. */
 .forecast-note {

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.7.2';
+const APP_VERSION = '2.8.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -84,6 +84,9 @@ function accountName(id) {
 // already includes paid bills, since paying one writes a spend record) and
 // anything put into a savings goal, because that money left the account to sit
 // somewhere else. Money in is transfers arriving and the manual adjustment.
+// The last computed balances, keyed by account id.
+let accountBalanceCache = new Map();
+
 async function accountBalances() {
   const [accounts, spend, savings, transfers, income] = await Promise.all([
     getAll('accounts'), getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income')
@@ -134,6 +137,10 @@ async function accountBalances() {
       + row.transferIn - row.transferOut
       - row.spend - row.bills - row.savings;
   }
+
+  // Kept so the account editor can show the balance the row displays without
+  // going back to the database to work it out. Same data, one computation.
+  accountBalanceCache = new Map(out);
   return [...out.values()];
 }
 
@@ -1378,6 +1385,15 @@ async function confirmRemoveIncome(id, btn) {
   await renderPage();
 }
 
+// The balance the row actually shows, so the editor and the list agree.
+function accountCurrentBalance(accountId) {
+  const cached = accountBalanceCache.get(accountId);
+  if (cached) return Math.round(cached.balance * 100) / 100;
+  const account = accountById(accountId);
+  if (!account) return '';
+  return Math.round((account.opening || 0) * 100) / 100;
+}
+
 function openAccountSetup(id) {
   const account = id ? accountById(id) : null;
   const isCash = account ? account.type === CASH_TYPE : false;
@@ -1399,7 +1415,8 @@ function openAccountSetup(id) {
     <div class="form-group">
       <label class="form-label" for="account-opening">Balance now</label>
       <input type="number" class="form-input" id="account-opening" step="0.01"
-             value="${account ? account.opening : ''}" placeholder="0.00">
+             value="${account ? accountCurrentBalance(account.id) : ''}" placeholder="0.00">
+      ${account ? '<p class="setting-hint">What this account holds today. Entering a different figure corrects the balance.</p>' : ''}
     </div>
     ${account ? `
     <div class="form-group">
@@ -1422,10 +1439,24 @@ async function saveAccount(id) {
   if (id) {
     const account = accountById(id);
     const adjustment = document.getElementById('account-adjustment')?.value;
+    // "Balance now" is what the account holds today, so it has to mean that.
+    // The stored opening balance is the baseline everything recorded since was
+    // applied to, so with £100 of spend on the books, typing 100 into a field
+    // labelled "Balance now" left the row reading 40.
+    //
+    // Rather than relabel the field and keep the surprise, the number is
+    // converted on the way in: the figures already applied to this account are
+    // added back, so what you type is what the row then shows.
+    const balances = await accountBalances();
+    const row = balances.find((b) => b.id === id);
+    const applied = row
+      ? (row.spend || 0) + (row.bills || 0) + (row.savings || 0)
+        - (row.income || 0) - (row.transferIn || 0) + (row.transferOut || 0)
+      : 0;
     await updateItem('accounts', {
       ...account,
       name: String(name).trim().slice(0, 40),
-      opening: Number.parseFloat(opening) || 0,
+      opening: (Number.parseFloat(opening) || 0) + applied,
       adjustment: Number.parseFloat(adjustment) || 0
     });
     showToast('Account updated');
@@ -1755,10 +1786,22 @@ function forecastMonths(count = FORECAST_MONTHS) {
 // overwritten.
 function averageNonRecurringSpend(spendItems) {
   const now = new Date();
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - (FORECAST_SPEND_MONTHS - 1), 1);
+  // The window ends at the end of LAST month, never today.
+  //
+  // A month in progress is not a month. Counting it as one dragged the average
+  // down by whatever it happened to hold: six months at £100 each with £10
+  // logged two days into the seventh averaged £85, because two days' spending
+  // was being treated as a full month and then averaged against six real ones.
+  // That is the same "average is too low at the start of the month" symptom,
+  // one level further down than the empty-month case.
+  //
+  // Extrapolating instead — £10 over two days scaled to a month — is worse: two
+  // days is not a sample, and a single big purchase on day one would predict a
+  // ruinous month. An unfinished month simply does not vote.
+  const cutoff = new Date(now.getFullYear(), now.getMonth() - FORECAST_SPEND_MONTHS, 1);
   const inWindow = spendItems.filter((i) => {
-    const d = new Date(i.date + 'T00:00:00');
-    return !Number.isNaN(d.getTime()) && d >= cutoff && d <= now;
+    const d = new Date(String(i.date || '') + 'T00:00:00');
+    return !Number.isNaN(d.getTime()) && d >= cutoff && d < new Date(now.getFullYear(), now.getMonth(), 1);
   });
   if (inWindow.length === 0) return 0;
   const months = new Set(inWindow.map((i) => i.date.slice(0, 7))).size;
@@ -1812,139 +1855,293 @@ function yearMonthIndex(date) {
   return date.getFullYear() * 12 + date.getMonth();
 }
 
-async function buildForecast() {
+// Midnight today, local. Every date comparison in the forecast goes through
+// this so a bill due "today" is never treated as yesterday's because of an
+// hour boundary somewhere.
+function todayMidnight() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// The days in a window of `rangeMonths` months starting `startOffset` months
+// back. A window can start in the past, which is how stepping backwards works.
+function forecastDayList(rangeMonths, startOffset) {
+  const today = todayMidnight();
+  const start = new Date(today.getFullYear(), today.getMonth() - startOffset, 1);
+  const end = new Date(start.getFullYear(), start.getMonth() + rangeMonths, 0);
+  const days = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) days.push(new Date(d));
+  return { days, start, end };
+}
+
+const FORECAST_RANGES = [
+  { value: 1, label: '1 month' },
+  { value: 3, label: '3 months' },
+  { value: 6, label: '6 months' },
+  { value: 12, label: '12 months' }
+];
+
+let forecastRange = 3;
+let forecastOffset = 0;
+
+function setForecastRange(value) {
+  forecastRange = Number(value) || 3;
+  renderPage();
+}
+
+function stepForecastMonth(delta) {
+  const next = forecastOffset + delta;
+  // Bounded at twelve months back. Beyond that the reconstruction is guesswork
+  // dressed as history, and a control that can reach the previous decade
+  // invites someone to trust it.
+  forecastOffset = Math.min(12, Math.max(0, next));
+  renderPage();
+}
+
+function resetForecastWindow() {
+  forecastOffset = 0;
+  renderPage();
+}
+
+// The forecast, day by day.
+//
+// A row is "what your balance is on this date", which is the question a
+// household actually has. The five lines are all amounts as at that day —
+// the balance itself, and the running totals of what came in and went out —
+// so they share one scale honestly, with no second axis and nothing squashed
+// against the floor.
+//
+// Days before today are rebuilt from what was really recorded. Days from today
+// on are projected. Stepping back therefore shows history rather than a
+// forecast of history, which is the only way to tell whether the forecast has
+// ever been right.
+async function buildForecast(rangeMonths = forecastRange, startOffset = forecastOffset) {
   const [incomeItems, dueItems, spendItems, savingsItems] = await Promise.all([
     getAll('income'), getAll('due'), getAll('spend'), getAll('savings')
   ]);
   const balances = await accountBalances();
-  const opening = balances.reduce((n, b) => n + b.balance, 0);
-  const months = forecastMonths();
-  const horizonEnd = months[months.length - 1].date;
+  const today = todayMidnight();
+  const { days, start } = forecastDayList(rangeMonths, startOffset);
   const spendEstimate = forecastSpendEstimate(spendItems);
+  // A goal's default monthly contribution is worked out against a FIXED
+  // twelve-month horizon, never against the end of the window on screen.
+  //
+  // It used to use the window, which meant the same goal read as £600 a month
+  // in the three-month view and £150 in the twelve-month one — the chart
+  // contradicted itself depending on which dropdown was selected, and the
+  // balance drifted because of it.
+  const goalHorizon = new Date(today.getFullYear(), today.getMonth() + RECURRING_HORIZON_MONTHS, 0);
 
-  // A goal only starts costing money in the month it was created.
-  const savingsStart = savingsItems.map((goal) => {
-    const created = new Date(String(goal.createdAt || '').slice(0, 10) + 'T00:00:00');
-    return {
-      goal,
-      monthly: goalMonthlyContribution(goal, horizonEnd),
-      from: Number.isNaN(created.getTime()) ? 0 : Math.max(0, yearMonthIndex(created) - yearMonthIndex(months[0].date))
-    };
-  });
+  const add = (map, iso, amount) => {
+    if (!iso) return;
+    map.set(iso, (map.get(iso) || 0) + amount);
+  };
 
-  const rows = months.map((mo, i) => {
-    // Recurring income lands on its own projected date; a one-off only counts
-    // in the month it was actually recorded.
-    let income = 0;
-    for (const item of incomeItems) {
-      const frequency = frequencyOf(item);
-      if (frequency) {
-        if (occurrenceInMonth(item.date, frequency, mo.date)) income += item.amount;
-      } else if (isSameMonth(item.date, mo.date)) {
-        income += item.amount;
+  // What really happened, keyed by day.
+  const realBills = new Map();
+  const realSpend = new Map();
+  const realIncome = new Map();
+  for (const item of spendItems) add(realSpend, String(item.date || '').slice(0, 10), item.amount);
+  for (const item of incomeItems) add(realIncome, String(item.date || '').slice(0, 10), item.amount);
+  for (const item of dueItems) add(realBills, String(item.dueDate || '').slice(0, 10), item.amount);
+
+  // What's coming. Built per month so a recurring bill lands on its own day,
+  // which is the entire reason for this chart existing: a bill on the 1st and
+  // pay on the 15th are a fortnight apart and only a day-by-day view shows the
+  // gap between them.
+  const plannedBills = new Map();
+  const plannedIncome = new Map();
+  const months = new Set(days.map((d) => `${d.getFullYear()}-${d.getMonth()}`));
+  for (const key of months) {
+    const [yy, mm] = key.split('-').map(Number);
+    const monthDate = new Date(yy, mm, 1);
+    const { inMonth, projections } = billsForMonth(dueItems, monthDate);
+    // A month already past is history: only what is stored counts, because a
+    // recurring bill paid last month has had its stored date rolled forward
+    // and would otherwise be counted a second time as a projection.
+    const rows = monthDate < new Date(today.getFullYear(), today.getMonth(), 1)
+      ? inMonth
+      : [...inMonth, ...projections];
+    for (const row of rows) add(plannedBills, String(row.dueDate || '').slice(0, 10), row.amount);
+  }
+
+  // Income is projected only for dates that have not happened yet. This is the
+  // whole of the double-count fix: a salary recorded on the 1st is already
+  // inside the account balance, so projecting it forward as well counted the
+  // same £1,000 twice. What is already in the bank stays in the bank; only
+  // money that has not arrived yet is added.
+  for (const item of incomeItems) {
+    const frequency = frequencyOf(item);
+    if (!frequency) {
+      const iso = String(item.date || '').slice(0, 10);
+      if (iso && iso > localISO(today)) add(plannedIncome, iso, item.amount);
+      continue;
+    }
+    for (const key of months) {
+      const [yy, mm] = key.split('-').map(Number);
+      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1));
+      if (occurrence && occurrence > localISO(today)) add(plannedIncome, occurrence, item.amount);
+    }
+  }
+
+  const savingsPlans = savingsItems.map((goal) => ({
+    from: String(goal.createdAt || '').slice(0, 10) || localISO(today),
+    monthly: goalMonthlyContribution(goal, goalHorizon)
+  }));
+
+  // The balance at the window's first day. Today's balance already contains
+  // everything recorded up to today, so walking backwards means adding back
+  // what was taken out and removing what was put in.
+  const currentBalance = balances.reduce((n, b) => n + b.balance, 0);
+  const startISO = localISO(start);
+  let running = currentBalance;
+  for (const d of days) {
+    const iso = localISO(d);
+    if (iso >= startISO && iso < localISO(today)) {
+      running += (realBills.get(iso) || 0) + (realSpend.get(iso) || 0) - (realIncome.get(iso) || 0);
+    }
+  }
+
+  const daysInMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  const series = [];
+  let cumIncome = 0, cumBills = 0, cumSpend = 0, cumSavings = 0;
+
+  for (const d of days) {
+    const iso = localISO(d);
+    const actual = d < today;
+    let income, bills, spend, savings = 0;
+
+    if (actual) {
+      income = realIncome.get(iso) || 0;
+      bills = realBills.get(iso) || 0;
+      spend = realSpend.get(iso) || 0;
+    } else {
+      income = plannedIncome.get(iso) || 0;
+      bills = plannedBills.get(iso) || 0;
+      // Variable spending has no dates, so it accrues at a daily rate. That is
+      // the honest way to draw a smooth line from an estimate, and it is what
+      // makes the balance dip by a plausible amount between paydays rather
+      // than jumping once a month.
+      spend = spendEstimate / daysInMonth(d);
+      // A goal is a plan, so it only accrues from today — there is no record
+      // of what went in on which day, and inventing one would put a smooth
+      // line through last month as though it were fact.
+      if (iso >= localISO(today)) {
+        savings = savingsPlans
+          .filter((pl) => pl.monthly > 0 && iso >= pl.from)
+          .reduce((n, pl) => n + pl.monthly / daysInMonth(d), 0);
       }
     }
 
-    const { stored, projections } = billsForMonth(dueItems, mo.date);
-    const bills = [...stored, ...projections].reduce((n, b) => n + b.amount, 0);
+    // Savings is money in a jar, not money spent: it arrives rather than
+    // leaves. That is why Total est costs is bills plus spend and this is not
+    // in it.
+    running += income + savings - bills - spend;
+    cumIncome += income;
+    cumBills += bills;
+    cumSpend += spend;
+    cumSavings += savings;
 
-    const savings = savingsStart
-      .filter((s) => s.monthly > 0 && i >= s.from)
-      .reduce((n, s) => n + s.monthly, 0);
+    series.push({
+      date: iso,
+      d,
+      label: d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+      balance: running,
+      income: cumIncome,
+      bills: cumBills,
+      spend: cumSpend,
+      savings: cumSavings,
+      costs: cumBills + cumSpend,
+      actual
+    });
+  }
 
-    return { ...mo, income, bills, spend: spendEstimate, savings };
-  });
-
-  // Every line is one month, not a running total. Bills repeat roughly every
-  // month and spending is a flat monthly figure, so plotted per month they read
-  // as the stable, repeating shape they actually are — which is the whole
-  // point of the card. Rolling them up turned three steady lines into three
-  // ever-climbing ones and made "£98 of mortgage" look like a growing problem.
-  //
-  // The balance is the one line that genuinely has to accumulate: you don't
-  // un-spend last month's money. It rides along as its own dashed line.
-  // Each month stands on its own. This is deliberately not a running total:
-  // the balance is adjusted by the month, not accumulated across months, so a
-  // month that nets £50 shows £50 however good the month before it was. What
-  // you had last month is already in `opening`.
-  const series = rows.map((r) => {
-    // Savings is not a cost. Putting money in a jar does not spend it, and
-    // charging it as one both inflated this figure and counted it twice: a goal
-    // that isn't attached to an account never left the balances to begin with,
-    // so the balance card and this card disagreed about whether it was still
-    // yours. It stays on the money side, where it belongs.
-    const costs = r.spend + r.bills;
-    const money = opening + r.income + r.savings;
-    return {
-      label: r.label,
-      money,
-      costs,
-      spend: r.spend,
-      bills: r.bills,
-      savings: r.savings,
-      income: r.income,
-      // Kept for the verdict, not drawn: what is left once the month's costs
-      // come out of it.
-      after: money - costs
-    };
-  });
+  // The number the guides all say matters: the lowest projected balance, and
+  // when it happens. Not a monthly average — a specific bad day.
+  const ahead = series.filter((p) => !p.actual);
+  const low = ahead.length ? ahead.reduce((a, b) => (b.balance < a.balance ? b : a)) : null;
+  const short = low && low.balance < 0 ? low : null;
 
   return {
     series,
-    opening,
+    days,
+    rangeMonths,
+    startOffset,
+    opening: balances.reduce((n, b) => n + b.balance, 0),
     spendEstimate,
     average: averageNonRecurringSpend(spendItems),
     overridden: getForecastSpendOverride() !== null,
-    // The month the month's costs outrun everything available to cover them.
-    tight: series.find((p) => p.costs > p.money) || null
+    low,
+    short
   };
 }
 
 function renderForecastCard(data) {
-  const { series, opening, tight } = data;
-  const hasAnything = series.some((p) => p.income > 0 || p.costs > 0);
-
-  // Weight for the two totals, thin for the three that make one of them up.
-  // No dashes: nothing on this chart accumulates, so every line describes one
-  // month and they belong on the same axis.
-  //
-  // The three cost lines carry their figure in the legend because the chart
-  // cannot. A balance of a few thousand dwarfs a £75 savings contribution, so
-  // those three lines land within a few pixels of each other and of the
-  // baseline — and three lines you cannot tell apart are worse than no lines.
-  // The last month is used as the steady state: bills can differ in the first
-  // month, and by the twelfth they are what they repeat at.
+  const { series, rangeMonths, startOffset, low, short } = data;
   const last = series[series.length - 1] || {};
+
+  const rangeChips = FORECAST_RANGES.map((r) => `
+    <option value="${r.value}"${Number(rangeMonths) === r.value ? ' selected' : ''}>${r.label}</option>
+  `).join('');
+
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
-    ['Spend', 'accent', '', last.spend],
-    ['Bills', 'danger', '', last.bills],
-    ['Savings', 'success', '', last.savings]
-  ].map(([label, tone, mod, value]) => `
-    <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}${
-      value > 0 ? ` <b>${currency(value)}</b>` : ''
-    }</span>
+    ['Spend', 'accent', ''],
+    ['Bills', 'danger', ''],
+    ['Savings', 'success', ''],
+    ['Income', 'success', '']
+  ].map(([label, tone, mod]) => `
+    <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
   `).join('');
 
+  // The window's own dates, so stepping back is never a mystery about what you
+  // are looking at.
+  const from = data.days[0];
+  const to = data.days[data.days.length - 1];
+  const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  // Only true when the whole window sits behind today. A window that straddles
+  // today is mostly recorded but partly projected, and saying otherwise about
+  // it — while quoting a low point from its projected end — contradicts itself.
+  const allRecorded = series.length > 0 && series[series.length - 1].actual;
+
   return `
-    <p class="setting-hint" style="margin-bottom: 12px;">
-      ${hasAnything
-        ? `Each month starts from the ${currency(opening)} you hold now. This runs ${FORECAST_MONTHS} months forward.`
-        : `Nothing recorded yet, so nothing to project. Add income, bills or a goal and this fills in.`}
+    <div class="forecast-nav">
+      <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(-1)"
+              aria-label="Back one month"${startOffset >= 12 ? ' disabled' : ''}>&larr;</button>
+      <div class="forecast-when">
+        <div class="forecast-range">
+          <label class="form-label" for="forecast-range-select">Window</label>
+          <select class="form-input" id="forecast-range-select" onchange="setForecastRange(this.value)">
+            ${rangeChips}
+          </select>
+        </div>
+        <div class="forecast-span">${escapeHTML(fmt(from))} &ndash; ${escapeHTML(fmt(to))}</div>
+      </div>
+      <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(1)"
+              aria-label="Forward one month"${startOffset <= 0 ? ' disabled' : ''}>&rarr;</button>
+    </div>
+
+    <canvas id="forecast-chart" class="chart-canvas" style="height: 240px;"></canvas>
+    <div class="split-legend">${legend}</div>
+
+    <p class="forecast-note${short ? ' forecast-note--short' : ''}">
+      ${short
+        ? `On these numbers you go under on <strong>${escapeHTML(short.label)}</strong>.`
+        : low
+          ? `Lowest point is <strong>${currency(low.balance)}</strong> on <strong>${escapeHTML(low.label)}</strong>.`
+          : 'Nothing to project yet.'}
+      ${allRecorded ? ' These are recorded days, not a forecast.' : ''}
     </p>
-    ${hasAnything ? `
-      <canvas id="forecast-chart" class="chart-canvas" style="height: 230px;"></canvas>
-      <div class="split-legend">${legend}</div>
-      ${forecastVerdict(tight, opening)}
-    ` : ''}
+
     <div class="setting-row" style="margin-top: 14px;">
       <div class="setting-text">
         <div class="setting-label">Monthly spending</div>
         <div class="setting-hint">
           ${data.overridden
             ? 'Set by you'
-            : `Averaged from your last ${FORECAST_SPEND_MONTHS} months`}
+            : `Averaged from your last ${FORECAST_SPEND_MONTHS} complete months`}
         </div>
       </div>
       <div class="setting-control">
@@ -1955,15 +2152,6 @@ function renderForecastCard(data) {
       </div>
     </div>
   `;
-}
-
-// The one thing worth saying out loud: does a month's outgoings fit inside what
-// that month has available? Everything else is already on the chart.
-function forecastVerdict(tight, opening) {
-  if (tight) {
-    return `<p class="forecast-note forecast-note--short">From <strong>${escapeHTML(tight.label)}</strong> the projected costs are more than the month has to cover them.</p>`;
-  }
-  return `<p class="forecast-note">Every month covers its own costs, on top of the ${currency(opening)} you already hold.</p>`;
 }
 
 function round2(n) {
@@ -2002,6 +2190,8 @@ window.addEventListener('resize', () => {
 function drawForecastChart(data) {
   const canvas = document.getElementById('forecast-chart');
   if (!canvas) return;
+  const series = data.series;
+  if (!series.length) return;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
 
@@ -2026,64 +2216,98 @@ function drawForecastChart(data) {
   ctx.fillStyle = surface;
   ctx.fillRect(0, 0, w, h);
 
-  const padL = 8;
-  const padR = 8;
+  // Room on the left for the axis figures. This used to be 8px, because the
+  // chart had two figures in the corner and neither needed a gutter.
+  const padL = 42;
+  const padR = 10;
   const padT = 12;
-  const padB = 24;
+  const padB = 26;
   const plotW = w - padL - padR;
   const plotH = h - padT - padB;
 
-  // One scale. Every line here is money available to or leaving the same
-  // pocket in the same month, so they are directly comparable and belong
-  // together. Nothing accumulates, which is what makes that true — an earlier
-  // running-balance line ran to five figures while a month cost under two, and
-  // needed a second axis to be visible at all.
   const values = [];
-  for (const p of data.series) {
-    values.push(p.money, p.costs, p.spend, p.bills, p.savings);
-  }
-  let min = 0;
+  for (const p of series) values.push(p.balance, p.costs, p.spend, p.bills, p.savings, p.income);
+  let min = Math.min(0, ...values);
   let max = Math.max(0, ...values);
-  if (max === 0) max = 1;
-  max += max * 0.12;
+  if (max === min) max = min + 1;
+
+  // Round figures, so the gridlines land on numbers a person would actually
+  // say out loud. A scale topping out at £6,487 is not a figure anyone reads.
+  //
+  // The previous version computed its step a power of ten too small — £9,000
+  // became £100 increments and ninety overlapping labels stacked into an
+  // unreadable black smear down the left edge. A gridline has to be readable,
+  // not merely present, so the count is bounded as well as the size.
+  const niceStep = (span) => {
+    const raw = Math.max(1, span / 5);
+    const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+    const norm = raw / pow;
+    return (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * pow;
+  };
+  // A household balance is a thousands figure, so thousands are the default
+  // step; below that, fall back to a sensible round number.
+  let step = max >= 1500 ? 1000 : niceStep(max - min);
+  // Bounded either way. Past about ten lines they stop being reference and
+  // start being hatching.
+  while ((max - min) / step > 10) step *= 2;
+  if (step < 1) step = 1;
+
+  max = Math.ceil(max * 1.04 / step) * step;
+  min = Math.floor(min / step) * step;
+  if (max - min < step) max = min + step * 2;
 
   const y = (v) => padT + plotH - ((v - min) / (max - min)) * plotH;
-  const x = (i) => padL + (data.series.length === 1 ? plotW / 2 : (i / (data.series.length - 1)) * plotW);
+  const x = (i) => padL + (series.length === 1 ? plotW / 2 : (i / (series.length - 1)) * plotW);
 
-  // Zero gets a stronger line than the rest. The smaller monthly figures sit
-  // close enough to the baseline that with every gridline the same weight they
-  // read as negative — a £75 savings line and a £0 line look identical.
-  const borderStrong = css.getPropertyValue('--border-strong').trim() || grid;
-  ctx.lineWidth = 1;
-  [max / 2, max].forEach((v) => {
-    ctx.strokeStyle = grid;
+  // Faint grey lines every step, each with its figure. This is what makes a
+  // value readable off the chart rather than guessed at.
+  ctx.font = `10px ${bodyFont}`;
+  ctx.textBaseline = 'middle';
+  for (let v = min; v <= max + 0.5; v += step) {
+    const py = Math.round(y(v)) + 0.5;
+    const isZero = Math.abs(v) < 0.5;
+    ctx.strokeStyle = isZero ? css.getPropertyValue('--border-strong').trim() || grid : grid;
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(padL, Math.round(y(v)) + 0.5);
-    ctx.lineTo(w - padR, Math.round(y(v)) + 0.5);
+    ctx.moveTo(padL, py);
+    ctx.lineTo(w - padR, py);
     ctx.stroke();
-  });
-  ctx.strokeStyle = borderStrong;
-  ctx.beginPath();
-  ctx.moveTo(padL, Math.round(y(0)) + 0.5);
-  ctx.lineTo(w - padR, Math.round(y(0)) + 0.5);
-  ctx.stroke();
+    ctx.fillStyle = muted;
+    ctx.textAlign = 'right';
+    ctx.fillText(compactMoney(v), padL - 6, py);
+  }
 
-  ctx.font = `11px ${bodyFont}`;
-  ctx.fillStyle = muted;
-  ctx.textAlign = 'right';
-  ctx.fillText(compactMoney(max), w - padR, Math.max(9, y(max) - 4));
-  if (min < 0) ctx.fillText(compactMoney(min), w - padR, Math.min(h - padB - 4, y(min) + 12));
+  // Today. Everything left of this line happened; everything right of it is
+  // the forecast. Without it a chart of recorded days and a chart of projected
+  // ones look identical, which is how you end up reading a guess as a fact.
+  const todayIdx = series.findIndex((p) => !p.actual);
+  if (todayIdx > 0) {
+    const tx = Math.round(x(todayIdx)) + 0.5;
+    ctx.save();
+    ctx.setLineDash([3, 4]);
+    ctx.strokeStyle = muted;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(tx, padT);
+    ctx.lineTo(tx, padT + plotH);
+    ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = muted;
+    ctx.textAlign = 'left';
+    ctx.font = `10px ${bodyFont}`;
+    ctx.fillText('today', Math.min(tx + 4, w - padR - 26), padT + 7);
+  }
 
-  // Weight, not colour, separates the two totals from the three that make one
-  // of them up — savings is green like total money, bills is red like total est
-  // costs, so if the two weights were close the chart would read as three green
-  // lines and three red ones.
+  // Weight separates the two totals from the running totals that make one of
+  // them up — savings and income are green like total money, bills is red like
+  // total est costs.
   const lines = [
-    { key: 'money', colour: success, width: 3 },
-    { key: 'costs', colour: danger, width: 3 },
+    { key: 'balance', colour: success, width: 2.5 },
+    { key: 'costs', colour: danger, width: 2.5 },
     { key: 'spend', colour: accent, width: 1 },
     { key: 'bills', colour: danger, width: 1 },
-    { key: 'savings', colour: success, width: 1 }
+    { key: 'savings', colour: success, width: 1 },
+    { key: 'income', colour: success, width: 1 }
   ];
 
   ctx.lineJoin = 'round';
@@ -2092,7 +2316,7 @@ function drawForecastChart(data) {
     ctx.strokeStyle = line.colour;
     ctx.lineWidth = line.width;
     ctx.beginPath();
-    data.series.forEach((p, i) => {
+    series.forEach((p, i) => {
       const px = x(i);
       const py = y(p[line.key]);
       if (i === 0) ctx.moveTo(px, py);
@@ -2101,22 +2325,20 @@ function drawForecastChart(data) {
     ctx.stroke();
   }
 
-  // Month labels. Twelve of them don't fit a phone, so every other one goes
-  // unless there's genuinely room for all of them.
-  const step = plotW / data.series.length >= 26 ? 1 : 2;
+  // Date labels, thinned to whatever the width allows. A year of daily points
+  // is 365 marks and about a dozen labels.
+  const targetLabels = Math.max(2, Math.floor(plotW / 62));
+  const every = Math.max(1, Math.ceil(series.length / targetLabels));
   ctx.textAlign = 'center';
-  // The first and last months sit on the plot's edges, so their labels have to
-  // be pulled inward by half their own width or they render half off the canvas
-  // — which is how "Sept" and "Aug" came out as "ept" and "ug".
-  const clamp = (cx, text) => {
-    const half = ctx.measureText(text).width / 2;
-    return Math.min(Math.max(cx, half + 1), w - half - 1);
-  };
-  data.series.forEach((p, i) => {
-    if (i % step !== 0 && i !== data.series.length - 1) return;
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `10px ${bodyFont}`;
+  for (let i = 0; i < series.length; i += every) {
+    const label = series[i].label;
+    const half = ctx.measureText(label).width / 2;
+    const cx = Math.min(Math.max(x(i), padL + half), w - padR - half);
     ctx.fillStyle = muted;
-    ctx.fillText(p.label, clamp(x(i), p.label), h - 8);
-  });
+    ctx.fillText(label, cx, h - 9);
+  }
 }
 
 // Axis figures are estimates of a total, so they can run to five figures. The
