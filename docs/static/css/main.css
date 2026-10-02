@@ -1147,6 +1147,27 @@ body {
   background: var(--accent-muted);
 }
 
+/* Rows that read as a three-line table rather than as two blocks. Both columns
+   run top to bottom with their last line against the bottom of the row, so
+   title pairs with amount, date with timing, and category with the icons. */
+.item-row--lines {
+  align-items: stretch;
+}
+
+.item-row--lines .item-row-main {
+  align-items: stretch;
+}
+
+.item-row--lines .item-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.item-row--lines .row-end {
+  justify-content: space-between;
+}
+
 .item-row-main {
   display: flex;
   align-items: center;
@@ -1173,12 +1194,24 @@ body {
 /* Date on one line, category and its lozenge on the next. Joined by a middot
    they made a single run of text that wrapped unpredictably and pushed the
    lozenge off the end of the row on a narrow phone. */
+/* The repeat toggle's label changes when you tap it, and "Repeat monthly" is
+   53px wider than "Monthly". Without a reserved width the button slid sideways
+   under the thumb on every tap and back again four seconds later, which is
+   what read as flickering. */
+.btn-frequency {
+  min-width: 142px;
+  white-space: nowrap;
+}
+
 .item-meta--sub {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 3px;
+  /* Tall enough for a lozenge (22px), so a row with one and a row without
+     have their category on the same line rather than 7px apart. */
+  min-height: 24px;
 }
 
 .item-amount {

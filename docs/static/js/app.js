@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.11.0';
+const APP_VERSION = '2.12.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -475,7 +475,6 @@ async function renderPage() {
 // Dashboard
 async function renderDashboard(container) {
   const token = renderToken;
-  await seedIfEmpty();
   
   const [spendItems, dueItems, savingsItems] = await Promise.all([
     getAll('spend'),
@@ -826,7 +825,6 @@ function receiptChip(item, type) {
 // Spend Page
 async function renderSpend(container) {
   const token = renderToken;
-  await seedIfEmpty();
   
   const items = await getAll('spend');
   items.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -923,7 +921,7 @@ function renderSpendItems(items, total) {
     const projected = !!item.projected;
     const editable = !projected && item.id;
     return `
-      <div class="item-row${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="spend" data-edit-id="${item.id}"` : ''}>
+      <div class="item-row item-row--lines${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="spend" data-edit-id="${item.id}"` : ''}>
         <div class="item-row-main">
           <div class="item-info">
             <div class="item-title">${escapeHTML(item.title)}</div>
@@ -1046,7 +1044,6 @@ const BILL_FILTERS = [
 // Due Page
 async function renderDue(container) {
   const token = renderToken;
-  await seedIfEmpty();
   
   const [all, spendItems] = await Promise.all([getAll('due'), getAll('spend')]);
   all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
@@ -1124,7 +1121,7 @@ async function renderDue(container) {
         // act on it would be worse than leaving it inert.
         const editable = !projected && item.id;
         return `
-          <div class="item-row${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="${isPaid && item.date ? 'spend' : 'due'}" data-edit-id="${item.id}"` : ''} style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
+          <div class="item-row item-row--lines${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="${isPaid && item.date ? 'spend' : 'due'}" data-edit-id="${item.id}"` : ''} style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
@@ -1167,7 +1164,6 @@ async function renderDue(container) {
 // Savings Page
 async function renderSavings(container) {
   const token = renderToken;
-  await seedIfEmpty();
   
   const items = await getAll('savings');
   const totalCurrent = items.reduce((sum, i) => sum + i.current, 0);
@@ -1322,7 +1318,6 @@ function transferSummary(row) {
 // An income row. Tappable to edit, like the account rows beside it — the page
 // is one place for all three, so all three behave the same way.
 function renderIncomeRow(item) {
-  const recurring = !!item.frequency;
   return `
     <div class="item-row" onclick="openIncomeSetup('${item.id}')">
       <div class="item-row-main">
@@ -1339,7 +1334,7 @@ function renderIncomeRow(item) {
           <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
         </div>
         <div class="row-actions">
-          <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
+          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${incomeRepeatLabel(item)}</button>
           ${personDot(personById(item.personId))}
         </div>
       </div>
@@ -2651,11 +2646,8 @@ async function confirmRemoveAllData(btn) {
   // The PINs live in localStorage, not the database, and the people they
   // belonged to are gone — leaving them would lock the app against nobody.
   clearAllPersonPins();
-  // Deliberately no re-seed here. Put the sample data back and "delete all
-  // data" doesn't: every figure the user just wiped reappears, which is
-  // indistinguishable from the button not having worked. Empty is what empty
-  // means. The seed only ever runs on a first launch, from a database that has
-  // never had anything in it.
+  // Nothing is put back. There is no seed to re-arm: empty is what empty means,
+  // so "delete all data" and a first launch both land in the same place.
   closeModal();
   navigate('dashboard');
   showToast(`${result.total} items deleted`);
@@ -3159,23 +3151,44 @@ async function removeIncome(id) {
   await deleteItem('income', id);
 }
 
+// The repeat toggle offers the opposite of what its label currently says, so
+// tapping it changes the label. Three things made that read as broken rather
+// than as a confirmation: the button grew from 89px to 142px and slid sideways
+// under the thumb; a full re-render four seconds later replaced every row on
+// the page; and the "you have tapped this once" flag lived on the button
+// element, so anything else that re-rendered silently threw the offer away.
+// The state is here instead, the button reserves the width of its longest
+// label, and the timer only touches this one button.
+let incomeRepeatPending = null;
+let incomeRepeatTimer = null;
+
+function incomeRepeatLabel(item) {
+  const recurring = !!item.frequency;
+  if (incomeRepeatPending === item.id) return recurring ? 'Stop repeating' : 'Repeat monthly';
+  return recurring ? 'Monthly' : 'One-off';
+}
+
 async function toggleIncomeRecurring(id, btn) {
-  if (btn.dataset.confirming !== '1') {
-    const item = await getItem('income', id);
-    if (!item) return;
-    btn.dataset.confirming = '1';
-    btn.textContent = item.frequency ? 'Stop repeating' : 'Repeat monthly';
-    setTimeout(() => {
-      btn.dataset.confirming = '';
-      btn.textContent = item.frequency ? 'Monthly' : 'One-off';
-      renderPage();
-    }, 4000);
-    return;
-  }
   const item = await getItem('income', id);
   if (!item) return;
-  await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
-  renderPage();
+  clearTimeout(incomeRepeatTimer);
+  if (incomeRepeatPending === id) {
+    incomeRepeatPending = null;
+    await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
+    renderPage();
+    return;
+  }
+  incomeRepeatPending = id;
+  btn.textContent = incomeRepeatLabel(item);
+  incomeRepeatTimer = setTimeout(() => {
+    if (incomeRepeatPending !== id) return;
+    incomeRepeatPending = null;
+    const row = btn.closest('.item-row');
+    const again = row && row.querySelector('.btn-frequency');
+    // Only if it's still on screen: the row may have been re-rendered or the
+    // page changed, and writing to a detached node achieves nothing.
+    if (again && document.body.contains(again)) again.textContent = incomeRepeatLabel(item);
+  }, 4000);
 }
 
 // The categories offered, in the order they're meant to be scanned. Bills get
