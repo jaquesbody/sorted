@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.10.0';
+const APP_VERSION = '2.11.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -782,6 +782,10 @@ const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11
 // How a bill reads at a glance. Only counted down when the number is worth
 // acting on: a raw "522 days" for a bill due in 2028 told the user nothing
 // and looked like the app was incrementing something on its own.
+// How long until it's due, in words, at every distance. This used to switch to
+// "Scheduled" past a week, which is what replaced a countdown that was useful
+// at any distance — a row whose date said 12 Oct and whose value said
+// "Scheduled" told you nothing you couldn't already read off the date.
 function dueCountdown(dueDate) {
   const days = daysUntil(dueDate);
   if (days < 0) {
@@ -790,21 +794,33 @@ function dueCountdown(dueDate) {
   }
   if (days === 0) return '<span style="color: var(--warning)">Due today</span>';
   if (days <= 7) return `<span style="color: var(--warning)">In ${days} day${days === 1 ? '' : 's'}</span>`;
-  // Beyond a week the exact date under the title says it better than a
-  // number that ticks down in the background.
-  return '<span style="color: var(--text-secondary)">Scheduled</span>';
+  return `<span style="color: var(--text-secondary)">In ${days} days</span>`;
 }
 
-// Every spend/bill row carries the paperclip, so the row doesn't change shape
-// once a receipt is attached. Dimmed with no photo behind it, it doubles as
-// the way in to attach one — which is how entries added before receipts were
-// stored get their picture.
+// The line under a bill's amount: what the value is waiting for. A settled bill
+// says when it was paid; an outstanding one says how long it has left. One
+// line, one meaning, in the same place either way.
+function billTiming(item, isPaid) {
+  if (isPaid) {
+    // A settled bill is dated by its due date; the old Spend copy of a payment
+    // had a date of its own. Both are read, because anyone's existing paid rows
+    // are the Spend kind and anything paid from 2.8.3 is the other.
+    return `Paid on ${formatDate(item.date || item.dueDate)}`;
+  }
+  return dueCountdown(item.dueDate);
+}
+
+// The paperclip appears only when there is a picture. It used to sit on every
+// row, dimmed, doubling as the way in to attach one — which meant a list of
+// eight expenses had the same icon eight times and nothing said which ones had
+// a receipt. Attaching one is still in the row's editor, where the rest of the
+// row's detail is.
 function receiptChip(item, type) {
-  const has = !!item.receipt;
-  return `<button class="receipt-chip${has ? '' : ' receipt-chip--empty'}" data-action="${has ? 'receipt' : 'edit-receipt'}"
+  if (!item.receipt) return '';
+  return `<button class="receipt-chip" data-action="receipt"
             data-type="${type}" data-id="${item.id}"
-            title="${has ? 'View receipt' : 'Add a receipt'}"
-            aria-label="${has ? 'View receipt for' : 'Add a receipt for'} ${escapeHTML(item.title)}">${CLIP_SVG}</button>`;
+            title="View receipt"
+            aria-label="View receipt for ${escapeHTML(item.title)}">${CLIP_SVG}</button>`;
 }
 
 // Spend Page
@@ -911,22 +927,25 @@ function renderSpendItems(items, total) {
         <div class="item-row-main">
           <div class="item-info">
             <div class="item-title">${escapeHTML(item.title)}</div>
-            <div class="item-meta">
-              ${formatDate(item.date)} · ${escapeHTML(item.category)}
+            <div class="item-meta">${formatDate(item.date)}</div>
+            <div class="item-meta item-meta--sub">
+              ${escapeHTML(item.category)}
               ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
               ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
             </div>
           </div>
         </div>
-        <div class="row-actions">
-          ${personDot(personById(item.personId))}
-          ${editable ? receiptChip(item, 'spend') : ''}
-          ${projected ? '' : `<button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
-                  aria-pressed="${item.confirmed ? 'true' : 'false'}"
-                  aria-label="${item.confirmed ? 'Unconfirm' : 'Confirm'} ${escapeHTML(item.title)}"
-                  title="${item.confirmed ? 'Confirmed — tap to undo' : 'Confirm'}">${TICK_SVG}</button>`}
+        <div class="row-end">
+          <div class="value-cell">${currency(item.amount)}</div>
+          <div class="row-actions">
+            ${editable ? receiptChip(item, 'spend') : ''}
+            ${personDot(personById(item.personId))}
+            ${projected ? '' : `<button class="confirm-btn" data-action="toggle" data-type="spend" data-id="${item.id}"
+                    aria-pressed="${item.confirmed ? 'true' : 'false'}"
+                    aria-label="${item.confirmed ? 'Unconfirm' : 'Confirm'} ${escapeHTML(item.title)}"
+                    title="${item.confirmed ? 'Confirmed — tap to undo' : 'Confirm'}">${TICK_SVG}</button>`}
+          </div>
         </div>
-        <div class="value-cell">${currency(item.amount)}</div>
       </div>
     `;
   }).join('');
@@ -1109,8 +1128,9 @@ async function renderDue(container) {
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
-                <div class="item-meta">
-                  ${projected ? 'Due' : 'Due'} ${formatDate(item.dueDate)} · ${escapeHTML(item.category)}
+                <div class="item-meta">Due ${formatDate(item.dueDate)}</div>
+                <div class="item-meta item-meta--sub">
+                  ${escapeHTML(item.category)}
                   ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
                   ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
                 </div>
@@ -1119,17 +1139,11 @@ async function renderDue(container) {
             <div class="row-end">
               <div class="value-cell">
                 ${currency(item.amount)}
-                ${isPaid && (item.date || item.dueDate)
-                  // A settled bill is dated by its due date; the old Spend copy
-                  // of a payment had a date of its own. Both are read here,
-                  // because anyone's existing paid rows are the Spend kind and
-                  // anything paid from 2.8.3 is the other.
-                  ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date || item.dueDate)}</div>`
-                  : ''}
+                <div class="item-sub${isPaid ? ' item-sub--paid' : ''}">${billTiming(item, isPaid)}</div>
               </div>
               <div class="row-actions">
-                ${personDot(personById(item.personId))}
                 ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
+                ${personDot(personById(item.personId))}
                 ${isPaid
                   ? `<button class="confirm-btn is-done" data-action="unpaid" data-type="due" data-id="${item.id}"
                        aria-pressed="true" aria-label="Mark ${escapeHTML(item.title)} as not paid"
@@ -1142,11 +1156,7 @@ async function renderDue(container) {
             </div>
             ${projected
               ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
-              : isPaid
-                // No countdown on a settled bill. "Due today" beside a green
-                // tick says the bill is outstanding when it is not.
-                ? ''
-                : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
+              : ''}
           </div>
         `;
       }).join('')}
@@ -1329,8 +1339,8 @@ function renderIncomeRow(item) {
           <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
         </div>
         <div class="row-actions">
-          ${personDot(personById(item.personId))}
           <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
+          ${personDot(personById(item.personId))}
         </div>
       </div>
     </div>
@@ -2562,7 +2572,7 @@ function renderSettings(container) {
   container.innerHTML = `
     <div class="reports-grid">
       <div class="report-card">
-        <div class="setting-row setting-row--tight">
+        <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
             <div class="setting-label setting-label--title">Appearance</div>
           </div>
@@ -2745,7 +2755,7 @@ function peopleSettingsHtml() {
   const people = [...peopleCache.values()];
   const current = getCurrentPersonId();
   const rows = people.map((p) => `
-    <div class="setting-row setting-row--tight">
+    <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
       </div>
@@ -2760,7 +2770,7 @@ function peopleSettingsHtml() {
 
   return `
     ${rows}
-    <div class="setting-row setting-row--add setting-row--tight">
+    <div class="setting-row setting-row--add setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label setting-label--title">Add someone</div>
       </div>
@@ -2940,7 +2950,7 @@ function passcodeSettings() {
   // labelled row underneath meant the same fact stated twice, and the
   // explanation was long enough to push everything below it down a screen.
   const row = (label, hint) => `
-    <div class="setting-row setting-row--tight">
+    <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label setting-label--title">Passcode</div>
         ${hint ? `<div class="setting-hint">${hint}</div>` : ''}
@@ -3690,44 +3700,70 @@ function sameSeries(a, b) {
 // ambiguous. The series is carried by its upcoming row, so deleting that row
 // ended every future occurrence without saying so, while deleting a paid row
 // erased one month and carried on. Two named choices instead.
-async function confirmDeleteRecurringBill(id, btn) {
-  if (btn.dataset.confirming !== '1') {
-    btn.dataset.confirming = '1';
-    btn.textContent = 'Delete this bill or all of it?';
-    setTimeout(() => {
-      btn.dataset.confirming = '';
-      btn.textContent = 'Delete';
-    }, 4000);
-    return;
-  }
+async function confirmDeleteRecurringBill(id) {
   const bill = await getItem('due', id);
   if (!bill) return;
   const rows = (await getAll('due')).filter((r) => sameSeries(r, bill));
   const paid = rows.filter((r) => r.paid === true).length;
   const future = rows.filter((r) => r.paid !== true).length;
+  // Built outside the template: a nested backtick inside an interpolation is a
+  // syntax error, and this file has found that out twice already.
+  const paidNote = paid === 0 ? 'nothing paid' : paid + ' paid included';
 
+  // The old version wrote its question into the Delete button itself, so the
+  // button changed width mid-tap and the question was gone by the time you
+  // answered it. It's a dialog with the question as the prompt and the two
+  // meanings as tickboxes.
   openModal('Delete a repeating bill', `
-    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+    <p class="form-label" style="margin-bottom: 12px;">
       ${escapeHTML(bill.title)} repeats ${bill.frequency === 'annually' ? 'yearly' : 'every month'}.
-      There ${future === 1 ? 'is 1 more due' : `are ${future} more due`}, and ${paid} already paid.
+      Do you want to delete
     </p>
-    <button class="btn btn-ghost" style="width: 100%; margin-bottom: 8px;" onclick="deleteRecurringBill('${id}', false)">
-      This month only
-    </button>
-    <p class="setting-hint" style="margin-bottom: 14px;">
-      Removes this one and keeps the rest.
-      ${future === 1 ? 'The following month is added on so the bill carries on.' : ''}
-    </p>
-    <button class="btn btn-danger" style="width: 100%;" onclick="deleteRecurringBill('${id}', true)">
-      The whole thing
-    </button>
-    <p class="setting-hint" style="margin-top: 8px;">
-      Removes this and every month of it, paid ones included. Nothing is left to project.
-    </p>
+    <label class="choice-row">
+      <input type="checkbox" class="choice-box" id="delete-single" checked onchange="syncDeleteChoices(this.id)">
+      <span class="choice-text">
+        <span class="choice-label">This single bill only</span>
+        <span class="setting-hint">
+          Removes this one and keeps the rest${future === 1
+            ? '. The following month is added back on so the bill carries on.'
+            : '.'}
+        </span>
+      </span>
+    </label>
+    <div class="choice-or">or</div>
+    <label class="choice-row">
+      <input type="checkbox" class="choice-box" id="delete-series" onchange="syncDeleteChoices(this.id)">
+      <span class="choice-text">
+        <span class="choice-label">This bill and all recurring versions</span>
+        <span class="setting-hint">
+          Removes this and every month of it, ${paidNote}. Nothing is left to project.
+        </span>
+      </span>
+    </label>
+    <button class="btn btn-danger" style="width: 100%; margin-top: 18px;"
+            onclick="deleteRecurringBill('${id}')">Delete</button>
   `);
 }
 
+// Two tickboxes, one meaning: the question has two answers and no third, so
+// ticking either unticks the other and you can't end up with neither. The
+// changed box wins — unticking whichever was selected falls back to the other,
+// because leaving both empty would leave the Delete button with no answer.
+function syncDeleteChoices(changed) {
+  const single = document.getElementById('delete-single');
+  const series = document.getElementById('delete-series');
+  if (!single || !series) return;
+  if (changed === 'delete-series' && series.checked) single.checked = false;
+  else if (changed === 'delete-single' && single.checked) series.checked = false;
+  else if (!single.checked && !series.checked) single.checked = true;
+}
+
 async function deleteRecurringBill(id, wholeSeries) {
+  // No second argument means the dialog is on screen and the tickboxes have the
+  // answer. Called with one, it already knows.
+  if (wholeSeries === undefined) {
+    wholeSeries = !!(document.getElementById('delete-series') || {}).checked;
+  }
   const bill = await getItem('due', id);
   if (!bill) return;
   const rows = (await getAll('due')).filter((r) => sameSeries(r, bill));
@@ -3758,7 +3794,7 @@ async function deleteItemFromModal(type, id, btn) {
   // row and needs one confirmation.
   if (type === 'due') {
     const bill = await getItem('due', id);
-    if (bill && frequencyOf(bill)) return confirmDeleteRecurringBill(id, btn);
+    if (bill && frequencyOf(bill)) return confirmDeleteRecurringBill(id);
   }
   // Two-step confirm: no native dialogs, no accidental deletes.
   if (btn.dataset.confirming !== '1') {

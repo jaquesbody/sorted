@@ -445,7 +445,67 @@ body {
 /* Qualified with .btn so it beats the base button rule, which sits later in
    the file and was winning: it set border-width to 0 and left these as bare
    marks on the card. */
-.btn/* A card's heading sitting on the same line as its control. */
+/* Two tickboxes answering one question. Real checkboxes, so the keyboard and
+   the platform's own focus ring come for free. */
+.choice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.choice-row + .choice-or {
+  margin: 10px 0;
+}
+
+.choice-or {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.choice-box {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.choice-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.choice-text .setting-hint {
+  margin: 0;
+}
+
+/* A card's heading sitting on the same line as its control. */
+/* The default row gives its text a 200px basis and wraps, which put the
+   control under the heading — the Add-someone box by 50px, Appearance by 5px,
+   so it looked like it worked on my phone and not on yours. These rows have no
+   hint long enough to need a wrap, so they don't wrap at all. */
+.setting-row--inline {
+  flex-wrap: nowrap;
+}
+
+.setting-row--inline .setting-text {
+  flex: 0 1 auto;
+}
+
 .setting-label--title {
   font-size: 1.05rem;
   font-weight: 700;
@@ -468,6 +528,12 @@ body {
   display: block;
 }
 
+/* A square icon button. Sized and struck like the other controls so a row of
+   them lines up, and small enough that several sit on one line beside a name
+   where two word-buttons would have wrapped. */
+/* Qualified with .btn so it beats the base button rule, which sits later in
+   the file and was winning: it set border-width to 0 and left these as bare
+   marks on the card. */
 .btn-icon-sq {
   flex: 0 0 auto;
   width: 36px;
@@ -527,6 +593,8 @@ body {
   display: inline-flex;
 }
 
+/* The "i" that explains what a page is for. A dot rather than a button that
+   looks like it does something else on tap. */
 .info-tip-btn {
   width: 22px;
   height: 22px;
@@ -824,23 +892,25 @@ body {
    that read as a radio button, not a confirmation). */
 .confirm-btn {
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  /* The same 24px as a person dot, so the icons under an amount are one set of
+     small squares and the tick isn't a checkbox sitting next to an avatar. */
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
   background: transparent;
   border: 1.5px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: 6px;
   color: transparent;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .confirm-btn svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 3;
@@ -881,8 +951,11 @@ body {
 /* Receipt indicator on a list row */
 .receipt-chip {
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  /* 24px like the person dot and the tick box. At 30px the paperclip was the
+     odd one out in a row whose other two icons had just been sized down, so the
+     three didn't read as one set. */
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -895,8 +968,8 @@ body {
 }
 
 .receipt-chip svg {
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -907,17 +980,6 @@ body {
 .receipt-chip:hover {
   color: var(--accent-on-tint);
   background: var(--accent-muted);
-}
-
-/* No photo attached yet — the same icon, held back, so every row looks the
-   same and the way to add one is where you'd look for it. */
-.receipt-chip--empty {
-  color: var(--text-secondary);
-  opacity: 0.45;
-}
-
-.receipt-chip--empty:hover {
-  opacity: 1;
 }
 
 /* Receipt capture (camera / file upload with OCR pre-fill) */
@@ -1106,6 +1168,17 @@ body {
 .item-meta {
   font-size: 0.85rem;
   color: var(--text-secondary);
+}
+
+/* Date on one line, category and its lozenge on the next. Joined by a middot
+   they made a single run of text that wrapped unpredictably and pushed the
+   lozenge off the end of the row on a narrow phone. */
+.item-meta--sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 3px;
 }
 
 .item-amount {
