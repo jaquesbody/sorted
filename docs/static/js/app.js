@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.9.0';
+const APP_VERSION = '2.9.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -826,8 +826,11 @@ async function renderSpend(container) {
   container.innerHTML = `
     <div class="page-toolbar">
       ${monthNavHtml('spend', viewedDate)}
-      ${infoTipButton('spend-tip', 'Record your day-to-day or one-off spending here, then tick them off once paid. Bills that repeat every month belong on the Bills tab.')}
-      <button class="btn btn-primary" onclick="openAddModal('spend')">+ Spend</button>
+      <span class="toolbar-add">
+        ${infoTipButton('spend-tip', 'Record your day-to-day or one-off spending here, then tick them off once paid. Bills that repeat every month belong on the Bills tab.')}
+        <button class="btn btn-primary" onclick="openAddModal('spend')">+ Spend</button>
+      </span>
+
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px;">
@@ -1039,8 +1042,10 @@ async function renderDue(container) {
   container.innerHTML = `
     <div class="page-toolbar">
       ${monthNavHtml('due', dueViewedDate)}
-      ${infoTipButton('bill-tip', 'Record your recurring bills here, then tick them off once paid. Anything one-off and irregular belongs on the Spend tab.')}
-      <button class="btn btn-primary" onclick="openAddModal('due')">+ Bill</button>
+      <span class="toolbar-add">
+        ${infoTipButton('bill-tip', 'Record your recurring bills here, then tick them off once paid. Anything one-off and irregular belongs on the Spend tab.')}
+        <button class="btn btn-primary" onclick="openAddModal('due')">+ Bill</button>
+      </span>
     </div>
     
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
@@ -1108,16 +1113,19 @@ async function renderDue(container) {
                   : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
                         aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
             </div>
-            <div class="value-cell">${currency(item.amount)}</div>
-            ${isPaid && (item.date || item.dueDate)
-              // A settled bill is dated by its due date; the old Spend copy of a
-              // payment had a date of its own. Both are read here, because
-              // anyone's existing paid rows are the Spend kind and anything
-              // paid from 2.8.3 is the other.
-              ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date || item.dueDate)}</div>`
-              : projected
-                ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
-                : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
+            <div class="value-cell">
+              ${currency(item.amount)}
+              ${isPaid && (item.date || item.dueDate)
+                // A settled bill is dated by its due date; the old Spend copy of
+                // a payment had a date of its own. Both are read here, because
+                // anyone's existing paid rows are the Spend kind and anything
+                // paid from 2.8.3 is the other.
+                ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date || item.dueDate)}</div>`
+                : ''}
+            </div>
+            ${projected
+              ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
+              : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
           </div>
         `;
       }).join('')}
@@ -1575,10 +1583,16 @@ async function saveTransfer() {
 // two pages that mean different things by an entry: Spend is the one-offs,
 // Bills is what repeats.
 function infoTipButton(id, text) {
-  return `<span class="info-tip">
-    <button class="info-tip-btn" aria-label="What is this page for"
-            aria-describedby="${id}" onclick="toggleInfoTip('${id}', this)">i</button>
-    <span class="info-tip-body" id="${id}" role="tooltip">${escapeHTML(text)}</span>
+  // The dot and the button it belongs to are wrapped as one group, so the
+  // toolbar's own flex gap doesn't sit between them and the pair hugs the right
+  // edge together. The wrapper carries margin-left:auto, which is what puts the
+  // pair opposite the month stepper.
+  return `<span class="toolbar-add">
+    <span class="info-tip">
+      <button class="info-tip-btn" aria-label="What is this page for"
+              aria-describedby="${id}" onclick="toggleInfoTip('${id}', this)">i</button>
+      <span class="info-tip-body" id="${id}" role="tooltip">${escapeHTML(text)}</span>
+    </span>
   </span>`;
 }
 
@@ -2025,16 +2039,32 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const realBills = new Map();
   const realSpend = new Map();
   const realIncome = new Map();
-  for (const item of spendItems) add(realSpend, String(item.date || '').slice(0, 10), item.amount);
+  // A payment left in Spend by a pre-2.8.3 bill is a bill, not ordinary
+  // spending. Counting it as spend put a month of rent under the blue line and
+  // left Bills at zero, which put Total est costs exactly on top of Spend — and
+  // two lines drawn on identical pixels read as a third colour. The purple
+  // line on the graph was that, not a mystery.
+  for (const item of spendItems) {
+    if (item.paid === true) continue;
+    add(realSpend, String(item.date || '').slice(0, 10), item.amount);
+  }
   for (const item of incomeItems) add(realIncome, String(item.date || '').slice(0, 10), item.amount);
   // Paid bills only, so this agrees with accountBalances, which also only
   // deducts bills that have actually been paid. Counting an unpaid one would
   // mean the forecast started from a different balance than the balance card
   // shows, which is the sort of disagreement nobody notices until the numbers
   // are £500 apart.
+  //
+  // Both shapes of a paid bill count: a settled row from 2.8.3 onwards, and the
+  // payment copy older bills leave in Spend. Without the second, every month
+  // anyone paid bills before this release reads as having no bills at all.
   for (const item of dueItems) {
     if (item.paid !== true) continue;
     add(realBills, String(item.dueDate || '').slice(0, 10), item.amount);
+  }
+  for (const item of spendItems) {
+    if (item.paid !== true || !item.dueDate) continue;
+    add(realBills, String(item.dueDate).slice(0, 10), item.amount);
   }
 
   // What's coming. Built per month so a recurring bill lands on its own day,
@@ -2386,12 +2416,19 @@ function drawForecastChart(data) {
   // Weight separates the two totals from the parts that make one of them up —
   // bills is red like total est costs, so colour alone will not tell them
   // apart.
+  const sameSeries = (a, b) => series.every((p) => Math.abs(p[a] - p[b]) < 0.005);
+  // Where a total and the part that makes it up are the same number — a window
+  // with no bills at all, say — drawing both puts one line exactly on the other
+  // and the overlap reads as a third colour that is not in the legend. The
+  // bold one is skipped, since the thin one is on top of it anyway.
+  const costsHidden = sameSeries('costs', 'spend') && sameSeries('costs', 'bills');
+
   const lines = [
     { key: 'balance', colour: success, width: 2.5 },
-    { key: 'costs', colour: danger, width: 2.5 },
+    costsHidden ? null : { key: 'costs', colour: danger, width: 2.5 },
     { key: 'spend', colour: accent, width: 1 },
     { key: 'bills', colour: danger, width: 1 }
-  ];
+  ].filter(Boolean);
 
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
@@ -2664,23 +2701,43 @@ async function toggleNotifications(switchEl) {
   renderPage();
 }
 
+// Two marks rather than two words. "Set PIN" and "Remove" are wide enough that
+// they wrap onto a second line on a phone, leaving a card of mostly empty space
+// with the person's name stranded on its own. A keypad grid and a bin say the
+// same thing in a square, so the row stays one line.
+const KEYPAD_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+  stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="3.5" y="2.5" width="17" height="19" rx="2.5"></rect>
+  <path d="M7.5 6.5h.01M12 6.5h.01M16.5 6.5h.01M7.5 10.5h.01M12 10.5h.01M16.5 10.5h.01M7.5 14.5h.01M12 14.5h.01M16.5 14.5h.01M8 18.5h8"></path>
+</svg>`;
+
+const BIN_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"
+  stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M4 6.5h16M9.5 6.5V4.8A1.3 1.3 0 0 1 10.8 3.5h2.4a1.3 1.3 0 0 1 1.3 1.3v1.7"></path>
+  <path d="M6.5 6.5 7.4 19a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4l.9-12.5"></path>
+  <path d="M10.5 10v6.5M13.5 10v6.5"></path>
+</svg>`;
+
 function peopleSettingsHtml() {
   const people = [...peopleCache.values()];
   const current = getCurrentPersonId();
   const rows = people.map((p) => `
-    <div class="setting-row">
+    <div class="setting-row setting-row--tight">
       <div class="setting-text">
         <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
       </div>
       <div class="setting-control">
-        <button class="btn btn-ghost" onclick="openPersonPinModal('${p.id}')">${hasPersonPin(p.id) ? 'Change PIN' : 'Set PIN'}</button>
-        <button class="btn btn-ghost" onclick="removePersonFromSettings('${p.id}', this)">Remove</button>
+        <button class="btn btn-icon-sq" aria-label="${hasPersonPin(p.id) ? 'Change' : 'Set'} ${escapeHTML(p.name)}'s PIN"
+                title="${hasPersonPin(p.id) ? 'Change PIN' : 'Set PIN'}"
+                onclick="openPersonPinModal('${p.id}')">${KEYPAD_SVG}</button>
+        <button class="btn btn-icon-sq" aria-label="Remove ${escapeHTML(p.name)}"
+                title="Remove" onclick="removePersonFromSettings('${p.id}', this)">${BIN_SVG}</button>
       </div>
     </div>`).join('');
 
   return `
     ${rows}
-    <div class="setting-row">
+    <div class="setting-row setting-row--add">
       <div class="setting-text">
         <div class="setting-label">Add someone</div>
       </div>

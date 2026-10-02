@@ -377,6 +377,12 @@ body {
   text-align: right;
 }
 
+/* A bill's "Paid 29 Sept" line rides with the amount rather than under the
+   title, so the left of the row is title and nothing else. */
+.value-cell .item-sub--paid {
+  text-align: right;
+}
+
 /* Actions sit left of the value, never inside it. A tick that shifts the number
    it belongs to is the clearest possible way to lose a row's reading. */
 .row-actions {
@@ -385,6 +391,10 @@ body {
   gap: 8px;
   flex: 0 0 auto;
   margin-right: 10px;
+  /* The slack between the title and the icons goes here, so the icons sit next
+     to the value rather than halfway across the row. Every tab uses this one
+     class, which is what makes the placement the same on all of them. */
+  margin-left: auto;
 }
 
 /* A goal's tick and its person's dot stacked above one another, which is how
@@ -392,6 +402,8 @@ body {
    the column of icons lines up whatever is or isn't reached. */
 .row-actions--stack {
   flex-direction: column;
+  /* Left, not centre: the goal tick is a zero-width SVG, and centring it in the
+     column pushed it 12px right of the person dot below it. */
   align-items: flex-start;
   gap: 6px;
   /* Fixed, so a goal with a tick above its dot starts its icons in the same
@@ -418,6 +430,65 @@ body {
 
 /* The "i" that explains what a page is for. A dot rather than a button that
    looks like it does something else on tap. */
+/* A square icon button. Sized and struck like the other controls so a row of
+   them lines up, and small enough that several sit on one line beside a name
+   where two word-buttons would have wrapped. */
+/* Qualified with .btn so it beats the base button rule, which sits later in
+   the file and was winning: it set border-width to 0 and left these as bare
+   marks on the card. */
+.btn.btn-icon-sq {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.btn.btn-icon-sq:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn.btn-icon-sq svg {
+  display: block;
+  /* Without this the icon is a flex item and shrinks: it measured 4px wide
+     inside a 36px button, which is why the mark was invisible. */
+  flex: 0 0 auto;
+}
+
+/* Settings carries a lot of cards that were each mostly margin. Tightening the
+   row buys back roughly a screenful of scrolling without moving anything. */
+.setting-row--tight {
+  padding: 8px 0;
+}
+
+.report-card .setting-label {
+  margin-bottom: 4px;
+}
+
+/* The add-someone row sits under the list, so it needs a little air above. */
+.setting-row--add {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The add button and the dot that explains the page, as one group pinned to
+   the right of the toolbar. */
+.toolbar-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .info-tip {
   position: relative;
   flex: 0 0 auto;
@@ -490,18 +561,19 @@ body {
   position: relative;
 }
 
-.page-toolbar > .info-tip {
-  position: static;
-}
-
-.page-toolbar > .info-tip .info-tip-body {
+/* Anchored to the dot, not to the toolbar. The dot is always in the right-hand
+   group beside the add button, so a panel that grows leftwards from it always
+   has room. Anchoring to the whole toolbar instead put the panel's right edge
+   past the toolbar's by 29px on a 412px screen. */
+.toolbar-add .info-tip-body {
   left: auto;
-  right: 4px;
+  /* A touch past the dot, towards the button it belongs to. */
+  right: -6px;
   transform: translateY(-4px);
   max-width: min(272px, calc(100vw - 24px));
 }
 
-.page-toolbar > .info-tip .info-tip-body.is-open {
+.toolbar-add .info-tip-body.is-open {
   transform: translateY(0);
 }
 
@@ -1018,6 +1090,9 @@ body {
   align-items: baseline;
   gap: 12px;
   margin: 24px 0 10px;
+  /* Matches the row's own padding, so a heading total and the values under it
+     share one right edge instead of sitting 20px apart. */
+  padding: 0 20px;
 }
 
 .section-head:first-of-type {
@@ -1159,7 +1234,7 @@ body {
 }
 
 /* The tick added to a reached goal. Sits above the person dot rather than
-   beside it: one fixed-width column, so the two marks line up down the page
+   beside it: one fixed-width column, so the two marks line up down the page. */
 .goal-tick {
   display: inline-flex;
   align-items: center;
@@ -1489,7 +1564,9 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  /* Was 20px with no margin below, so a screen of settings was mostly padding. */
+  padding: 18px;
+  margin-bottom: 14px;
 }
 
 .report-title {
@@ -1958,11 +2035,17 @@ body.is-locked {
   
   .app-topbar {
     display: flex;
+    /* The status bar is an overlay now, not a layout row. Padding the topbar by
+       the inset puts the title below the clock instead of behind it, and the
+       content is offset by the same amount so nothing hides underneath. */
+    height: calc(52px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: border-box;
   }
 
   .content {
     margin-left: 60px;
-    margin-top: 52px;
+    margin-top: calc(52px + env(safe-area-inset-top, 0px));
     padding: 15px;
   }
   
