@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.12.0';
+const APP_VERSION = '2.13.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -328,7 +328,18 @@ function navigate(page) {
   document.querySelectorAll('.nav-item').forEach((i) => {
     i.classList.toggle('active', i.dataset.page === page);
   });
-  renderPage();
+  // A tab opens at its own top. Inheriting the offset you left the last tab at
+  // dropped you into the middle of a page you had never seen — the worst on the
+  // longest one, Reports, where you land on a chart with no heading above it.
+  scrollToTop();
+  renderPage().then(scrollToTop, scrollToTop);
+}
+
+function scrollToTop() {
+  window.scrollTo(0, 0);
+  // The modal and the side panels scroll in their own right, and a leftover
+  // offset in either shows up as a page that looks half-open.
+  document.querySelectorAll('.modal-content, .modal').forEach((el) => { el.scrollTop = 0; });
 }
 
 // Navigation — delegated, so the cloned bottom-bar copy used by the
@@ -2147,7 +2158,15 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   // The balance at the window's first day. Today's balance already contains
   // everything recorded up to today, so walking backwards means adding back
   // what was taken out and removing what was put in.
-  const currentBalance = balances.reduce((n, b) => n + b.balance, 0);
+  // Money already set aside in a goal has left your available balance, so it
+  // isn't part of "what you'd have". A goal tied to an account is already out of
+  // that account's balance; one with no account never was, and was counting as
+  // spendable from money that is sitting in the jar. Both come off here, once.
+  const setAside = savingsItems.reduce((n, goal) => {
+    const backed = goal.accountId && balances.some((b) => b.id === goal.accountId);
+    return backed ? n : n + (goal.current || 0);
+  }, 0);
+  const currentBalance = balances.reduce((n, b) => n + b.balance, 0) - setAside;
   const startISO = localISO(start);
   let running = currentBalance;
   for (const d of days) {
@@ -2194,10 +2213,14 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
       }
     }
 
-    // Savings is money in a jar, not money spent: it arrives rather than
-    // leaves. That is why Total est costs is bills plus spend and this is not
-    // in it.
-    running += income + savings - bills - spend;
+    // Putting money in a jar takes it out of your available balance, so it
+    // leaves Total money rather than arriving in it. It was added here, on the
+    // reasoning that a jar isn't spending — true of Total est costs, which is
+    // bills plus spend and has never included savings, but not true of what
+    // you'd have: a plan to save £200 a month is £200 a month you will not
+    // spend, and adding it back reported a balance the money can't reach.
+    // Savings still isn't a cost, so it stays out of Total est costs.
+    running += income - savings - bills - spend;
     cumIncome += income;
     cumSavings += savings;
 
@@ -3342,9 +3365,9 @@ function buildForm(type, editId = null, existingCategory = null) {
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Monthly (£) — leave blank to work it out</label>
+        <label class="form-label">Monthly (£) — blank works it out</label>
         <input type="number" class="form-input" id="form-monthly" step="0.01" min="0"
-               placeholder="Worked out from what's left and the time remaining">
+               placeholder="What's left, over 12 months">
       </div>
       <div class="form-group">
         <label class="form-label">Category</label>

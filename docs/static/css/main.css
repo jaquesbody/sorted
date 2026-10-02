@@ -1194,12 +1194,12 @@ body {
 /* Date on one line, category and its lozenge on the next. Joined by a middot
    they made a single run of text that wrapped unpredictably and pushed the
    lozenge off the end of the row on a narrow phone. */
-/* The repeat toggle's label changes when you tap it, and "Repeat monthly" is
-   53px wider than "Monthly". Without a reserved width the button slid sideways
-   under the thumb on every tap and back again four seconds later, which is
-   what read as flickering. */
+/* The repeat toggle is sized to its own label rather than to a fixed width. A
+   reserved 142px — the width of the longest label, "Repeat monthly" — fitted
+   every state but left "Monthly" floating in a box of empty space. The label
+   changes on tap, so the outline resizes with it; that reads as the control
+   doing what it says rather than as one box with three texts in it. */
 .btn-frequency {
-  min-width: 142px;
   white-space: nowrap;
 }
 
