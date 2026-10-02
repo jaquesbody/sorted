@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.9.1';
+const APP_VERSION = '2.10.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -564,8 +564,16 @@ async function renderDashboard(container) {
     </div>
   `;
   
+  // Bills count towards the month they were paid in. Until 2.8.3 paying a bill
+  // wrote a payment into Spend and the trend picked it up for free; when that
+  // stopped, a month where the only activity was paying bills went blank —
+  // which is exactly the month a trend is most worth looking at.
+  const paidBills = dueItems
+    .filter((d) => d.paid === true && d.dueDate)
+    .map((d) => ({ ...d, date: d.dueDate, confirmed: true }));
+
   // Draw simple bar chart
-  drawTrendChart(spendItems, dashViewedDate);
+  drawTrendChart([...spendItems, ...paidBills], dashViewedDate);
 }
 
 function groupByCategory(items, amountKey) {
@@ -816,7 +824,12 @@ async function renderSpend(container) {
   // stepping through the months shows what they'll hold. Projections sit
   // outside the totals: a forecast isn't money spent, and adding it to "Monthly
   // Total" would quietly overstate what has happened.
-  const projections = projectionsForMonth(items, viewedDate, 'date');
+  // No projections on Spend. A recurring entry used to project its next
+  // occurrence here, and since it was inert there was nothing to tap — a row
+  // that looked like an entry you couldn't open. Spend is for the one-offs;
+  // anything that repeats belongs on Bills, which projects there and is
+  // payable.
+  const projections = [];
   const monthItems = applySpendFilter(inMonth);
   const yearItems = applySpendFilter(inYear);
   const monthTotal = monthItems.reduce((sum, i) => sum + i.amount, 0);
@@ -1092,7 +1105,7 @@ async function renderDue(container) {
         // act on it would be worse than leaving it inert.
         const editable = !projected && item.id;
         return `
-          <div class="item-row${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="${isPaid ? 'spend' : 'due'}" data-edit-id="${item.id}"` : ''} style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
+          <div class="item-row${projected ? ' item-row--projected' : ''}"${editable ? ` data-edit-type="${isPaid && item.date ? 'spend' : 'due'}" data-edit-id="${item.id}"` : ''} style="${isOverdueItem ? 'border-color: var(--danger);' : ''}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
@@ -1103,29 +1116,37 @@ async function renderDue(container) {
                 </div>
               </div>
             </div>
-            <div class="row-actions">
-              ${personDot(personById(item.personId))}
-              ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
-              ${isPaid
-                ? `<span class="confirm-btn is-done" aria-hidden="true">${TICK_SVG}</span>`
-                : projected
-                  ? ''
-                  : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
-                        aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
-            </div>
-            <div class="value-cell">
-              ${currency(item.amount)}
-              ${isPaid && (item.date || item.dueDate)
-                // A settled bill is dated by its due date; the old Spend copy of
-                // a payment had a date of its own. Both are read here, because
-                // anyone's existing paid rows are the Spend kind and anything
-                // paid from 2.8.3 is the other.
-                ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date || item.dueDate)}</div>`
-                : ''}
+            <div class="row-end">
+              <div class="value-cell">
+                ${currency(item.amount)}
+                ${isPaid && (item.date || item.dueDate)
+                  // A settled bill is dated by its due date; the old Spend copy
+                  // of a payment had a date of its own. Both are read here,
+                  // because anyone's existing paid rows are the Spend kind and
+                  // anything paid from 2.8.3 is the other.
+                  ? `<div class="item-sub item-sub--paid">Paid ${formatDate(item.date || item.dueDate)}</div>`
+                  : ''}
+              </div>
+              <div class="row-actions">
+                ${personDot(personById(item.personId))}
+                ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
+                ${isPaid
+                  ? `<button class="confirm-btn is-done" data-action="unpaid" data-type="due" data-id="${item.id}"
+                       aria-pressed="true" aria-label="Mark ${escapeHTML(item.title)} as not paid"
+                       title="Paid — tap to undo">${TICK_SVG}</button>`
+                  : projected
+                    ? ''
+                    : `<button class="confirm-btn" data-action="paid" data-type="due" data-id="${item.id}"
+                          aria-pressed="false" aria-label="Mark ${escapeHTML(item.title)} as paid" title="Mark as paid">${TICK_SVG}</button>`}
+              </div>
             </div>
             ${projected
               ? `<div class="item-sub">Repeats ${item.frequency === 'annually' ? 'yearly' : 'monthly'}</div>`
-              : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
+              : isPaid
+                // No countdown on a settled bill. "Due today" beside a green
+                // tick says the bill is outstanding when it is not.
+                ? ''
+                : `<div class="item-sub">${dueCountdown(item.dueDate)}</div>`}
           </div>
         `;
       }).join('')}
@@ -1217,15 +1238,17 @@ async function renderSavings(container) {
                 <div class="item-meta">${escapeHTML(item.category)} · ${goalPct}% complete</div>
               </div>
             </div>
-            <div class="row-actions row-actions--stack">
-              ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${GOAL_TICK_SVG}</span>` : ''}
-              ${personDot(personById(item.personId))}
-            </div>
-            <div class="value-cell value-cell--wide">
-              <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
-              <div class="stat-card-sub">of ${currency(item.target)}</div>
-              <div class="stat-card-progress" style="margin-top: 8px;">
-                <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
+            <div class="row-end">
+              <div class="value-cell value-cell--wide">
+                <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
+                <div class="stat-card-sub">of ${currency(item.target)}</div>
+                <div class="stat-card-progress" style="margin-top: 8px;">
+                  <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
+                </div>
+              </div>
+              <div class="row-actions row-actions--stack">
+                ${done ? `<span class="goal-tick" role="img" aria-label="Goal reached" title="Goal reached">${GOAL_TICK_SVG}</span>` : ''}
+                ${personDot(personById(item.personId))}
               </div>
             </div>
           </div>
@@ -1300,13 +1323,15 @@ function renderIncomeRow(item) {
           </div>
         </div>
       </div>
-      <div class="row-actions">
-        ${personDot(personById(item.personId))}
-        <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
-      </div>
-      <div class="value-cell value-cell--wide">
-        <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
-        <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
+      <div class="row-end">
+        <div class="value-cell value-cell--wide">
+          <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
+          <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
+        </div>
+        <div class="row-actions">
+          ${personDot(personById(item.personId))}
+          <button class="btn btn-ghost" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${recurring ? 'Monthly' : 'One-off'}</button>
+        </div>
       </div>
     </div>
   `;
@@ -2537,10 +2562,9 @@ function renderSettings(container) {
   container.innerHTML = `
     <div class="reports-grid">
       <div class="report-card">
-        <h2 class="report-title">Appearance</h2>
-        <div class="setting-row">
+        <div class="setting-row setting-row--tight">
           <div class="setting-text">
-            <div class="setting-label">Theme</div>
+            <div class="setting-label setting-label--title">Appearance</div>
           </div>
           <div class="setting-control">
             ${themeSegment()}
@@ -2554,7 +2578,6 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Passcode</h2>
         ${passcodeSettings()}
       </div>
 
@@ -2737,12 +2760,12 @@ function peopleSettingsHtml() {
 
   return `
     ${rows}
-    <div class="setting-row setting-row--add">
+    <div class="setting-row setting-row--add setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label">Add someone</div>
+        <div class="setting-label setting-label--title">Add someone</div>
       </div>
       <div class="setting-control">
-        <input type="text" class="form-input" id="new-person-name" placeholder="Name" maxlength="40" style="width: 130px;">
+        <input type="text" class="form-input" id="new-person-name" placeholder="Name" maxlength="40" style="width: 118px;">
         <button class="btn btn-primary" onclick="addPersonFromSettings()">Add</button>
       </div>
     </div>
@@ -2856,11 +2879,33 @@ async function removePersonFromSettings(id, btn) {
   await renderPage();
 }
 
+const SUN_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+  <circle cx="12" cy="12" r="4.2"></circle>
+  <path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"></path>
+</svg>`;
+
+const MOON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M20 14.2A8.4 8.4 0 0 1 9.8 4 8.5 8.5 0 1 0 20 14.2Z"></path>
+</svg>`;
+
+const SCREEN_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+  stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <rect x="2.8" y="4" width="18.4" height="12.5" rx="2"></rect>
+  <path d="M8.5 20h7M12 16.5V20"></path>
+</svg>`;
+
+// Icons rather than the words, with the words kept for anyone who cannot see
+// them. The control is a labelled group, not a row of unlabelled buttons.
 function themeSegment() {
   const pref = getThemePreference();
-  const opt = (value, label) =>
-    `<button class="segmented-option ${pref === value ? 'active' : ''}" onclick="setThemePreference('${value}')">${label}</button>`;
-  return `<div class="segmented">${opt('light', 'Light')}${opt('dark', 'Dark')}${opt('system', 'System')}</div>`;
+  const opt = (value, label, icon) =>
+    `<button class="segmented-option segmented-option--icon" role="radio" aria-checked="${pref === value}"
+             aria-label="${label}" title="${label}" onclick="setThemePreference('${value}')">${icon}</button>`;
+  return `<div class="segmented segmented--icons" role="radiogroup" aria-label="Theme">
+    ${opt('light', 'Light', SUN_SVG)}${opt('dark', 'Dark', MOON_SVG)}${opt('system', 'System', SCREEN_SVG)}
+  </div>`;
 }
 
 function passcodeSettings() {
@@ -2891,34 +2936,25 @@ function passcodeSettings() {
     </div>
   ` : '';
 
-  if (!isPasscodeSet()) {
-    return `
-      <div class="setting-row">
-        <div class="setting-text">
-          <div class="setting-label">Require a passcode</div>
-          <div class="setting-hint">Ask for it when the app opens</div>
-        </div>
-        <div class="setting-control">
-          <button class="switch" role="switch" aria-checked="false" aria-label="Require a passcode"
-                  onclick="openPasscodeSetup()"></button>
-        </div>
-      </div>
-      ${lockBlock}
-    `;
-  }
-
-  return `
-    <div class="setting-row">
+  // The switch sits beside the card's own heading. Repeating it as a second
+  // labelled row underneath meant the same fact stated twice, and the
+  // explanation was long enough to push everything below it down a screen.
+  const row = (label, hint) => `
+    <div class="setting-row setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label">Passcode on</div>
+        <div class="setting-label setting-label--title">Passcode</div>
+        ${hint ? `<div class="setting-hint">${hint}</div>` : ''}
       </div>
       <div class="setting-control">
-        <button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
-                onclick="confirmRemovePasscode(this)"></button>
+        ${isPasscodeSet()
+          ? `<button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
+                   onclick="confirmRemovePasscode(this)"></button>`
+          : `<button class="switch" role="switch" aria-checked="false" aria-label="Set a passcode"
+                   onclick="openPasscodeSetup()"></button>`}
       </div>
-    </div>
-    ${lockBlock}
-  `;
+    </div>`;
+
+  return row() + lockBlock;
 }
 
 // Passcode setup is a modal rather than a field on the page: the toggle is the
@@ -3639,7 +3675,91 @@ async function saveItem(type, editId = null) {
   renderPage();
 }
 
+// What counts as "the same bill" when deciding whether a delete should take the
+// series with it. Matching on name alone would catch two different bills that
+// happen to share one; matching on name and amount and frequency is what a
+// household would recognise, and works on rows written before this existed.
+function sameSeries(a, b) {
+  return !!a && !!b
+    && a.title === b.title
+    && a.amount === b.amount
+    && frequencyOf(a) === frequencyOf(b);
+}
+
+// Deleting a recurring bill asked one question — delete? — and the answer was
+// ambiguous. The series is carried by its upcoming row, so deleting that row
+// ended every future occurrence without saying so, while deleting a paid row
+// erased one month and carried on. Two named choices instead.
+async function confirmDeleteRecurringBill(id, btn) {
+  if (btn.dataset.confirming !== '1') {
+    btn.dataset.confirming = '1';
+    btn.textContent = 'Delete this bill or all of it?';
+    setTimeout(() => {
+      btn.dataset.confirming = '';
+      btn.textContent = 'Delete';
+    }, 4000);
+    return;
+  }
+  const bill = await getItem('due', id);
+  if (!bill) return;
+  const rows = (await getAll('due')).filter((r) => sameSeries(r, bill));
+  const paid = rows.filter((r) => r.paid === true).length;
+  const future = rows.filter((r) => r.paid !== true).length;
+
+  openModal('Delete a repeating bill', `
+    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+      ${escapeHTML(bill.title)} repeats ${bill.frequency === 'annually' ? 'yearly' : 'every month'}.
+      There ${future === 1 ? 'is 1 more due' : `are ${future} more due`}, and ${paid} already paid.
+    </p>
+    <button class="btn btn-ghost" style="width: 100%; margin-bottom: 8px;" onclick="deleteRecurringBill('${id}', false)">
+      This month only
+    </button>
+    <p class="setting-hint" style="margin-bottom: 14px;">
+      Removes this one and keeps the rest.
+      ${future === 1 ? 'The following month is added on so the bill carries on.' : ''}
+    </p>
+    <button class="btn btn-danger" style="width: 100%;" onclick="deleteRecurringBill('${id}', true)">
+      The whole thing
+    </button>
+    <p class="setting-hint" style="margin-top: 8px;">
+      Removes this and every month of it, paid ones included. Nothing is left to project.
+    </p>
+  `);
+}
+
+async function deleteRecurringBill(id, wholeSeries) {
+  const bill = await getItem('due', id);
+  if (!bill) return;
+  const rows = (await getAll('due')).filter((r) => sameSeries(r, bill));
+
+  if (wholeSeries) {
+    for (const row of rows) await deleteItem('due', row.id);
+    showToast(`Removed ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`);
+  } else {
+    await deleteItem('due', id);
+    // Deleting the upcoming occurrence would otherwise end the series silently.
+    // Only put the next one back if the user hasn't already made one.
+    const alreadyScheduled = rows.some((r) => r.id !== id && r.dueDate > (bill.dueDate || ''));
+    if (bill.paid !== true && frequencyOf(bill) && !alreadyScheduled) {
+      await addItem('due', {
+        ...bill, paid: false,
+        dueDate: nextDueDate(bill.dueDate, bill.frequency)
+      });
+    }
+    showToast('Removed this month only');
+  }
+  currentReceipt = null;
+  closeModal();
+  renderPage();
+}
+
 async function deleteItemFromModal(type, id, btn) {
+  // A repeating bill asks which of the two it means; anything else is a single
+  // row and needs one confirmation.
+  if (type === 'due') {
+    const bill = await getItem('due', id);
+    if (bill && frequencyOf(bill)) return confirmDeleteRecurringBill(id, btn);
+  }
   // Two-step confirm: no native dialogs, no accidental deletes.
   if (btn.dataset.confirming !== '1') {
     btn.dataset.confirming = '1';
@@ -3662,6 +3782,25 @@ async function toggleConfirm(type, id) {
   item.confirmed = !item.confirmed;
   await updateItem(type, item);
   renderPage();
+}
+
+// Putting a bill back to unpaid. Two shapes have to be handled: a settled row
+// from 2.8.3 onwards, and a payment copy left in Spend by the old model, where
+// undoing means deleting the copy and letting the bill come back.
+async function unpayBill(id) {
+  const bill = await getItem('due', id);
+  if (bill && bill.paid === true) {
+    await updateItem('due', { ...bill, paid: false });
+    showToast('Back to unpaid');
+    await renderPage();
+    return;
+  }
+  const twin = (await getAll('spend')).find((s) => s.paid === true && s.dueDate === bill?.dueDate);
+  if (twin) {
+    await deleteItem('spend', twin.id);
+    showToast('Back to unpaid');
+  }
+  await renderPage();
 }
 
 async function markPaid(id) {
@@ -3835,6 +3974,7 @@ document.getElementById('content').addEventListener('click', (e) => {
     const id = action.dataset.id;
     if (action.dataset.action === 'toggle') toggleConfirm(action.dataset.type, id);
     else if (action.dataset.action === 'paid') markPaid(id);
+    else if (action.dataset.action === 'unpaid') unpayBill(id);
     else if (action.dataset.action === 'receipt') viewItemReceipt(action.dataset.type, id);
     else if (action.dataset.action === 'edit-receipt') openEditModal(action.dataset.type, id);
     return;

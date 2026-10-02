@@ -388,13 +388,22 @@ body {
 .row-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   flex: 0 0 auto;
-  margin-right: 10px;
-  /* The slack between the title and the icons goes here, so the icons sit next
-     to the value rather than halfway across the row. Every tab uses this one
-     class, which is what makes the placement the same on all of them. */
+}
+
+/* The right-hand column of a row: the amount, with its icons stacked beneath it.
+   Everything to the left of this is title and metadata, so the amount is always
+   the last thing the eye lands on and always starts its digits in one column. */
+.row-end {
   margin-left: auto;
+  padding-left: 10px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
 }
 
 /* A goal's tick and its person's dot stacked above one another, which is how
@@ -436,7 +445,30 @@ body {
 /* Qualified with .btn so it beats the base button rule, which sits later in
    the file and was winning: it set border-width to 0 and left these as bare
    marks on the card. */
-.btn.btn-icon-sq {
+.btn/* A card's heading sitting on the same line as its control. */
+.setting-label--title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Icon-only segmented control. Fixed squares so three of them are the same
+   size whichever one is selected, and the selection reads by colour rather than
+   by the control changing width. */
+.segmented--icons .segmented-option--icon {
+  width: 40px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.segmented--icons .segmented-option--icon svg {
+  display: block;
+}
+
+.btn-icon-sq {
   flex: 0 0 auto;
   width: 36px;
   height: 36px;
@@ -2101,6 +2133,14 @@ body.is-locked {
 
   .item-row {
     padding: 13px 14px;
+  }
+
+  /* The section heading's total has to sit on the same edge as the row values
+     below it, and the rows lose 6px of horizontal padding at this width. Left
+     at the desktop inset the heading total sat 5px further right than every
+     number under it. */
+  .section-head {
+    padding: 0 14px;
   }
 
   .item-amount {

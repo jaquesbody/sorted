@@ -209,37 +209,33 @@ function nextDueDate(dueDate, frequency) {
 //     and the next one, real.
 async function markDuePaid(dueItem, payerId) {
   const { id, ...rest } = dueItem;
-  const db = await openDB();
-  const tx = db.transaction('due', 'readwrite');
-  const store = tx.objectStore('due');
-  const now = new Date().toISOString();
-
-  store.put({
-    ...rest,
-    id,
-    paid: true,
-    personId: payerId || rest.personId || null,
-    updatedAt: now
-  });
-
   const repeats = dueItem.frequency === 'monthly'
     || dueItem.frequency === 'annually'
     || dueItem.recurring === true;
 
   if (repeats) {
-    store.add({
-      ...rest,
-      // An id of its own, like any other new row — left to the store's counter
-      // this would be the one row in the app that came out as a number.
-      id: newId(),
-      paid: false,
-      personId: payerId || rest.personId || null,
-      dueDate: nextDueDate(rest.dueDate, dueItem.frequency),
-      createdAt: now
-    });
+    // Read before writing, on its own transaction. The next occurrence is only
+    // added if it is not already there: adding one unconditionally left two rows
+    // dated the same day whenever the following month had been entered by hand,
+    // and the month's total counted that bill twice.
+    const next = nextDueDate(rest.dueDate, dueItem.frequency);
+    const already = (await getAll('due')).some((r) => r.dueDate === next);
+    if (!already) {
+      await addItem('due', {
+        ...rest,
+        paid: false,
+        personId: payerId || rest.personId || null,
+        dueDate: next
+      });
+    }
   }
 
-  await txDone(tx);
+  await updateItem('due', {
+    ...rest,
+    id,
+    paid: true,
+    personId: payerId || rest.personId || null
+  });
 }
 
 // Everything, for the backup. Driven off STORES so a new store can't be
