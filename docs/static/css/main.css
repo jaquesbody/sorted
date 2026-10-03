@@ -1633,6 +1633,16 @@ body {
   flex: 0 1 auto;
 }
 
+/* A button inside a sentence of explanatory text — the permission state line.
+   Full height would break the line's leading, so it's sized to sit in it. */
+.btn-tiny {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
 .form-input:focus {
   border-color: var(--accent);
 }

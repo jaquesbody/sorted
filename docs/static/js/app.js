@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.15.0';
+const APP_VERSION = '2.16.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2744,8 +2744,66 @@ function notifySettingsHtml() {
       </div>
     </div>
 
-    <p class="setting-hint" style="margin-top: 10px;">${notifyDeliveryNote()}</p>
+    <p class="setting-hint" style="margin-top: 10px;">
+      ${notifyDeliveryNote()}<span id="notify-permission-state">${notifyPermissionLine()}</span>
+    </p>
   `;
+}
+
+// What the platform actually says, in plain words, with the button that fixes
+// it. This exists because a switch that silently refuses to move is the hardest
+// kind of bug to report: the person can see that notifications are allowed in
+// Android's own settings and reasonably conclude the app is lying about it.
+//
+// So the app says it too, and distinguishes the two cases that look identical
+// from the outside — "you said no" and "we can't ask" — instead of calling both
+// of them blocked.
+function notifyPermissionLine() {
+  if (!notifySupported()) return '';
+  if (!notifyIsNative() && Notification.permission === 'denied') return '';
+
+  const state = notifyPermissionCache
+    ? notifyPermissionCache.state
+    : (notifyIsNative() ? 'checking' : Notification.permission);
+
+  if (state === 'granted') {
+    const any = isNotifyEnabled() || isSpendNudgeEnabled() || isGoalNudgeEnabled();
+    return any ? '' : '<br>Notifications are allowed. Switch one on above.';
+  }
+  if (state === 'checking' || state === 'unknown') return '';
+  if (state === 'prompt' || state === 'prompt-with-rationale') {
+    return '<br>Sorted has not asked for permission yet — switch one on above.';
+  }
+  if (state === 'unavailable') {
+    return `<br>Notifications are unavailable in this build (${escapeHTML(
+      (notifyPermissionCache && notifyPermissionCache.detail) || 'no reason given')}).`;
+  }
+  // Denied. On Android this is nearly always the app's notification switch being
+  // off rather than a refusal, and only Android Settings can change it.
+  return `<br><button class="btn btn-ghost btn-tiny" onclick="openAppNotificationSettings()">
+    Notifications are off for Sorted — open Android settings</button>`;
+}
+
+// Hands the user off to the system screen for this app's notifications.
+// Android 13+ can do this with an intent; on anything else the app settings
+// screen is the best available, and saying so beats a button that does nothing.
+function openAppNotificationSettings() {
+  try {
+    const cap = notifyCap();
+    if (cap && typeof cap.openAppNotificationSettings === 'function') {
+      return cap.openAppNotificationSettings();
+    }
+  } catch (err) { /* fall through to the message below */ }
+  showToast('Turn on notifications for Sorted in Android settings, then come back');
+}
+
+// Refreshes the line above. Called whenever the page settles after a toggle, so
+// it reports the state after the change rather than the state before it.
+async function refreshNotifyPermissionState() {
+  if (!notifySupported()) return;
+  notifyPermissionCache = await notificationPermission(false);
+  const el = document.getElementById('notify-permission-state');
+  if (el) el.innerHTML = notifyPermissionLine();
 }
 
 // "Reminders are on" and "a reminder will arrive at 8pm" are different claims,

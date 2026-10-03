@@ -260,12 +260,11 @@ async function goalsTouchedRecently() {
 
 async function notifyPermissionGranted() {
   if (notifyIsNative()) {
-    try {
-      const status = await notifyCap().checkPermissions();
-      return status.display === 'granted';
-    } catch (err) {
-      return false;
-    }
+    // Re-checked rather than trusting the cache: the user can change this in
+    // Android settings while the app is closed, and a stale 'granted' would
+    // schedule alarms the system silently drops.
+    const perm = await notificationPermission(false);
+    return perm.state === 'granted';
   }
   return typeof Notification !== 'undefined' && Notification.permission === 'granted';
 }
@@ -526,51 +525,99 @@ async function checkBillNotifications() {
 // Ask for permission, and turn the setting on only if it was actually granted.
 // Returning the outcome lets Settings say what happened instead of silently
 // showing a switch that does nothing.
-async function enableNotifications() {
-  if (!notifySupported()) return 'unsupported';
-  if (notifyIsNative()) {
-    let status;
-    try {
-      status = await notifyCap().requestPermissions();
-    } catch (err) {
-      return 'denied';
+// The permission, asked for and reported honestly.
+//
+// This used to be one try/catch around requestPermissions() that turned any
+// failure — a missing plugin, a rejected bridge call, anything — into the string
+// 'denied', and the toast then said "Notifications are blocked for Sorted". It
+// was reporting a user's refusal it had never been told about, so the real
+// reason could never be found from the outside. Every outcome is now a real
+// value from the platform, and "unavailable" is a separate answer from "denied".
+//
+// The re-check after the request matters too. On Android 13+ the plugin answers
+// with NotificationManager.areNotificationsEnabled() — the app's notification
+// switch in system settings — which is not the same thing as the runtime
+// permission, and is false for reasons the permission screen can't fix.
+let notifyPermissionCache = null;
+
+async function notificationPermission(request) {
+  if (!notifyIsNative()) {
+    if (typeof Notification === 'undefined') {
+      return { state: 'unavailable', detail: 'no Notification API' };
     }
-    if (status.display !== 'granted') return 'denied';
-    setNotifyEnabled(true);
-    await scheduleAllReminders();
-    return 'on';
+    if (!request) return { state: Notification.permission, detail: 'web' };
+    try {
+      const asked = await Notification.requestPermission();
+      return { state: asked || Notification.permission, detail: 'web' };
+    } catch (err) {
+      return { state: 'unavailable', detail: String((err && err.message) || err) };
+    }
   }
-  if (Notification.permission === 'granted') {
-    setNotifyEnabled(true);
-    return 'on';
-  }
-  if (Notification.permission === 'denied') return 'denied';
-  let result;
+
+  const cap = notifyCap();
   try {
-    result = await Notification.requestPermission();
+    // Already granted? Don't ask at all. Asking again is at best a no-op and on
+    // some versions re-prompts.
+    const before = await cap.checkPermissions();
+    if (before && before.display === 'granted') {
+      return { state: 'granted', detail: 'already granted' };
+    }
+    let asked = null;
+    if (request) {
+      asked = await cap.requestPermissions();
+    }
+    // Trust the re-check over the request's own answer: the two can disagree,
+    // and the re-check is what the scheduler itself will act on.
+    const after = await cap.checkPermissions();
+    const state = (after && after.display)
+      || (asked && asked.display)
+      || 'unknown';
+    return { state, detail: 'asked', asked: asked && asked.display };
   } catch (err) {
-    return 'denied';
+    // A plugin that isn't wired up is not a user who said no.
+    const detail = String((err && err.message) || err);
+    console.error('Notification permission check failed:', detail);
+    return { state: 'unavailable', detail };
   }
-  if (result === 'granted') {
-    setNotifyEnabled(true);
-    return 'on';
-  }
-  return 'denied';
 }
 
-// Toggling one of the two nudges needs the same permission as bills, and turns
-// the matching switch on only once it's actually been granted.
-async function enableNudge(kind, btn) {
-  const outcome = await enableNotifications();
-  if (outcome === 'on') {
-    if (kind === 'spend') setSpendNudgeEnabled(true);
-    else if (kind === 'goal') setGoalNudgeEnabled(true);
-  } else if (outcome === 'denied' && btn) {
-    btn.blur();
+// What to say about a permission state. On Android "denied" almost always means
+// the app's notification switch is off rather than a refusal, and the remedy is
+// a system-settings screen, not a second tap here.
+function permissionMessage(state) {
+  if (state === 'granted') return { ok: true, text: '' };
+  if (state === 'unavailable') {
+    return { ok: false, text: 'Notifications are not available in this build' };
   }
-  await scheduleAllReminders();
-  renderPage();
-  if (outcome === 'denied') showToast('Notifications are blocked for Sorted');
+  if (state === 'prompt' || state === 'prompt-with-rationale') {
+    return { ok: false, text: 'Sorted still needs permission to post notifications' };
+  }
+  return {
+    ok: false,
+    text: notifyIsNative()
+      ? 'Turn on notifications for Sorted in Android settings'
+      : 'Notifications are blocked for this site'
+  };
+}
+
+// Switching ONE reminder on. Permission is acquired first, but the caller
+// decides which flag gets set — they used to share a function that always set
+// the bills flag, so turning on the spending nudge silently turned on bill
+// reminders too.
+async function turnReminderOn(kind) {
+  const perm = await notificationPermission(true);
+  if (perm.state !== 'granted') return perm;
+  if (kind === 'bills') setNotifyEnabled(true);
+  else if (kind === 'spend') setSpendNudgeEnabled(true);
+  else if (kind === 'goal') setGoalNudgeEnabled(true);
+  return perm;
+}
+
+// Kept because the old call sites and any saved habit may still reach for it.
+// It now only handles bills.
+async function enableNotifications() {
+  const perm = await turnReminderOn('bills');
+  return perm.state === 'granted' ? 'on' : perm.state;
 }
 
 async function disableNotifications() {
@@ -583,21 +630,36 @@ async function disableNudge(kind) {
   await scheduleAllReminders();
 }
 
-async function toggleBillsReminders(btn) {
+const REMINDER_LABELS = { bills: 'Bill reminders', spend: 'Spending reminders', goal: 'Savings reminders' };
+
+async function toggleBillsReminders() {
   if (isNotifyEnabled()) {
     await disableNotifications();
-  } else {
-    await enableNotifications();
+    await scheduleAllReminders();
+    renderPage();
+    return;
   }
+  const perm = await turnReminderOn('bills');
   await scheduleAllReminders();
   renderPage();
+  notifyPermissionCache = perm;
+  if (perm.state === 'granted') showToast('Bill reminders on');
+  else showToast(permissionMessage(perm.state).text);
 }
 
-async function toggleNudge(kind, btn) {
+async function toggleNudge(kind) {
   const on = kind === 'spend' ? isSpendNudgeEnabled() : isGoalNudgeEnabled();
-  if (on) await disableNudge(kind);
-  else await enableNudge(kind, btn);
+  if (on) {
+    await disableNudge(kind);
+    renderPage();
+    return;
+  }
+  const perm = await turnReminderOn(kind);
+  await scheduleAllReminders();
   renderPage();
+  notifyPermissionCache = perm;
+  if (perm.state === 'granted') showToast(`${REMINDER_LABELS[kind]} on`);
+  else showToast(permissionMessage(perm.state).text);
 }
 
 async function changeNotifyTime(value) {
@@ -630,6 +692,14 @@ function initNotifications() {
       if (page) navigate(page);
     });
   } catch (err) { /* the app still works, taps just don't route */ }
+
+  // Ask once at boot so Settings can say the real state on first render rather
+  // than "checking", and so a background failure is logged once rather than
+  // on every tap.
+  notificationPermission(false).then((perm) => {
+    notifyPermissionCache = perm;
+    if (perm.state !== 'granted') console.warn('Sorted notification state:', perm);
+  });
 
   // Start the savings clock before the first plan, so the first run doesn't
   // either fire a nudge about goals that have been there for months or leave
