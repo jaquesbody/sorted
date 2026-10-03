@@ -13,6 +13,8 @@
    ============================================================================= */
 
 async function runOCR(imageFile, onProgress, onWorker) {
+  // Fetched on demand — see loadScriptOnce() in utils.js.
+  await loadScriptOnce('static/vendor/tesseract/tesseract.min.js');
   const worker = await Tesseract.createWorker('eng', 1, {
     workerPath: 'static/vendor/tesseract/worker.min.js',
     corePath: 'static/vendor/tesseract/core/tesseract-core-lstm.wasm.js',

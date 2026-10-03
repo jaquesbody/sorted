@@ -1,6 +1,10 @@
 /* Sorted v2 - Modern Finance Tracker */
 
+/* Every colour in the app comes from these tokens — dark is the default and
+   the only theme [data-theme] has to override. The Settings toggle sets the
+   attribute, index.html sets it before first paint so nothing flashes. */
 :root {
+  color-scheme: dark;
   --bg: #0d0d0f;
   --bg-surface: #1a1a1f;
   --bg-card: #222228;
@@ -9,12 +13,62 @@
   --accent: #3d8bfd;
   --accent-hover: #2563eb;
   --accent-muted: rgba(61, 139, 253, 0.15);
+  /* Accent-coloured text on an accent tint. The raw accent sits at 4.3:1
+     against its own tint, just under the 4.5:1 readable threshold, so text
+     over a tinted background uses this instead — lighter on dark, darker on
+     light. Bars and borders keep --accent, which has no contrast duty. */
+  --accent-on-tint: #7fb0ff;
+  --on-accent: #ffffff;
   --success: #22c55e;
+  --success-muted: rgba(34, 197, 94, 0.15);
   --warning: #f59e0b;
+  --warning-muted: rgba(245, 158, 11, 0.15);
   --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --danger-muted: rgba(239, 68, 68, 0.12);
+  --danger-line: rgba(239, 68, 68, 0.35);
   --border: #2a2a32;
+  --border-strong: #3b3b47;
   --radius: 8px;
+  /* One width for the month selector on every page that has one. Sized so the
+     longest month name ("September 2026") fits at the desktop font size
+     without truncating, and still leaves room for an action button on a
+     phone, where the font steps down. */
+  --month-nav-width: 232px;
+  /* Column behind the month the trend chart is focused on. --bg-surface
+     worked in dark but is the same white as the card in light, so it has to
+     be its own value. */
+  --chart-highlight: #2b2b33;
   --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --overlay: rgba(0, 0, 0, 0.6);
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --bg-surface: #ffffff;
+  --bg-card: #ffffff;
+  --text-primary: #16181d;
+  --text-secondary: #5b6070;
+  --accent: #1f6feb;
+  --accent-hover: #1859c4;
+  --accent-muted: rgba(31, 111, 235, 0.1);
+  --accent-on-tint: #1257c9;
+  --on-accent: #ffffff;
+  --success: #15803d;
+  --success-muted: rgba(21, 128, 61, 0.12);
+  --warning: #b45309;
+  --warning-muted: rgba(180, 83, 9, 0.12);
+  --danger: #d92d20;
+  --danger-hover: #b42318;
+  --danger-muted: rgba(217, 45, 32, 0.1);
+  --danger-line: rgba(217, 45, 32, 0.3);
+  --border: #e3e5ea;
+  --border-strong: #c7cbd4;
+  --month-nav-width: 232px;
+  --chart-highlight: #eef0f5;
+  --shadow: 0 6px 20px rgba(16, 24, 40, 0.1);
+  --overlay: rgba(18, 20, 26, 0.45);
 }
 
 * {
@@ -54,11 +108,6 @@ body {
   color: var(--accent);
 }
 
-.version {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-}
-
 /* Top bar — keeps the brand visible when the sidebar collapses (narrow/phone) */
 .app-topbar {
   display: none;
@@ -86,11 +135,18 @@ body {
   flex: 1;
 }
 
+/* A real <button> inside each <li> — role="button" on the li broke the list
+   for screen readers, and a button gives keyboard activation for free. */
 .nav-item {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   padding: 12px 20px;
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-align: left;
   cursor: pointer;
   transition: all 0.15s ease;
   color: var(--text-secondary);
@@ -103,7 +159,7 @@ body {
 
 .nav-item.active {
   background: var(--accent-muted);
-  color: var(--accent);
+  color: var(--accent-on-tint);
   border-left: 3px solid var(--accent);
 }
 
@@ -200,29 +256,37 @@ body {
 }
 
 .progress-spend { background: var(--accent); }
-.progress-due { background: var(--warning); }
+.progress-due { background: var(--danger); }
 .progress-savings { background: var(--success); }
 
 /* Category Breakdown */
+/* Grid, not flex: a long category name used to eat the bar (Entertainment
+   squeezed it to a stub) because the name column was only min-width. A fixed
+   name column keeps every bar starting at the same x with the same width —
+   which is the whole point of a bar chart — and the name itself truncates
+   (full text stays available via the title attribute). */
 .category-breakdown {
   margin-top: 15px;
 }
 
 .category-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 104px minmax(36px, 1fr) auto;
   align-items: center;
   gap: 10px;
   margin-bottom: 8px;
 }
 
 .category-name {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: var(--text-secondary);
-  min-width: 80px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .category-bar {
-  flex: 1;
   height: 6px;
   background: var(--border);
   border-radius: 3px;
@@ -231,28 +295,530 @@ body {
 
 .category-bar-fill {
   height: 100%;
+  /* A £0.60 category still shows a visible sliver rather than vanishing. */
+  min-width: 4px;
   background: var(--accent);
   border-radius: 3px;
+}
+
+/* A breakdown carries the colour of the thing it breaks down: spending blue,
+   bills red, savings green. Without this every bar in the app was the same
+   blue, so "Bills by Category" looked like a spending chart. */
+.category-bar-fill.tone-danger { background: var(--danger); }
+.category-bar-fill.tone-success { background: var(--success); }
+
+/* Who Spent What: the bar's length is the person's share of the household
+   total, and the two segments inside it are that person's own split between
+   spend and bills. The inner bar is a flex row so a split needs no
+   positioning — and so a 100%-spend row and a 0%-spend row are the same
+   element with a different second segment. */
+.split-bar {
+  display: flex;
+  height: 100%;
+  border-radius: 3px;
+  overflow: hidden;
+  /* A £0.60 person still shows a visible sliver rather than vanishing. */
+  min-width: 4px;
+}
+
+.split-seg {
+  height: 100%;
+}
+
+.split-seg.tone-accent { background: var(--accent); }
+.split-seg.tone-danger { background: var(--danger); }
+
+/* The legend the trend chart already sets the pattern for: the bar is
+   unreadable without it, since both halves are just coloured rectangles. */
+.split-legend {
+  display: flex;
+  /* Six keys do not fit a 412px phone on one row, and without wrapping the last
+     one renders half off the right edge rather than moving down. */
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-bottom: 14px;
+}
+
+.split-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* A figure inside a legend key, where the chart itself is too compressed to
+   show one. */
+.split-key b {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* Where a value sits in a row, everywhere in the app.
+   One class rather than an inline text-align on each row: continuity of
+   position is the whole point, and inline styles drift the moment someone
+   adds a row. Fixed minimum width so a £9.99 and a £1,204.00 still start their
+   digits in the same column. */
+.value-cell {
+  text-align: right;
+  min-width: 108px;
+  flex: 0 0 auto;
+  margin-left: 10px;
+}
+
+.value-cell--wide {
+  min-width: 132px;
+}
+
+/* The small explanatory line under a value shares the value's right edge, so
+   the two read as one unit rather than as two unrelated columns. */
+.value-cell .stat-card-sub {
+  text-align: right;
+}
+
+/* A bill's "Paid 29 Sept" line rides with the amount rather than under the
+   title, so the left of the row is title and nothing else. */
+.value-cell .item-sub--paid {
+  text-align: right;
+}
+
+/* Actions sit left of the value, never inside it. A tick that shifts the number
+   it belongs to is the clearest possible way to lose a row's reading. */
+.row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* The right-hand column of a row: the amount, with its icons stacked beneath it.
+   Everything to the left of this is title and metadata, so the amount is always
+   the last thing the eye lands on and always starts its digits in one column. */
+.row-end {
+  margin-left: auto;
+  padding-left: 10px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+/* A goal's tick and its person's dot stacked above one another, which is how
+   they were before the value moved to the right: they share a left edge, so
+   the column of icons lines up whatever is or isn't reached. */
+.row-actions--stack {
+  flex-direction: column;
+  /* Left, not centre: the goal tick is a zero-width SVG, and centring it in the
+     column pushed it 12px right of the person dot below it. */
+  align-items: flex-start;
+  gap: 6px;
+  /* Fixed, so a goal with a tick above its dot starts its icons in the same
+     place as one with only a dot. Content-sized, the tick SVG is zero-width and
+     the column shifted by the width of a dot. */
+  width: 26px;
+  min-width: 26px;
+}
+
+/* The three Savings buttons share a row and share their text alignment. */
+.page-toolbar--wrap .btn {
+  text-align: center;
+  justify-content: center;
+}
+
+/* A section heading that goes somewhere says so. */
+.report-title--link {
+  cursor: pointer;
+}
+
+.report-title--link:hover {
+  color: var(--accent);
+}
+
+/* The "i" that explains what a page is for. A dot rather than a button that
+   looks like it does something else on tap. */
+/* A square icon button. Sized and struck like the other controls so a row of
+   them lines up, and small enough that several sit on one line beside a name
+   where two word-buttons would have wrapped. */
+/* Qualified with .btn so it beats the base button rule, which sits later in
+   the file and was winning: it set border-width to 0 and left these as bare
+   marks on the card. */
+/* Two tickboxes answering one question. Real checkboxes, so the keyboard and
+   the platform's own focus ring come for free. */
+.choice-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.choice-row + .choice-or {
+  margin: 10px 0;
+}
+
+.choice-or {
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.choice-box {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.choice-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.choice-text .setting-hint {
+  margin: 0;
+}
+
+/* A card's heading sitting on the same line as its control. */
+/* The default row gives its text a 200px basis and wraps, which put the
+   control under the heading — the Add-someone box by 50px, Appearance by 5px,
+   so it looked like it worked on my phone and not on yours. These rows have no
+   hint long enough to need a wrap, so they don't wrap at all. */
+.setting-row--inline {
+  flex-wrap: nowrap;
+}
+
+.setting-row--inline .setting-text {
+  flex: 0 1 auto;
+}
+
+.setting-label--title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* Icon-only segmented control. Fixed squares so three of them are the same
+   size whichever one is selected, and the selection reads by colour rather than
+   by the control changing width. */
+.segmented--icons .segmented-option--icon {
+  width: 40px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.segmented--icons .segmented-option--icon svg {
+  display: block;
+}
+
+/* A square icon button. Sized and struck like the other controls so a row of
+   them lines up, and small enough that several sit on one line beside a name
+   where two word-buttons would have wrapped. */
+/* Qualified with .btn so it beats the base button rule, which sits later in
+   the file and was winning: it set border-width to 0 and left these as bare
+   marks on the card. */
+.btn-icon-sq {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+
+.btn.btn-icon-sq:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn.btn-icon-sq svg {
+  display: block;
+  /* Without this the icon is a flex item and shrinks: it measured 4px wide
+     inside a 36px button, which is why the mark was invisible. */
+  flex: 0 0 auto;
+}
+
+/* Settings carries a lot of cards that were each mostly margin. Tightening the
+   row buys back roughly a screenful of scrolling without moving anything. */
+.setting-row--tight {
+  padding: 8px 0;
+}
+
+.report-card .setting-label {
+  margin-bottom: 4px;
+}
+
+/* The add-someone row sits under the list, so it needs a little air above. */
+.setting-row--add {
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The add button and the dot that explains the page, as one group pinned to
+   the right of the toolbar. */
+.toolbar-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.info-tip {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+}
+
+/* The "i" that explains what a page is for. A dot rather than a button that
+   looks like it does something else on tap. */
+.info-tip-btn {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.info-tip-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Absolutely placed so it can never push the month stepper or the add button
+   sideways when it opens. Sits below the dot and to its right, which on a
+   narrow phone keeps it on screen instead of off the edge. */
+.info-tip-body {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(-4px);
+  z-index: 60;
+  width: 250px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-elevated, var(--bg-surface));
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.info-tip-body.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* In a page toolbar the panel is positioned against the *toolbar*, not against
+   the little dot. Anchored to the dot it hung 22px off the left edge of a 412px
+   screen: a 250px panel aligned to a dot only 228px in. The toolbar's right edge
+   is the only edge on that row with room to the left of it.
+   .info-tip drops its own positioning so the toolbar can be the containing
+   block, and the width is capped by the viewport as a second guard. */
+.page-toolbar {
+  position: relative;
+}
+
+/* Anchored to the dot, not to the toolbar. The dot is always in the right-hand
+   group beside the add button, so a panel that grows leftwards from it always
+   has room. Anchoring to the whole toolbar instead put the panel's right edge
+   past the toolbar's by 29px on a 412px screen. */
+.toolbar-add .info-tip-body {
+  left: auto;
+  /* A touch past the dot, towards the button it belongs to. */
+  right: -6px;
+  transform: translateY(-4px);
+  max-width: min(272px, calc(100vw - 24px));
+}
+
+.toolbar-add .info-tip-body.is-open {
+  transform: translateY(0);
+}
+
+.split-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.split-swatch.tone-accent { background: var(--accent); }
+.split-swatch.tone-danger { background: var(--danger); }
+.split-swatch.tone-success { background: var(--success); }
+
+/* A bold legend key for the two totals — the same swatch drawn thicker, so the
+   eye can tell "this is everything" from "this is one part of it" without
+   reading the label. */
+.split-swatch.is-bold {
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* The window controls: back, the window itself, forward. The arrows are the
+   whole of the navigation, so they are given a fixed square to sit in rather
+   than whatever width their glyph happens to be. */
+.forecast-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.forecast-step {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  justify-content: center;
+}
+
+.forecast-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.forecast-when {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+}
+
+.forecast-range {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.forecast-range .form-label {
+  margin: 0;
+}
+
+.forecast-range .form-input {
+  width: auto;
+  padding: 6px 10px;
+}
+
+.forecast-span {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+
+/* The forecast chart's one-line verdict. Not a card and not a banner: it's a
+   sentence about the chart sitting directly beneath it. */
+.forecast-note {
+  margin: 14px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.forecast-note--short {
+  color: var(--danger);
+}
+
+.forecast-note strong {
+  color: inherit;
 }
 
 .category-amount {
   font-size: 0.85rem;
   font-weight: 600;
-  min-width: 70px;
+  min-width: 62px;
   text-align: right;
 }
 
-/* Page Header */
-.page-header {
+/* Label/value pairs with no bar between them (Reports → Summary). */
+.kv-row {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 25px;
+  gap: 10px;
+  padding: 3px 0;
 }
 
-.page-title {
-  font-size: 1.75rem;
-  font-weight: 700;
+.kv-name {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.kv-value {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* Page toolbar — pages have no <h1> any more (the nav bar already says where
+   you are), so the row that used to hold a title now carries the page's one
+   control: the month navigator, the report range chips, or a lone action. */
+.page-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.page-toolbar--end {
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Three buttons side by side don't fit a 412px phone, so they wrap rather than
+   shrinking to something untappable. */
+.page-toolbar--wrap {
+  flex-wrap: wrap;
+}
+
+.page-toolbar--wrap .btn {
+  flex: 1 1 auto;
+}
+
+.page-toolbar > .filter-bar {
+  margin-bottom: 0;
 }
 
 /* Buttons */
@@ -315,11 +881,112 @@ body {
 
 .btn-icon:hover {
   background: var(--accent-muted);
-  color: var(--accent);
+  color: var(--accent-on-tint);
   border-color: var(--accent);
 }
 
+/* Confirm / mark-as-paid — a tick-box, per project.md 8: an outlined box that
+   fills solid once ticked. The tick is an inline SVG rather than a "✓"
+   character, so it is the same crisp shape at every size and renders the same
+   on every platform (the text glyph was a thin, oddly-placed tick in a circle
+   that read as a radio button, not a confirmation). */
+.confirm-btn {
+  flex: 0 0 auto;
+  /* The same 24px as a person dot, so the icons under an amount are one set of
+     small squares and the tick isn't a checkbox sitting next to an avatar. */
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 6px;
+  color: transparent;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.confirm-btn svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.confirm-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.confirm-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.confirm-btn[aria-pressed="true"]:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* A bill that's already paid shows the same filled box, as a state rather
+   than a button — there's nothing left to press. */
+.confirm-btn.is-done {
+  background: var(--success);
+  border-color: var(--success);
+  color: var(--on-accent);
+  opacity: 0.85;
+}
+
+.confirm-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Receipt indicator on a list row */
+.receipt-chip {
+  flex: 0 0 auto;
+  /* 24px like the person dot and the tick box. At 30px the paperclip was the
+     odd one out in a row whose other two icons had just been sized down, so the
+     three didn't read as one set. */
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.receipt-chip svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.receipt-chip:hover {
+  color: var(--accent-on-tint);
+  background: var(--accent-muted);
+}
+
 /* Receipt capture (camera / file upload with OCR pre-fill) */
+.receipt-panel {
+  margin-bottom: 14px;
+}
+
 .receipt-row {
   display: flex;
   gap: 10px;
@@ -337,6 +1004,93 @@ body {
   color: var(--text-secondary);
   min-height: 1.2em;
   margin-bottom: 12px;
+}
+
+/* Stored receipt — a thumbnail you can open, replace or drop. */
+.receipt-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.receipt-thumb {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.receipt-meta {
+  min-width: 0;
+  flex: 1;
+}
+
+.receipt-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.receipt-actions .btn {
+  padding: 6px 10px;
+  font-size: 0.8rem;
+}
+
+/* Full-size receipt viewer. Bigger than the modal (which caps at 500px) and
+   opaque, so the top bar and page behind can't show through a receipt. */
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+}
+
+.viewer[hidden] {
+  display: none;
+}
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-primary);
+  padding-bottom: 10px;
+}
+
+.viewer-caption {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer-image {
+  flex: 1;
+  min-height: 0;
+  object-fit: contain;
+  background: var(--bg-card);
+  border-radius: var(--radius);
 }
 
 /* Toast — transient feedback (import results, validation messages) */
@@ -376,7 +1130,14 @@ body {
   padding: 15px 20px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  /* Top-aligned, not centred: the title, the amount and the tick all sit on
+     one line at the top, so a one-line title doesn't leave the amount floating
+     in the middle of a two-line block. The extra line of a wrapped title then
+     hangs below rather than pushing the actions out of alignment. */
+  align-items: flex-start;
+  /* A sub-line (what a bill is, or when it was paid) drops to its own
+     full-width line under everything else. */
+  flex-wrap: wrap;
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -384,6 +1145,27 @@ body {
 .item-row:hover {
   border-color: var(--accent);
   background: var(--accent-muted);
+}
+
+/* Rows that read as a three-line table rather than as two blocks. Both columns
+   run top to bottom with their last line against the bottom of the row, so
+   title pairs with amount, date with timing, and category with the icons. */
+.item-row--lines {
+  align-items: stretch;
+}
+
+.item-row--lines .item-row-main {
+  align-items: stretch;
+}
+
+.item-row--lines .item-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.item-row--lines .row-end {
+  justify-content: space-between;
 }
 
 .item-row-main {
@@ -409,6 +1191,29 @@ body {
   color: var(--text-secondary);
 }
 
+/* Date on one line, category and its lozenge on the next. Joined by a middot
+   they made a single run of text that wrapped unpredictably and pushed the
+   lozenge off the end of the row on a narrow phone. */
+/* The repeat toggle is sized to its own label rather than to a fixed width. A
+   reserved 142px — the width of the longest label, "Repeat monthly" — fitted
+   every state but left "Monthly" floating in a box of empty space. The label
+   changes on tap, so the outline resizes with it; that reads as the control
+   doing what it says rather than as one box with three texts in it. */
+.btn-frequency {
+  white-space: nowrap;
+}
+
+.item-meta--sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+  /* Tall enough for a lozenge (22px), so a row with one and a row without
+     have their category on the same line rather than 7px apart. */
+  min-height: 24px;
+}
+
 .item-amount {
   font-size: 1.25rem;
   font-weight: 700;
@@ -416,25 +1221,277 @@ body {
   text-align: right;
 }
 
-.item-actions {
+/* Section headings on the Savings page, which now carries two lists. */
+.section-head {
   display: flex;
-  gap: 8px;
-  margin-left: 15px;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin: 24px 0 10px;
+  /* Matches the row's own padding, so a heading total and the values under it
+     share one right edge instead of sitting 20px apart. */
+  padding: 0 20px;
+}
+
+.section-head:first-of-type {
+  margin-top: 4px;
+}
+
+.section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+
+/* An account row on the Savings page. */
+/* An account row on the Savings page. Tappable like every other row, so it
+   keeps the hover rather than opting out of it. */
+
+/* Where Your Money Is: a balance, then the four numbers that made it. */
+.account-total {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-total:last-of-type {
+  border-bottom: none;
+}
+
+.account-total-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.account-total-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.account-total-amount {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+/* An overdrawn account. The one place red means "wrong" rather than "bills". */
+.account-total-amount.is-negative {
+  color: var(--danger);
+}
+
+.account-split {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+}
+
+.account-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.account-seg-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.account-seg-swatch.tone-accent { background: var(--accent); }
+.account-seg-swatch.tone-danger { background: var(--danger); }
+.account-seg-swatch.tone-success { background: var(--success); }
+.account-seg-swatch.tone-muted { background: var(--text-secondary); }
+
+.split-swatch.tone-muted { background: var(--text-secondary); }
+
+/* A recurring item's next occurrence, shown in a month it isn't actually
+   stored in. Deliberately inert and visibly not-real: it's a forecast of one
+   bill or subscription, so it has no buttons to press, no row to open, and it
+   must never be mistaken for something already owed or already spent. */
+.item-row--projected {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-strong);
+  cursor: default;
+}
+
+.item-row--projected:hover {
+  background: transparent;
+  border-color: var(--border-strong);
+}
+
+.item-row--projected .item-title,
+.item-row--projected .item-amount {
+  color: var(--text-secondary);
+}
+
+.badge-projected {
+  background: var(--border);
+  color: var(--text-secondary);
+}
+
+/* A savings goal that's been reached. The whole card goes green and the text
+   flips to black — a green amount on a green card is unreadable, and the
+   usual green is reserved for progress-in-progress.
+
+   Its own green, not --success: that token darkens for the light theme, and
+   near-black text on a dark green is worse than the white-on-green it replaced.
+   This one is fixed so the black text is legible in both themes (~11:1). */
+.item-row--done {
+  background: #22c55e;
+  border-color: #22c55e;
+}
+
+.item-row--done:hover {
+  background: #2bcf69;
+  border-color: #2bcf69;
+}
+
+.item-row--done .item-title,
+.item-row--done .item-meta,
+.item-row--done .item-amount,
+.item-row--done .stat-card-sub {
+  color: #06180d;
+}
+
+/* The progress bar on a reached card would be invisible green-on-green, so it
+   turns into the dark text colour and reads as a full black bar. */
+.item-row--done .stat-card-progress-fill {
+  background: #06180d;
+}
+
+.item-row--done .stat-card-progress {
+  background: rgba(6, 24, 13, 0.22);
+}
+
+/* The tick added to a reached goal. Sits above the person dot rather than
+   beside it: one fixed-width column, so the two marks line up down the page. */
+.goal-tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  color: #06180d;
+}
+
+.goal-tick svg {
+  width: 26px;
+  height: 26px;
+  /* Stated here as well as on the element, so a mark that means "reached"
+     can't be recoloured or filled by whatever class wraps it later. */
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The foot of a Reports card: the total its own breakdown adds up to. */
+.report-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.report-total-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.report-total-value {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.report-total-value.tone-accent { color: var(--accent); }
+.report-total-value.tone-danger { color: var(--danger); }
+.report-total-value.tone-success { color: var(--success); }
+
+/* The line under a row: "Paid 28 Sept 2026", "In 3 days", "3 days overdue".
+   Takes the full width of the row and sits hard right, so the date a bill was
+   settled reads as its own note rather than crowding the amount. */
+.item-sub {
+  flex-basis: 100%;
+  text-align: right;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  /* The last flex line, so it has to be allowed to wrap onto its own. */
+  min-width: 0;
+}
+
+/* A paid bill's line. It used to sit under a green "Paid" lozenge that said
+   the same thing, so the lozenge went and the date carries the state itself —
+   which is why this one is green and left-aligned: a settled bill reads as a
+   fact about the row, not a caption hanging off the amount. */
+.item-sub--paid {
+  text-align: left;
+  color: var(--success);
+  font-weight: 600;
 }
 
 /* Month Navigator */
+/* A fixed width, so the selector is the same shape on Dashboard, Spend and
+   Bills — it used to stretch on wide screens and shrink on narrow ones.
+   The label is a button: tapping it jumps back to the current month. */
 .month-nav {
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 10px;
   margin-bottom: 20px;
+  flex: 0 0 auto;
+  width: var(--month-nav-width);
 }
 
 .month-label {
-  font-size: 1.1rem;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 1.05rem;
   font-weight: 600;
-  min-width: 150px;
+  color: var(--text-primary);
   text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.month-label:hover {
+  color: var(--accent-on-tint);
+  background: var(--accent-muted);
+}
+
+.month-label:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.page-toolbar .month-nav {
+  margin-bottom: 0;
+}
+
+.page-toolbar > .btn {
+  margin-left: auto;
 }
 
 /* Filter Bar */
@@ -459,7 +1516,7 @@ body {
 .filter-chip:hover, .filter-chip.active {
   background: var(--accent-muted);
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-on-tint);
 }
 
 /* Search */
@@ -495,7 +1552,7 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--overlay);
   z-index: 1000;
   align-items: center;
   justify-content: center;
@@ -568,8 +1625,8 @@ body {
   font-size: 0.875rem;
   margin: 0 0 12px;
   padding: 9px 12px;
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.35);
+  background: var(--danger-muted);
+  border: 1px solid var(--danger-line);
   border-radius: var(--radius);
 }
 
@@ -603,6 +1660,32 @@ body {
   font-weight: 600;
 }
 
+/* Which colour means which in the stacked trend bars */
+.chart-legend {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+
+.legend-recurring { background: var(--danger); }
+.legend-oneoff { background: var(--accent); }
+
 .chart-canvas {
   width: 100%;
   height: 200px;
@@ -619,7 +1702,9 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  /* Was 20px with no margin below, so a screen of settings was mostly padding. */
+  padding: 18px;
+  margin-bottom: 14px;
 }
 
 .report-title {
@@ -652,18 +1737,422 @@ body {
 }
 
 .badge-recurring {
-  background: rgba(61, 139, 253, 0.15);
-  color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--accent-on-tint);
 }
 
 .badge-confirmed {
-  background: rgba(34, 197, 94, 0.15);
+  background: var(--success-muted);
   color: var(--success);
 }
 
 .badge-pending {
-  background: rgba(245, 158, 11, 0.15);
+  background: var(--warning-muted);
   color: var(--warning);
+}
+
+/* Settings controls */
+/* Segmented control — used for the light/dark choice and anything else with
+   a short list of mutually exclusive options. */
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.segmented-option {
+  padding: 7px 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.segmented-option:hover {
+  color: var(--text-primary);
+}
+
+.segmented-option.active {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Toggle switch */
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 26px;
+  border-radius: 13px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch[aria-checked="true"]::after {
+  transform: translateX(20px);
+  background: var(--on-accent);
+}
+
+.switch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* One line of settings: label and hint on the left, control on the right.
+   Wraps instead of crushing the hint into a one-word column when the card is
+   narrow — a three-button control and a sentence don't both fit in 280px. */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.setting-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.setting-row:first-child {
+  padding-top: 0;
+}
+
+.setting-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.setting-label {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.setting-hint {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-top: 3px;
+}
+
+.setting-control {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The lock settings' controls sit beside their label rather than pushed to the
+   far edge, so pairing a dropdown with the sentence describing it doesn't mean
+   travelling the width of the card. Applied to the whole lock block rather
+   than just "Lock after" — one row left-aligned and the next right-aligned in
+   the same block reads as a mistake rather than a choice. */
+.setting-row--left {
+  justify-content: flex-start;
+}
+
+.setting-row--left .setting-text {
+  flex: 0 1 auto;
+}
+
+.settings-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* A second group of rows inside one card. No rule of its own — the row above
+   it already draws the divider, and two would stack into a double line. */
+.setting-block {
+  margin-top: 0;
+}
+
+.setting-block .segmented {
+  flex-wrap: wrap;
+}
+
+/* Passcode lock screen — covers the whole app, so nothing behind it is
+   readable while it is up. */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+}
+
+.lock-screen[hidden] {
+  display: none;
+}
+
+.lock-panel {
+  width: 100%;
+  max-width: 320px;
+  text-align: center;
+}
+
+.lock-logo {
+  height: 24px;
+  margin-bottom: 22px;
+}
+
+.lock-prompt {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  margin-bottom: 18px;
+}
+
+.lock-dots {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.lock-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.lock-dot.filled {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.lock-error {
+  min-height: 1.2em;
+  font-size: 0.85rem;
+  color: var(--danger);
+  margin-bottom: 14px;
+}
+
+.lock-error.shake {
+  animation: lock-shake 0.32s ease;
+}
+
+@keyframes lock-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-9px); }
+  40% { transform: translateX(7px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(3px); }
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.key {
+  aspect-ratio: 1 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 1.4rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.key:hover {
+  background: var(--accent-muted);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.key:active {
+  transform: scale(0.96);
+}
+
+.key:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.key-muted {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.key-muted svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.is-locked {
+  overflow: hidden;
+}
+
+/* People: a coloured dot with a first letter. Identity, not status — the
+   palette deliberately avoids the app's semantic colours (see PERSON_COLOURS
+   in db.js), and the letter colour is picked by the dot's own luminance so
+   every swatch stays readable. */
+.person-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1;
+  user-select: none;
+}
+
+/* The dot in a filter chip, sized to sit on the text baseline */
+.filter-chip .person-dot {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.person-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.person-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-on-tint);
+}
+
+.person-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Top bar: the wordmark left, the person right */
+.topbar-person {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+
+/* Desktop rail: same chip, under the wordmark. The whole header is hidden
+   below 768px, so this needs no rule of its own to stay off phones. */
+.sidebar-person {
+  margin-top: 12px;
+}
+
+.person-setting-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Picker options — one row per person, tappable end to end */
+.person-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.person-option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.person-option:hover {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.person-options .person-option[aria-current="true"] {
+  border-color: var(--accent);
+}
+
+/* The people row of a filter bar sits tighter to the list than the status
+   row does, since the two read as one control with two axes. */
+.filter-bar--people {
+  margin-top: -8px;
+  margin-bottom: 20px;
+}
+
+/* Report range chips stay on one line — three short labels always fit a
+   phone, so they shrink rather than wrap onto a second row. */
+.page-toolbar .filter-bar {
+  flex-wrap: nowrap;
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.page-toolbar .filter-chip {
+  flex: 0 1 auto;
+  white-space: nowrap;
+  padding: 6px 10px;
 }
 
 /* Responsive */
@@ -684,11 +2173,17 @@ body {
   
   .app-topbar {
     display: flex;
+    /* The status bar is an overlay now, not a layout row. Padding the topbar by
+       the inset puts the title below the clock instead of behind it, and the
+       content is offset by the same amount so nothing hides underneath. */
+    height: calc(52px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: border-box;
   }
 
   .content {
     margin-left: 60px;
-    margin-top: 52px;
+    margin-top: calc(52px + env(safe-area-inset-top, 0px));
     padding: 15px;
   }
   
@@ -700,16 +2195,91 @@ body {
     flex-direction: column;
     gap: 0;
   }
+
+  /* Month navigator + action button share the toolbar row on a phone: the
+     label gives up room so neither has to wrap. */
+  .page-toolbar {
+    gap: 8px;
+  }
+
+  .page-toolbar .btn {
+    padding: 9px 12px;
+    font-size: 0.85rem;
+  }
+
+  /* Same width on every page, just a little narrower to leave room for the
+     action button beside it. */
+  :root {
+    --month-nav-width: 196px;
+  }
+
+  .month-nav {
+    gap: 6px;
+  }
+
+  .month-label {
+    font-size: 0.95rem;
+  }
+
+  .page-toolbar .month-nav .btn-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  /* Category bar: keep the bar itself readable on a narrow screen. */
+  .category-row {
+    grid-template-columns: 84px minmax(30px, 1fr) auto;
+    gap: 8px;
+  }
+
+  .category-amount {
+    min-width: 56px;
+    font-size: 0.8rem;
+  }
+
+  .item-row {
+    padding: 13px 14px;
+  }
+
+  /* The section heading's total has to sit on the same edge as the row values
+     below it, and the rows lose 6px of horizontal padding at this width. Left
+     at the desktop inset the heading total sat 5px further right than every
+     number under it. */
+  .section-head {
+    padding: 0 14px;
+  }
+
+  .item-amount {
+    min-width: 78px;
+    font-size: 1.1rem;
+  }
+
+  .item-actions {
+    gap: 4px;
+    margin-left: 10px;
+  }
+
+  .setting-row {
+    gap: 10px;
+  }
+
+  .segmented-option {
+    padding: 7px 11px;
+  }
 }
 
-/* Keyboard focus for custom interactive elements (nav items, filter
-   chips, dashboard stat cards) — they're role=button spans/divs/li
-   without a native focus ring. */
-.nav-item:focus-visible,
+/* Keyboard focus for the custom interactive elements that aren't real
+   buttons — filter chips and dashboard stat cards. Nav items are buttons and
+   keep their own ring, but an outline offset would sit outside the rail. */
 .filter-chip:focus-visible,
 .stat-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.nav-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 /* Phone layout (Android APK). The vertical rail costs a 60px slice of a
@@ -750,6 +2320,13 @@ body.is-native .bottom-nav {
   width: 100%;
   padding: 0;
   flex: 1;
+}
+
+/* The <li> is the flex item here, not the button inside it — each one holds
+   an equal sixth of the bar. */
+.bottom-nav .nav-list > li {
+  flex: 1;
+  display: flex;
 }
 
 .bottom-nav .nav-item {
