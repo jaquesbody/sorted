@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.14.0';
+const APP_VERSION = '2.15.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2608,7 +2608,7 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Bill Reminders</h2>
+        <h2 class="report-title">Reminders</h2>
         ${notifySettingsHtml()}
       </div>
 
@@ -2666,78 +2666,123 @@ async function confirmRemoveAllData(btn) {
   navigate('dashboard');
   showToast(`${result.total} items deleted`);
   await renderPage();
+  // Nothing to remind anyone about any more, and nothing saved, so the goal
+  // top-up dates go too — they describe data that no longer exists.
+  localStorage.removeItem(NOTIFY_GOAL_LAST_KEY);
+  await refreshReminders();
 }
 
 // Bill reminders, and the honest limits of them. There is no backend, so
 // nothing can fire at a set time in the background: the app checks when you put
 // it away and when you pick it up. Said here rather than left for the user to
 // discover, because "it didn't remind me" otherwise reads as a broken feature.
+// One row per reminder, each a single line: title left, control right. The
+// picker only appears while its row is on, so a row that's off is a row with
+// nothing to decide, and the card is three lines tall instead of six.
 function notifySettingsHtml() {
   if (!notifySupported()) {
     return '<p class="setting-hint">This browser has no notifications.</p>';
   }
-
-  const on = isNotifyEnabled();
-  const permission = Notification.permission;
-  const leadRow = `
-    <div class="setting-row setting-row--left">
-      <div class="setting-text">
-        <div class="setting-label">Remind me</div>
-      </div>
-      <div class="setting-control">
-        <select class="form-input" id="notify-lead" style="width: auto;" onchange="setNotifyLeadDays(Number(this.value)); renderPage();">
-          ${NOTIFY_LEADS.map((l) => `<option value="${l.value}" ${l.value === getNotifyLeadDays() ? 'selected' : ''}>${l.label}</option>`).join('')}
-        </select>
-      </div>
-    </div>`;
-
-  if (permission === 'denied') {
-    return `
-      <p class="setting-hint">
-        Blocked for this site. Reminders have to be re-allowed in the browser's
-        own settings for this page before Sorted can use them.
-      </p>
-      ${leadRow}
-    `;
+  if (!notifyIsNative() && Notification.permission === 'denied') {
+    return `<p class="setting-hint">
+      Blocked for this site. Reminders have to be re-allowed in the browser's
+      own settings for this page before Sorted can use them.
+    </p>`;
   }
 
+  const bills = isNotifyEnabled();
+  const spend = isSpendNudgeEnabled();
+  const goals = isGoalNudgeEnabled();
+
+  // A nudge needs the same permission as bills, so while it's still unasked the
+  // pickers stay hidden rather than offering a time that can't be honoured.
+  const needsPermission = !notifyIsNative() && Notification.permission !== 'granted';
+
+  const sw = (on, label, action) => `
+    <button class="switch" role="switch" aria-checked="${on}" aria-label="${label}"
+            onclick="${action}"></button>`;
+  const picker = (id, options, handler, aria) => `
+    <select class="form-input form-input--mini" id="${id}" aria-label="${aria}"
+            onchange="${handler}">${options}</select>`;
+
+  const leadOptions = NOTIFY_LEADS.map((l) =>
+    `<option value="${l.value}"${l.value === getNotifyLeadDays() ? 'selected' : ''}>${l.label}</option>`).join('');
+  const timeOptions = NOTIFY_TIMES.map((t) =>
+    `<option value="${t.value}"${t.value === getNotifyTime() ? 'selected' : ''}>${t.label}</option>`).join('');
+
   return `
-    <div class="setting-row">
+    <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label">Remind me about bills</div>
-        <div class="setting-hint">${on
-          ? 'When a bill is coming due or already overdue'
-          : 'A system notification, on a phone only while Sorted is closed'}</div>
+        <div class="setting-label">Bills due</div>
       </div>
       <div class="setting-control">
-        <button class="switch" role="switch" aria-checked="${on}" aria-label="Remind me about bills"
-                onclick="toggleNotifications(this)"></button>
+        ${bills && !needsPermission
+          ? picker('notify-lead', leadOptions, 'changeNotifyLead(Number(this.value))', 'Remind me')
+          : ''}
+        ${sw(bills, 'Remind me about bills due', 'toggleBillsReminders(this)')}
       </div>
     </div>
-    ${on ? leadRow : ''}
-    ${on ? `<p class="setting-hint" style="margin-top: 12px;">
-      There's no server, so nothing can arrive at a set time on its own. Sorted
-      checks when you close it and when you open it again — install it to your
-      home screen and notifications will reach you.
-    </p>` : ''}
+
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Record spending</div>
+      </div>
+      <div class="setting-control">
+        ${spend && !needsPermission
+          ? picker('notify-spend-time', timeOptions, 'changeNotifyTime(this.value)', 'Remind me at')
+          : ''}
+        ${sw(spend, 'Remind me to record spending', "toggleNudge('spend', this)")}
+      </div>
+    </div>
+
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Savings goals</div>
+      </div>
+      <div class="setting-control">
+        ${sw(goals, 'Remind me when a goal goes untouched', "toggleNudge('goal', this)")}
+      </div>
+    </div>
+
+    <p class="setting-hint" style="margin-top: 10px;">${notifyDeliveryNote()}</p>
   `;
 }
 
-async function toggleNotifications(switchEl) {
-  if (isNotifyEnabled()) {
-    disableNotifications();
-    renderPage();
-    return;
+// "Reminders are on" and "a reminder will arrive at 8pm" are different claims,
+// and only one of them is true in a browser.
+function notifyDeliveryNote() {
+  if (notifyIsNative()) {
+    return 'Scheduled by Android, so they arrive whether or not Sorted is open. Bills go out in the morning; the other two at the time shown.';
   }
-  const result = await enableNotifications();
-  if (result === 'on') {
-    showToast('Bill reminders on');
-  } else if (result === 'denied') {
-    showToast('Notifications blocked for this site');
-  } else {
-    showToast('This browser has no notifications');
-  }
+  return "There's no server, so nothing can arrive at a set time on its own. Sorted checks when you close it and when you open it again — add it to your home screen for that to reach you.";
+}
+
+async function toggleBillsReminders() {
+  if (isNotifyEnabled()) await disableNotifications();
+  else await enableNotifications();
+  await scheduleAllReminders();
   renderPage();
+}
+
+async function changeNotifyLead(days) {
+  setNotifyLeadDays(days);
+  await scheduleAllReminders();
+}
+
+async function changeNotifyTime(value) {
+  setNotifyTime(value);
+  await scheduleAllReminders();
+}
+
+// Turning everything off. Called from "Delete all data" as well, because a
+// wiped database with three alarms pending would start reminding someone about
+// bills they no longer have.
+async function refreshReminders() {
+  try {
+    await scheduleAllReminders();
+  } catch (err) {
+    console.error('Could not reschedule reminders:', err);
+  }
 }
 
 // Two marks rather than two words. "Set PIN" and "Remove" are wide enough that
@@ -3692,11 +3737,18 @@ async function saveItem(type, editId = null) {
     await addItem(type, fields);
   }
 
+  // A goal that went up is a top-up, which is what the savings nudge counts
+  // days since. Only the figure moving counts — editing a target isn't money.
+  if (type === 'savings') noteGoalSaves([{ id: editId, current: Number.isFinite(amount) ? amount : 0 }]);
+
   currentReceipt = null;
   receiptRemoved = false;
   ocrStatusText = '';
   closeModal();
   renderPage();
+  // The reminders are derived from the database, so anything that writes to it
+  // has to rebuild them. Off the critical path: the page is already up.
+  refreshReminders();
 }
 
 // What counts as "the same bill" when deciding whether a delete should take the
@@ -3824,6 +3876,7 @@ async function deleteItemFromModal(type, id, btn) {
   currentReceipt = null;
   closeModal();
   renderPage();
+  refreshReminders();
 }
 
 async function toggleConfirm(type, id) {
@@ -3832,6 +3885,7 @@ async function toggleConfirm(type, id) {
   item.confirmed = !item.confirmed;
   await updateItem(type, item);
   renderPage();
+  refreshReminders();
 }
 
 // Putting a bill back to unpaid. Two shapes have to be handled: a settled row
@@ -3843,6 +3897,7 @@ async function unpayBill(id) {
     await updateItem('due', { ...bill, paid: false });
     showToast('Back to unpaid');
     await renderPage();
+    refreshReminders();
     return;
   }
   const twin = (await getAll('spend')).find((s) => s.paid === true && s.dueDate === bill?.dueDate);
@@ -3851,6 +3906,7 @@ async function unpayBill(id) {
     showToast('Back to unpaid');
   }
   await renderPage();
+  refreshReminders();
 }
 
 async function markPaid(id) {
@@ -3868,6 +3924,7 @@ async function markPaid(id) {
     showToast('Marked as paid');
   }
   renderPage();
+  refreshReminders();
 }
 
 // Cap plugins are registered lazily on first use — registerPlugin() warns

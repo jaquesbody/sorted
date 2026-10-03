@@ -38,4 +38,16 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Reminders. POST_NOTIFICATIONS is the Android 13+ runtime prompt; without
+         it the channel is created silently and nothing ever appears.
+         RECEIVE_BOOT_COMPLETED lets the plugin reschedule after a restart, since
+         a scheduled alarm does not survive one.
+
+         Deliberately NOT SCHEDULE_EXACT_ALARM. It needs a separate user grant on
+         Android 12+ and Play restricts it to alarm-clock apps, and a nudge about
+         tonight's spending being unrecorded does not need to land on the minute.
+         Inexact scheduling is a few minutes of slack and no extra prompt. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 </manifest>

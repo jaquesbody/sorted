@@ -502,6 +502,9 @@ body {
   flex-wrap: nowrap;
 }
 
+/* A picker inside a settings row. The default form input is a full-width field
+   for a form; here it sits beside a switch on the same line, so it's sized to
+   its own content and kept off the row's shrinking basis. */
 .setting-row--inline .setting-text {
   flex: 0 1 auto;
 }
@@ -1614,6 +1617,20 @@ body {
   font-size: 0.95rem;
   outline: none;
   transition: border-color 0.15s ease;
+}
+
+/* A picker inside a settings row. The default form input is a full-width field
+   for a form; here it sits beside a switch on one line, so it is sized to its
+   own content and allowed to shrink rather than pushing the switch off the
+   card. It has to come after .form-input, which is width:100% — same
+   specificity, so position is what decides. */
+.form-input--mini {
+  width: auto;
+  min-width: 0;
+  max-width: 116px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  flex: 0 1 auto;
 }
 
 .form-input:focus {
