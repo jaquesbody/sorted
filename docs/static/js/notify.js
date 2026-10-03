@@ -600,17 +600,23 @@ function permissionMessage(state) {
   };
 }
 
-// Switching ONE reminder on. Permission is acquired first, but the caller
-// decides which flag gets set — they used to share a function that always set
-// the bills flag, so turning on the spending nudge silently turned on bill
-// reminders too.
+// Switching ONE reminder on.
+//
+// The flag is set FIRST, unconditionally. A settings switch that refuses to
+// record what you just asked for, because a platform API returned something
+// unexpected, is worse than one that warns afterwards: you can see a warning
+// and act on it, but a switch that silently does nothing looks broken and
+// leaves you with no way to find out why.
+//
+// So the order is: remember the choice, then ask for permission, then schedule,
+// then say what the permission turned out to be. If the permission can't be had,
+// the reminder stays switched on and keeps trying — the state is repaired the
+// moment Android grants it, on the next foreground.
 async function turnReminderOn(kind) {
-  const perm = await notificationPermission(true);
-  if (perm.state !== 'granted') return perm;
   if (kind === 'bills') setNotifyEnabled(true);
   else if (kind === 'spend') setSpendNudgeEnabled(true);
   else if (kind === 'goal') setGoalNudgeEnabled(true);
-  return perm;
+  return notificationPermission(true);
 }
 
 // Kept because the old call sites and any saved habit may still reach for it.
@@ -641,10 +647,14 @@ async function toggleBillsReminders() {
   }
   const perm = await turnReminderOn('bills');
   await scheduleAllReminders();
+  // Rendered before the toast so the switch is visibly on first, whatever the
+  // permission turns out to say. Nothing in the permission path can stop it.
   renderPage();
   notifyPermissionCache = perm;
-  if (perm.state === 'granted') showToast('Bill reminders on');
-  else showToast(permissionMessage(perm.state).text);
+  reportReminderOutcome('bills', perm);
+  // Asks Android what it actually has queued, and writes it into the Settings
+  // line. The permission state alone can't tell you whether the schedule landed.
+  if (typeof refreshNotifyPermissionState === 'function') refreshNotifyPermissionState();
 }
 
 async function toggleNudge(kind) {
@@ -658,8 +668,21 @@ async function toggleNudge(kind) {
   await scheduleAllReminders();
   renderPage();
   notifyPermissionCache = perm;
-  if (perm.state === 'granted') showToast(`${REMINDER_LABELS[kind]} on`);
-  else showToast(permissionMessage(perm.state).text);
+  reportReminderOutcome(kind, perm);
+  if (typeof refreshNotifyPermissionState === 'function') refreshNotifyPermissionState();
+}
+
+// Says what happened, and how long it stays up. A permission problem that
+// vanishes after three and a half seconds is a permission problem you can't act
+// on — so the one that matters is left long enough to read, and the Settings
+// line keeps it on screen afterwards.
+function reportReminderOutcome(kind, perm) {
+  const name = REMINDER_LABELS[kind] || 'Reminders';
+  if (perm.state === 'granted') {
+    showToast(`${name} on`);
+    return;
+  }
+  showToast(`${permissionMessage(perm.state).text}`, 8000);
 }
 
 async function changeNotifyTime(value) {

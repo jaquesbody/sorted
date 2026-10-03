@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.16.0';
+const APP_VERSION = '2.17.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2765,10 +2765,15 @@ function notifyPermissionLine() {
   const state = notifyPermissionCache
     ? notifyPermissionCache.state
     : (notifyIsNative() ? 'checking' : Notification.permission);
+  // What actually got handed to Android. This is the number that answers
+  // "did the schedule work", which the permission state alone can't tell you.
+  const pending = notifyPendingCount;
 
   if (state === 'granted') {
     const any = isNotifyEnabled() || isSpendNudgeEnabled() || isGoalNudgeEnabled();
-    return any ? '' : '<br>Notifications are allowed. Switch one on above.';
+    if (!any) return '<br>Notifications are allowed. Switch one on above.';
+    return pending === null ? ''
+      : `<br>${pending} reminder${pending === 1 ? '' : 's'} scheduled with Android.`;
   }
   if (state === 'checking' || state === 'unknown') return '';
   if (state === 'prompt' || state === 'prompt-with-rationale') {
@@ -2797,11 +2802,20 @@ function openAppNotificationSettings() {
   showToast('Turn on notifications for Sorted in Android settings, then come back');
 }
 
+// What Android says is actually queued. Null until we've asked, which is
+// different from zero: zero means Android accepted the schedule and there was
+// nothing due, while null means we haven't been able to find out yet.
+let notifyPendingCount = null;
+
 // Refreshes the line above. Called whenever the page settles after a toggle, so
 // it reports the state after the change rather than the state before it.
 async function refreshNotifyPermissionState() {
   if (!notifySupported()) return;
   notifyPermissionCache = await notificationPermission(false);
+  if (notifyIsNative()) {
+    const pending = await pendingReminders();
+    notifyPendingCount = pending.length;
+  }
   const el = document.getElementById('notify-permission-state');
   if (el) el.innerHTML = notifyPermissionLine();
 }
@@ -4120,13 +4134,17 @@ async function commitImport(mode, btn) {
   }
 }
 
-function showToast(message) {
+// A caller can ask for longer than the default. A permission problem that
+// disappears after three and a half seconds is one you can't act on, so the
+// messages that name a fix stay up long enough to read.
+function showToast(message, ms) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = message;
   el.classList.add('show');
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => el.classList.remove('show'), 3500);
+  const duration = Number(ms) > 0 ? Number(ms) : 3500;
+  showToast.timer = setTimeout(() => el.classList.remove('show'), duration);
 }
 
 // Row actions — one delegated listener instead of inline handlers, so no
