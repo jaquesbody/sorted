@@ -8,9 +8,14 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 
 ## Screenshots
 
-![Sorted dashboard — spend, bills, and savings at a glance](screenshots/dashboard.png)
+All six are the same household on a 412px phone viewport: Gareth and Kim, a
+current account and some cash, two goals, and a month with a bill already paid.
 
-![Spend list with month navigation and confirm flow](screenshots/spend.png)
+| | |
+|---|---|
+| ![Dashboard — spend, bills and savings for the month, and a 6-month trend](docs/screenshots/dashboard.png) | ![Spend — receipts, confirmation, and icons under the amount](docs/screenshots/spend.png) |
+| ![Bills — paid and upcoming, each counting down to its date](docs/screenshots/bills.png) | ![Savings — accounts, income and goals](docs/screenshots/savings.png) |
+| ![Reports — categories, who spent what, and the forecast](docs/screenshots/reports.png) | ![Settings](docs/screenshots/settings.png) |
 
 ## Features
 
@@ -20,12 +25,15 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 - A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
 - Marking a bill paid records who paid it, which can be someone other than the bill's owner
 - Spend, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
+- A bill you tick is still a bill: it stays in the list with the date you paid it, its tick un-pays it, and it can still be edited. Deleting a repeating bill asks which you mean — this one, or this one and every month of it
+- Every row reads as a small table: the amount on the right, its timing underneath, and the receipt paperclip, the person and the tick in one 24px row beneath that. The paperclip only appears when there's actually a picture
 - Recurring: say whether something repeats monthly or annually. It rolls its due date forward by that much when paid, and projects its own next occurrences into the months ahead — twelve months for monthly, the same time next year for annual — so stepping forward shows what those months hold instead of an empty page. Projected rows are dashed, marked, and have no buttons: they're a forecast, not something to pay
 - A month selector on Dashboard, Spend and Bills, all the same width; tap the month name to jump back to the current one
 - Bills filters — All, Confirmed, Pending, Recurring — over the month's bills paid as well as unpaid, so a month you've already dealt with is still worth looking at
 - Reports: spending, bills and savings goals broken down by category, over all time, this month or this year. Each card carries its own total underneath its breakdown
-- Bill reminders: a system notification when a bill is due or already overdue, with a lead time you choose. There's no server, so Sorted checks when you close it and when you open it rather than firing at a set time
-- Start Over: delete everything and start from empty, in Settings
+- Bill reminders: a notification when a bill is due or already overdue, with a lead time you choose. There's no server, so nothing can wake the app at a set time — Sorted checks when you open it, and only when it isn't already in front of you
+- Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete
+- Switching tabs always opens at the top of the new tab rather than wherever you left the last one
 - A "Who Spent What" report: one bar per person, its length their share of the household total, split blue for what they spent and red for what they owe. Money nobody is marked against is its own row, so the card adds up to the summary
 - Month navigation and status filters
 - Categories: Utilities, Motor, Entertainment, Shopping, General, Travel, One-Off — the same list for bills as for spend, and anything an entry is already filed under stays offered. Savings goals have their own: Holiday, Car, Christmas, One-Off, Other
@@ -61,7 +69,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.13.0-debug.apk`](sorted-v2-2.13.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.14.0-debug.apk`](sorted-v2-2.14.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 

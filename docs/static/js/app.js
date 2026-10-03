@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.13.0';
+const APP_VERSION = '2.14.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1962,25 +1962,25 @@ function forecastSpendEstimate(spendItems) {
   return override === null ? averageNonRecurringSpend(spendItems) : override;
 }
 
-// A goal's default contribution: what's left to save, spread evenly from the
-// month it was created to the end of the horizon. A goal created years ago
-// therefore spreads over the whole horizon, which is right — it's a plan you're
-// making now for money you haven't saved yet, not one that started years ago.
-function defaultGoalMonthly(goal, horizonEnd) {
-  const remaining = Math.max(0, (goal.target || 0) - (goal.current || 0));
-  if (remaining <= 0) return 0;
-  const created = new Date(String(goal.createdAt || '').slice(0, 10) + 'T00:00:00');
-  if (Number.isNaN(created.getTime())) return remaining / FORECAST_MONTHS;
-  const months = (horizonEnd.getFullYear() - created.getFullYear()) * 12
-    + (horizonEnd.getMonth() - created.getMonth()) + 1;
-  return remaining / Math.max(1, months);
-}
-
-function goalMonthlyContribution(goal, horizonEnd) {
+// What a goal contributes to the forecast each month: only what the user said.
+//
+// It used to fall back to "what's left, spread over the twelve months between
+// the goal's creation and a fixed horizon" — dividing by a horizon that was
+// never shown and couldn't be changed. That made the forecast assert a savings
+// rate nobody had decided on, and the savings form asked people to approve it
+// with wording nobody could parse: "leave blank to work it out", "worked out
+// from what's left and the time remaining", when there was no end date to have
+// a time remaining to. The fallback is gone. A goal with an explicit monthly
+// still counts; a goal without one contributes nothing, which is the honest
+// answer for a self-maintained figure.
+//
+// Existing goals keep whatever they were given — nothing here deletes a stored
+// monthly, so an entry set in an earlier version still plans the same way.
+function goalMonthlyContribution(goal) {
   if (typeof goal.monthly === 'number' && Number.isFinite(goal.monthly) && goal.monthly >= 0) {
     return goal.monthly;
   }
-  return defaultGoalMonthly(goal, horizonEnd);
+  return 0;
 }
 
 function yearMonthIndex(date) {
@@ -2062,15 +2062,6 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const today = todayMidnight();
   const { days, start } = forecastDayList(rangeMonths, startOffset);
   const spendEstimate = forecastSpendEstimate(spendItems);
-  // A goal's default monthly contribution is worked out against a FIXED
-  // twelve-month horizon, never against the end of the window on screen.
-  //
-  // It used to use the window, which meant the same goal read as £600 a month
-  // in the three-month view and £150 in the twelve-month one — the chart
-  // contradicted itself depending on which dropdown was selected, and the
-  // balance drifted because of it.
-  const goalHorizon = new Date(today.getFullYear(), today.getMonth() + RECURRING_HORIZON_MONTHS, 0);
-
   const add = (map, iso, amount) => {
     if (!iso) return;
     map.set(iso, (map.get(iso) || 0) + amount);
@@ -2152,7 +2143,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
 
   const savingsPlans = savingsItems.map((goal) => ({
     from: String(goal.createdAt || '').slice(0, 10) || localISO(today),
-    monthly: goalMonthlyContribution(goal, goalHorizon)
+    monthly: goalMonthlyContribution(goal)
   }));
 
   // The balance at the window's first day. Today's balance already contains
@@ -3365,11 +3356,6 @@ function buildForm(type, editId = null, existingCategory = null) {
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Monthly (£) — blank works it out</label>
-        <input type="number" class="form-input" id="form-monthly" step="0.01" min="0"
-               placeholder="What's left, over 12 months">
-      </div>
-      <div class="form-group">
         <label class="form-label">Category</label>
         <select class="form-input" id="form-category">
           ${categoryOptionsHtml(existingCategory, SAVINGS_CATEGORIES)}
@@ -3426,7 +3412,6 @@ function prefillForm(item) {
   // Blank is a real answer here: it means "work it out". Null is what an
   // untouched goal stores, and prefill skips nulls, so the field stays empty
   // and the placeholder keeps explaining itself.
-  setVal('form-monthly', item.monthly);
   const recurring = document.getElementById('form-recurring');
   // A row that was saved with the old yes/no flag has no frequency, but it
   // still repeats — monthly is what "yes" meant.
@@ -3688,13 +3673,6 @@ async function saveItem(type, editId = null) {
   } else {
     if (!(target > 0)) { showFormError('Please enter a target greater than 0', 'form-target'); return; }
     Object.assign(fields, { current: Number.isFinite(amount) ? amount : 0, target });
-    // Empty means "work it out", and it has to be stored as absent rather than
-    // as 0 — 0 would be a goal you've decided to stop putting money into, which
-    // is a different instruction and would quietly flatten the forecast's
-    // savings line to nothing.
-    const monthlyRaw = (document.getElementById('form-monthly')?.value || '').trim();
-    const monthly = Number.parseFloat(monthlyRaw);
-    fields.monthly = monthlyRaw !== '' && Number.isFinite(monthly) && monthly >= 0 ? monthly : null;
   }
   
   if (editId != null) {
@@ -3702,10 +3680,10 @@ async function saveItem(type, editId = null) {
     // (confirmed, paid, frequency) survive an edit.
     const existing = await getItem(type, editId);
     if (existing) {
+      // Spread over the existing record so flags the form doesn't own
+      // (confirmed, paid, frequency, and any monthly set in an earlier
+      // version) survive an edit.
       const merged = { ...existing, ...fields, id: editId };
-      // A field cleared back to "work it out" is dropped rather than stored as
-      // null, so the record looks the same as one that never had the setting.
-      if (merged.monthly === null) delete merged.monthly;
       await updateItem(type, merged);
     }
   } else {
