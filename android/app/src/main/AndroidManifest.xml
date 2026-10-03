@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
@@ -50,4 +51,15 @@
          Inexact scheduling is a few minutes of slack and no extra prompt. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- The notification plugin's own manifest asks for SCHEDULE_EXACT_ALARM,
+         so it arrives in the merged APK whether we want it or not. We don't:
+         nothing here claims to be an alarm clock, and the schedule is inexact
+         on purpose (see the note above). Leaving it in is the one way to be sure
+         of a silent prompt on someone's phone — the system may ask at install,
+         or just quietly drop the notifications. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+                     tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK"
+                     tools:node="remove" />
 </manifest>
