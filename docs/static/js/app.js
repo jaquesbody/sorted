@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.17.0';
+const APP_VERSION = '2.18.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2683,12 +2683,13 @@ function notifySettingsHtml() {
   if (!notifySupported()) {
     return '<p class="setting-hint">This browser has no notifications.</p>';
   }
-  if (!notifyIsNative() && Notification.permission === 'denied') {
-    return `<p class="setting-hint">
-      Blocked for this site. Reminders have to be re-allowed in the browser's
-      own settings for this page before Sorted can use them.
-    </p>`;
-  }
+  // Deliberately no "permission denied" early return here. There was one, and it
+  // replaced the whole card with a paragraph — so the moment asking for
+  // permission came back denied, the three switches vanished rather than
+  // flipping. Re-entering the app rebuilt them from localStorage and they
+  // appeared to work, which is a maddening thing to be handed. A control must
+  // not vanish because a permission is off; the state is said in the line
+  // underneath instead, and the switches stay where they are.
 
   const bills = isNotifyEnabled();
   const spend = isSpendNudgeEnabled();
@@ -2760,7 +2761,9 @@ function notifySettingsHtml() {
 // of them blocked.
 function notifyPermissionLine() {
   if (!notifySupported()) return '';
-  if (!notifyIsNative() && Notification.permission === 'denied') return '';
+  // No early return for a blocked browser, same reason as the card above: a
+  // blocked site is precisely the case where the user needs to be told, so
+  // saying nothing there was a bug of the same family.
 
   const state = notifyPermissionCache
     ? notifyPermissionCache.state
@@ -2773,7 +2776,12 @@ function notifyPermissionLine() {
     const any = isNotifyEnabled() || isSpendNudgeEnabled() || isGoalNudgeEnabled();
     if (!any) return '<br>Notifications are allowed. Switch one on above.';
     return pending === null ? ''
-      : `<br>${pending} reminder${pending === 1 ? '' : 's'} scheduled with Android.`;
+      // Zero is a real answer and a confusing one to read bare: Android took
+      // the schedule and there was simply nothing due. "Nothing to remind you
+      // about yet" says that; a bare 0 reads like the schedule failed.
+      : pending === 0
+        ? '<br>Nothing due yet — Android has the schedule and will use it when something is.'
+        : `<br>${pending} reminder${pending === 1 ? '' : 's'} scheduled with Android.`;
   }
   if (state === 'checking' || state === 'unknown') return '';
   if (state === 'prompt' || state === 'prompt-with-rationale') {
@@ -2783,8 +2791,14 @@ function notifyPermissionLine() {
     return `<br>Notifications are unavailable in this build (${escapeHTML(
       (notifyPermissionCache && notifyPermissionCache.detail) || 'no reason given')}).`;
   }
-  // Denied. On Android this is nearly always the app's notification switch being
-  // off rather than a refusal, and only Android Settings can change it.
+  // Denied. In a browser that means the site is blocked and only the browser's
+  // own settings can change it. On Android it is nearly always the app's
+  // notification switch being off rather than a refusal, and only Android
+  // Settings can change it — so the two say different things, because they are
+  // different problems with different fixes.
+  if (!notifyIsNative()) {
+    return `<br>Notifications are blocked for this site. They have to be re-allowed in the browser's own settings for this page.`;
+  }
   return `<br><button class="btn btn-ghost btn-tiny" onclick="openAppNotificationSettings()">
     Notifications are off for Sorted — open Android settings</button>`;
 }
