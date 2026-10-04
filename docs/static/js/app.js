@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.20.0';
+const APP_VERSION = '2.21.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1654,6 +1654,265 @@ function toggleInfoTip(id, btn) {
   }
 }
 
+/* -----------------------------------------------------------------------------
+   Patterns
+   Everything here is arithmetic on what is already in the database. No network,
+   no key, no model, nothing about you leaving the device — which is the whole
+   reason these exist instead of a search API.
+
+   They are deliberately the questions a person actually asks of their own
+   statements: which day do I spend on, is this week normal, and which of my
+   standing charges have quietly gone up.
+   -------------------------------------------------------------------------- */
+
+const PATTERN_WEEKS = 8;
+const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+// Midnight on the Monday of the week `d` falls in. Weeks start on Monday because
+// that is how a payslip and a bank statement count them, and a Sunday-start week
+// splits a weekend's spending across two.
+function weekStart(d) {
+  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const shift = (date.getDay() + 6) % 7;   // Sunday is 0, so +6 makes Monday 0
+  date.setDate(date.getDate() - shift);
+  return date;
+}
+
+// The weeks in the window that actually have something recorded in them.
+//
+// Averaging across all eight weeks whether or not you recorded anything in them
+// is wrong in a way that quietly misleads: with four weeks of data in an
+// eight-week window, "your usual week" came out at £35 instead of £70, so every
+// real week read as above average and the card was permanently alarmed. Empty
+// weeks are not zero-spend weeks, they are unrecorded ones.
+function recordedWeeks(spendItems, from, to) {
+  const weeks = new Set();
+  for (const item of spendItems) {
+    if (!item.date) continue;
+    const d = new Date(String(item.date) + 'T00:00:00');
+    if (Number.isNaN(d.getTime()) || d < from || d > to) continue;
+    weeks.add(weekStart(d).getTime());
+  }
+  return weeks;
+}
+
+// Average spend per weekday, over the last PATTERN_WEEKS weeks.
+//
+// Averaged over the window rather than a single recent week: one week is four
+// purchases on a Saturday and tells you Saturday is expensive, when really you
+// bought a sofa. Averaging the same weekday across eight weeks is the difference
+// between a pattern and a coincidence — across the weeks that were recorded, so
+// a fortnight of not entering anything doesn't halve every average.
+function weekdayAverages(spendItems) {
+  const today = new Date();
+  const thisMonday = weekStart(today);
+  const windowStart = new Date(thisMonday);
+  windowStart.setDate(windowStart.getDate() - PATTERN_WEEKS * 7);
+
+  const weeks = recordedWeeks(spendItems, windowStart, today);
+  const divisor = weeks.size;
+
+  const sums = new Array(7).fill(0);
+  for (const item of spendItems) {
+    if (!item.date) continue;
+    const d = new Date(String(item.date) + 'T00:00:00');
+    if (Number.isNaN(d.getTime()) || d < windowStart || d > today) continue;
+    sums[(d.getDay() + 6) % 7] += Number(item.amount) || 0;
+  }
+
+  const averages = divisor
+    ? sums.map((sum) => sum / divisor)
+    : sums.map(() => 0);
+  const total = averages.reduce((a, b) => a + b, 0);
+  const busiest = averages.reduce((best, v, i) => (v > averages[best] ? i : best), 0);
+  const quietest = averages.reduce((best, v, i) => (v < averages[best] ? i : best), 0);
+  return {
+    averages,
+    total,
+    busiest,
+    quietest,
+    weeks: PATTERN_WEEKS,
+    recordedWeeks: divisor,
+    // Only meaningful with enough data to be a pattern rather than a rumour.
+    enough: divisor >= 3 && sums.reduce((a, b) => a + b, 0) > 0
+  };
+}
+
+// This week against your ordinary one. A partial week is compared like for like:
+// the same number of days into it, so a Monday isn't 80% down by lunchtime and
+// called a saving.
+function weekComparison(spendItems) {
+  const today = new Date();
+  const thisMonday = weekStart(today);
+  const daysIn = (d) => (d.getDay() + 6) % 7;   // Monday 0
+
+  const elapsed = daysIn(today) + 1;           // today counts
+  const thisWeek = spendItems
+    .filter((i) => i.date && new Date(String(i.date) + 'T00:00:00') >= thisMonday)
+    .reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+
+  // The previous PATTERN_WEEKS weeks, each truncated to `elapsed` days, so every
+  // one is compared over the same slice of the week.
+  const previousTotals = [];
+  for (let w = 1; w <= PATTERN_WEEKS; w++) {
+    const start = new Date(thisMonday);
+    start.setDate(start.getDate() - w * 7);
+    const end = new Date(start);
+    end.setDate(end.getDate() + elapsed);
+    let sum = 0;
+    for (const item of spendItems) {
+      if (!item.date) continue;
+      const d = new Date(String(item.date) + 'T00:00:00');
+      if (d >= start && d < end) sum += Number(item.amount) || 0;
+    }
+    previousTotals.push(sum);
+  }
+
+  // Only the weeks that were recorded. Averaging over empty ones is what made
+  // "your usual" read as £35 when four recorded weeks said £70.
+  const recorded = previousTotals.filter((v) => v > 0);
+  const usual = recorded.length ? recorded.reduce((a, b) => a + b, 0) / recorded.length : 0;
+  return {
+    thisWeek,
+    usual,
+    elapsed,
+    difference: thisWeek - usual,
+    // Three pounds either way on a £40 week is rounding, not a change.
+    notable: usual > 0 && Math.abs(thisWeek - usual) / usual > 0.15,
+    enough: recorded.length >= 3
+  };
+}
+
+// Standing charges: things marked as repeating, and whether the amount has moved.
+//
+// Grouped by name rather than by id, because a subscription is one thing entered
+// many times, not many things. Only the direction and size of the change is
+// reported, never advice about what to do about it.
+function standingCharges(spendItems) {
+  const groups = {};
+  for (const item of spendItems) {
+    if (!frequencyOf(item) || !item.date) continue;
+    const key = String(item.title || '').trim().toLowerCase();
+    if (!key) continue;
+    (groups[key] = groups[key] || { title: item.title, rows: [] }).rows.push(item);
+  }
+
+  const today = new Date();
+  const out = [];
+  for (const key of Object.keys(groups)) {
+    const g = groups[key];
+    g.rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+    const latest = g.rows[g.rows.length - 1];
+    const earlier = g.rows.slice(0, -1);
+    const latestAmount = Number(latest.amount) || 0;
+
+    // A mean of the earlier ones, not the single most recent before it: one odd
+    // month is noise and a shift across three is a price rise.
+    const previousAmount = earlier.length
+      ? earlier.reduce((n, r) => n + (Number(r.amount) || 0), 0) / earlier.length
+      : null;
+    const changePct = (previousAmount && previousAmount > 0)
+      ? ((latestAmount - previousAmount) / previousAmount) * 100
+      : null;
+
+    const lastDate = new Date(String(latest.date) + 'T00:00:00');
+    const daysSince = Number.isNaN(lastDate.getTime())
+      ? null : Math.round((today - lastDate) / 86400000);
+
+    out.push({
+      title: g.title,
+      amount: latestAmount,
+      previousAmount,
+      changePct,
+      occurrences: g.rows.length,
+      lastDate: latest.date,
+      // Two cycles of silence on something marked monthly is worth mentioning;
+      // one is not, and the forecast's own horizon is a year.
+      lapsed: daysSince !== null && daysSince > 75,
+      daysSince
+    });
+  }
+
+  // A charge that has gone quiet leads: "you may still be paying for something
+  // you don't use" is worth more attention than a price rise, and a £3 rise on
+  // a subscription you use every day is worth more than a £3 rise on one you
+  // don't. Lapsed first, then by how much money the change actually moves.
+  const impact = (c) => (c.changePct === null ? 0 : (Math.abs(c.changePct) / 100) * c.amount);
+  out.sort((a, b) => {
+    if (a.lapsed !== b.lapsed) return a.lapsed ? -1 : 1;
+    const ia = impact(a), ib = impact(b);
+    if (ib !== ia) return ib - ia;
+    return b.amount - a.amount;
+  });
+  return out;
+}
+
+function changeWord(pct) {
+  if (pct === null) return '';
+  if (Math.abs(pct) < 1) return 'about the same';
+  return pct > 0 ? `up ${Math.round(pct)}%` : `down ${Math.round(-pct)}%`;
+}
+
+function renderPatternsCard(patterns, week) {
+  if (!patterns.enough) {
+    const have = patterns.recordedWeeks;
+    return `<div class="setting-hint" style="padding: 8px 0;">
+      A few more entries and this will show which days you actually spend on —
+      ${have} week${have === 1 ? '' : 's'} of spending so far.
+    </div>`;
+  }
+  const peak = Math.max(...patterns.averages) || 1;
+  const rows = patterns.averages.map((avg, i) => `
+    <div class="category-row">
+      <span class="category-name">${WEEKDAY_NAMES[i]}</span>
+      <div class="category-bar">
+        <div class="category-bar-fill" style="width: ${Math.round((avg / peak) * 100)}%"></div>
+      </div>
+      <span class="category-amount">${currency(avg)}</span>
+    </div>`).join('');
+
+  const weekLine = week.enough
+    ? (week.notable
+      ? `<div class="pattern-note">This week is <strong>${week.difference > 0 ? 'above' : 'below'} your usual</strong> — ${currency(Math.abs(week.difference))}${week.difference > 0 ? ' more' : ' less'} over ${week.elapsed} day${week.elapsed === 1 ? '' : 's'}, against an average of ${currency(week.usual)}.</div>`
+      : `<div class="pattern-note">This week is <strong>about your usual</strong> — ${currency(week.thisWeek)} so far against an average of ${currency(week.usual)}.</div>`)
+    : `<div class="pattern-note">Not enough weeks yet to compare this one against.</div>`;
+
+  return `
+    ${weekLine}
+    <div class="pattern-sub">Average a day, last ${patterns.weeks} weeks</div>
+    ${rows}
+    <div class="pattern-note">
+      ${WEEKDAY_NAMES[patterns.busiest]} is your heaviest day at ${currency(patterns.averages[patterns.busiest])},
+      ${WEEKDAY_NAMES[patterns.quietest]} your lightest at ${currency(patterns.averages[patterns.quietest])}.
+    </div>`;
+}
+
+function renderStandingCard(charges) {
+  if (charges.length === 0) {
+    return `<div class="setting-hint" style="padding: 8px 0;">
+      Nothing is marked as repeating. Mark an entry or a bill as monthly or
+      yearly and its amount is tracked here over time.
+    </div>`;
+  }
+  const rows = charges.map((c) => {
+    const move = c.changePct === null ? ''
+      : `<span class="pattern-change pattern-change--${c.changePct > 1 ? 'up' : c.changePct < -1 ? 'down' : 'flat'}">${changeWord(c.changePct)}</span>`;
+    const lapsed = c.lapsed
+      ? `<span class="pattern-change pattern-change--flat">nothing for ${c.daysSince} days</span>` : '';
+    return `
+      <div class="pattern-row">
+        <span class="pattern-name">${escapeHTML(c.title)}</span>
+        <span class="pattern-amount">${currency(c.amount)}</span>
+        <span class="pattern-moves">${move}${lapsed}</span>
+      </div>`;
+  }).join('');
+  return `${rows}
+    <div class="pattern-note">
+      Grouped by name, newest entry first. A change is the newest amount against
+      the mean of the ones before it, so one odd month doesn't read as a rise.
+    </div>`;
+}
+
 // Reports Page
 async function renderReports(container) {
   const token = renderToken;
@@ -1680,6 +1939,13 @@ async function renderReports(container) {
   // means without this filter every past month stepped back to would report
   // rent as still due.
   const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
+
+  // Computed from everything stored, not from the range chips: "which days do I
+  // spend on" is a habit, and scoping it to "this month" would answer it with
+  // four weeks of noise.
+  const weekday = weekdayAverages(spendItems);
+  const week = weekComparison(spendItems);
+  const charges = standingCharges(spendItems);
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -1719,6 +1985,16 @@ async function renderReports(container) {
       <div class="report-card">
         <h2 class="report-title">Where Your Money Is</h2>
         ${renderBalanceBreakdown(balances)}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Patterns</h2>
+        ${renderPatternsCard(weekday, week)}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Standing Charges</h2>
+        ${renderStandingCard(charges)}
       </div>
 
       <div class="report-card">

@@ -1421,6 +1421,83 @@ body {
   color: var(--text-primary);
 }
 
+/* Patterns and Standing Charges. Deliberately quieter than the breakdown cards
+   next to them: these are observations, not totals, and a card that shouts a
+   habit at you is one you learn to scroll past. */
+
+/* A standing charge: name and amount on one line, what the amount has been
+   doing underneath. A grid rather than a flex row — a flex item with
+   flex-basis:100% can't wrap without wrap set, so with min-width:0 on the name
+   it silently collapsed the title to nothing and the card read as a list of bare
+   amounts. */
+.pattern-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name amount"
+    "moves moves";
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: baseline;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pattern-row:last-of-type {
+  border-bottom: none;
+}
+
+.pattern-name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
+}
+
+.pattern-amount {
+  grid-area: amount;
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* The change sits under the pair rather than beside the name, so the eye
+   reads down a column of numbers instead of scanning for a second one. */
+.pattern-moves {
+  grid-area: moves;
+}
+
+.pattern-change {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.pattern-change--up { color: var(--danger); }
+.pattern-change--down { color: var(--success); }
+.pattern-change--flat { color: var(--text-secondary); }
+
+.pattern-note {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 10px 0 14px;
+  line-height: 1.45;
+}
+
+.pattern-note strong {
+  color: var(--text-primary);
+}
+
+.pattern-sub {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 4px 0 10px;
+}
+
 .report-total-value.tone-accent { color: var(--accent); }
 .report-total-value.tone-danger { color: var(--danger); }
 .report-total-value.tone-success { color: var(--success); }
