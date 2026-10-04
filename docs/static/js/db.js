@@ -76,6 +76,20 @@ function openDB() {
   return dbPromise;
 }
 
+// Drops the cached connection so the next read opens a fresh one. Android
+// suspends the WebView when the app goes to the background and can close the
+// database underneath it; a connection left cached after that rejects every
+// operation rather than reopening, and the app then looks like its data has
+// gone. Nothing is lost — the records are on disk — but a re-open is needed.
+function resetDbConnection() {
+  if (dbPromise) {
+    Promise.resolve(dbPromise).then((db) => { try { db.close(); } catch (err) { /* already gone */ } })
+      .catch(() => { /* never opened */ });
+  }
+  dbPromise = null;
+  return null;
+}
+
 async function getAll(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {

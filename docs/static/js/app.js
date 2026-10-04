@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.22.0';
+const APP_VERSION = '2.23.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -369,6 +369,25 @@ if (IS_NATIVE) {
   }
 }
 
+// Coming back to the front re-renders whatever tab you were on.
+//
+// Android suspends the WebView in the background, and it closes IndexedDB while
+// it is away. Anything that rendered during that window failed, and nothing
+// re-rendered on the way back — so you returned to a blank or stale page with
+// the nav still highlighting the tab you had asked for. That is the whole of
+// "the Reports tab sometimes doesn't load": the page that most needs to be
+// re-read is the one with the most work in it.
+let resumeRenderedAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  // Android fires this more than once for a single return to the app, and
+  // re-rendering the heaviest page on each one is the last thing a phone needs.
+  const now = Date.now();
+  if (now - resumeRenderedAt < 1500) return;
+  resumeRenderedAt = now;
+  renderPage();
+});
+
 // Modal — openModal moves focus into the modal (first field, or the
 // close button when there are none, so Enter can never fire a
 // destructive button); closeModal puts focus back on the opener.
@@ -456,34 +475,73 @@ let renderToken = 0;
 
 async function renderPage() {
   const content = document.getElementById('content');
-  renderToken++;
+  // Both captured here, before the first await. Reading `currentPage` after the
+  // loads meant a render could be asked for one tab and draw another, and
+  // letting each render function capture `renderToken` itself meant a
+  // superseded render picked up the *newest* token and was therefore allowed to
+  // paint over the one that replaced it — which is how a slow page could leave
+  // the wrong tab on screen with the nav highlighting the right one.
+  const token = ++renderToken;
+  const page = currentPage;
 
-  // Every page needs the people list: to resolve a row's dot, to offer the
-  // filter, or to stamp a form. One read, shared by the render below.
-  await loadPeople();
-  // Same for accounts — a row's allocation and every form's dropdown need them.
-  await loadAccounts();
-  renderPersonChip();
+  try {
+    // Every page needs the people list: to resolve a row's dot, to offer the
+    // filter, or to stamp a form. One read, shared by the render below.
+    await loadPeople();
+    // Same for accounts — a row's allocation and every form's dropdown need them.
+    await loadAccounts();
+    // Somebody asked for a different page while these were loading.
+    if (token !== renderToken) return;
+    renderPersonChip();
 
-  switch(currentPage) {
-    case 'dashboard':
-      await renderDashboard(content);
-      break;
-    case 'spend':
-      await renderSpend(content);
-      break;
-    case 'due':
-      await renderDue(content);
-      break;
-    case 'savings':
-      await renderSavings(content);
-      break;
-    case 'reports':
-      await renderReports(content);
-      break;
-    case 'settings':
-      renderSettings(content);
-      break;
+    switch (page) {
+      case 'dashboard':
+        await renderDashboard(content);
+        break;
+      case 'spend':
+        await renderSpend(content);
+        break;
+      case 'due':
+        await renderDue(content);
+        break;
+      case 'savings':
+        await renderSavings(content);
+        break;
+      case 'reports':
+        await renderReports(content);
+        break;
+      case 'settings':
+        renderSettings(content);
+        break;
+    }
+  } catch (err) {
+    // A read can fail for reasons that are not about the data at all — most
+    // often Android suspending the WebView and closing IndexedDB underneath a
+    // render. Swallowing that left the previous page sitting there under a nav
+    // highlighting the tab you had just asked for, which reads as "the tab
+    // doesn't load". One retry with the connection re-opened, then say so
+    // rather than leaving it blank.
+    console.error('Render failed:', err);
+    if (token !== renderToken) return;
+    try {
+      resetDbConnection();
+      await loadPeople();
+      await loadAccounts();
+      if (token !== renderToken) return;
+      console.warn('Retrying render after a connection reset');
+      renderPage();
+    } catch (retryErr) {
+      console.error('Render failed again:', retryErr);
+      if (token !== renderToken) return;
+      content.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-text">Could not load this page</div>
+          <p class="setting-hint" style="margin-bottom: 20px;">
+            ${escapeHTML(String((retryErr && retryErr.message) || retryErr))}
+          </p>
+          <button class="btn btn-primary" onclick="renderPage()">Try again</button>
+        </div>`;
+    }
   }
 }
 
