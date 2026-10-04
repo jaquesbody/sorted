@@ -615,7 +615,7 @@ function permissionMessage(state) {
   return {
     ok: false,
     text: notifyIsNative()
-      ? 'Turn on notifications for Sorted in Android settings'
+      ? 'Turn on notifications for Sorted in your phone settings'
       : 'Notifications are blocked for this site'
   };
 }

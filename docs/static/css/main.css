@@ -377,12 +377,6 @@ body {
   text-align: right;
 }
 
-/* A bill's "Paid 29 Sept" line rides with the amount rather than under the
-   title, so the left of the row is title and nothing else. */
-.value-cell .item-sub--paid {
-  text-align: right;
-}
-
 /* Actions sit left of the value, never inside it. A tick that shifts the number
    it belongs to is the clearest possible way to lose a row's reading. */
 .row-actions {
@@ -1099,13 +1093,17 @@ body {
 /* Toast — transient feedback (import results, validation messages) */
 .toast {
   position: fixed;
-  bottom: 24px;
+  /* Higher than the bottom nav it was sitting behind, so a message about
+     notifications is never hidden by the tab bar, and wide enough that the
+     longest one wraps to two lines instead of four. */
+  bottom: 86px;
   left: 50%;
+  width: min(360px, calc(100vw - 32px));
   transform: translateX(-50%);
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  padding: 10px 18px;
+  padding: 12px 18px;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   z-index: 300;
@@ -1425,19 +1423,15 @@ body {
    next to them: these are observations, not totals, and a card that shouts a
    habit at you is one you learn to scroll past. */
 
-/* A standing charge: name and amount on one line, what the amount has been
-   doing underneath. A grid rather than a flex row — a flex item with
-   flex-basis:100% can't wrap without wrap set, so with min-width:0 on the name
-   it silently collapsed the title to nothing and the card read as a list of bare
-   amounts. */
+/* A pattern row: day and its average, side by side. A grid rather than a flex
+   row — a flex item with flex-basis:100% can't wrap without wrap set, so with
+   min-width:0 on the name it silently collapsed the title to nothing and the
+   card read as a list of bare amounts. */
 .pattern-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "name amount"
-    "moves moves";
+  grid-template-areas: "name amount";
   column-gap: 10px;
-  row-gap: 3px;
   align-items: baseline;
   padding: 9px 0;
   border-bottom: 1px solid var(--border);
@@ -1466,18 +1460,8 @@ body {
 
 /* The change sits under the pair rather than beside the name, so the eye
    reads down a column of numbers instead of scanning for a second one. */
-.pattern-moves {
-  grid-area: moves;
-}
 
-.pattern-change {
-  font-size: 0.78rem;
-  font-weight: 600;
-}
 
-.pattern-change--up { color: var(--danger); }
-.pattern-change--down { color: var(--success); }
-.pattern-change--flat { color: var(--text-secondary); }
 
 .pattern-note {
   font-size: 0.85rem;
@@ -1515,14 +1499,28 @@ body {
   min-width: 0;
 }
 
-/* A paid bill's line. It used to sit under a green "Paid" lozenge that said
-   the same thing, so the lozenge went and the date carries the state itself —
-   which is why this one is green and left-aligned: a settled bill reads as a
-   fact about the row, not a caption hanging off the amount. */
-.item-sub--paid {
-  text-align: left;
+/* The line under a projected row: "Repeats monthly". Not `.item-timing` —
+   it spans the whole row rather than sitting in the third line, because it is
+   about the projection itself and not about this occurrence. */
+
+/* The third line of every item row: the parts that qualify it rather than
+   identify it. A bill's timing, a goal's target, an account's movements and an
+   income's category all live here, so the third line means the same thing on
+   every tab and the right-hand column is the amount on every tab. That is what
+   lets a Spend row and a Bills row be the same height. */
+.item-timing {
+  color: var(--text-secondary);
+}
+
+/* A settled bill reads as a fact about the row, so its timing carries the
+   state in the colour the old green lozenge used to. */
+.item-timing--paid {
   color: var(--success);
   font-weight: 600;
+}
+
+.item-row--done .item-timing {
+  color: #06180d;
 }
 
 /* Month Navigator */
@@ -1813,9 +1811,23 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  /* Was 20px with no margin below, so a screen of settings was mostly padding. */
-  padding: 18px;
-  margin-bottom: 14px;
+  /* Matches .stat-card exactly. Reports and Settings hold these in a
+     .reports-grid, which supplies the 20px gap — a margin-bottom here was
+     added to that gap rather than replacing it, so those two pages had 34px
+     between cards where the dashboard had 20. */
+  padding: 20px;
+}
+
+/* After .report-card, not before it: both selectors are a single class, and
+   .report-card sets the border with a shorthand, so whichever comes last wins
+   outright. This one was first, and the card came out with an ordinary border
+   and only a red heading. */
+.report-card--danger {
+  border-color: var(--danger);
+}
+
+.report-card--danger .report-title {
+  color: var(--danger);
 }
 
 .report-title {

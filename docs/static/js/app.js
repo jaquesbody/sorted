@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.23.0';
+const APP_VERSION = '2.24.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -152,6 +152,67 @@ async function accountBalances() {
   // going back to the database to work it out. Same data, one computation.
   accountBalanceCache = new Map(out);
   return [...out.values()];
+}
+
+// Everything that moved one account, oldest first, as a flat list of dated
+// entries. A balance is a single number, and a number that has moved is a
+// question; this is the answer to it.
+//
+// Built from the same stores accountBalances() reads, so the entries always
+// add up to the balance shown on the row. Anything with no date of its own — a
+// goal's running total, a one-off adjustment to the opening figure — has no
+// place on a timeline and is listed after the dated entries instead of being
+// given a date it never had.
+async function accountActivity(accountId) {
+  const [spend, savings, transfers, income, dueItems] = await Promise.all([
+    getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income'), getAll('due')
+  ]);
+  const entries = [];
+  const add = (date, label, amount, tone, extra) => {
+    entries.push(Object.assign({ date: date || '', label, amount, tone }, extra || {}));
+  };
+
+  // The opening balance and any one-off adjustment lead the list, undated. They
+  // are what the account held before anything was tracked, and leaving them out
+  // would make a list that visibly fails to add up to the balance above it —
+  // which is the one thing a list of movements has to be able to do.
+  const opening = accountById(accountId);
+  if (opening) {
+    if (Number(opening.opening)) add('', 'Opening balance', Number(opening.opening), 'in', { title: '' });
+    if (Number(opening.adjustment)) add('', 'Adjusted', Number(opening.adjustment), opening.adjustment < 0 ? 'out' : 'in', { title: '' });
+  }
+
+  for (const item of spend) {
+    if (item.accountId !== accountId) continue;
+    // A row written before 2.8.3 paid a bill by writing it into Spend. It is
+    // read as a bill here for the same reason it is in accountBalances(), so
+    // this list and the balance can't disagree about what a row was.
+    if (item.paid) add(item.date || item.dueDate, 'Bill paid', -Number(item.amount) || 0, 'out', { title: item.title });
+    else add(item.date, 'Spent', -Number(item.amount) || 0, 'out', { title: item.title });
+  }
+  for (const item of dueItems) {
+    if (item.paid !== true || item.accountId !== accountId) continue;
+    add(item.date, 'Bill paid', -Number(item.amount) || 0, 'out', { title: item.title });
+  }
+  for (const item of income) {
+    if (item.accountId !== accountId) continue;
+    add(item.date, 'Income', Number(item.amount) || 0, 'in', { title: item.title });
+  }
+  for (const t of transfers) {
+    if (t.fromId === accountId) add(t.date, 'Moved out', -Number(t.amount) || 0, 'out', { title: accountName(t.toId) });
+    if (t.toId === accountId) add(t.date, 'Moved in', Number(t.amount) || 0, 'in', { title: accountName(t.fromId) });
+  }
+  for (const goal of savings) {
+    if (goal.accountId !== accountId) continue;
+    add('', 'Saved to ' + (goal.title || 'goal'), -(Number(goal.current) || 0), 'out', { title: goal.category || '' });
+  }
+
+  const dated = entries.filter((e) => e.date).sort((a, b) => a.date.localeCompare(b.date));
+  // Undated entries last: the opening balance is where the story starts, but it
+  // has no date to sit in a timeline with, and showing it under a made-up date
+  // would be worse than showing it in its own group.
+  const undated = entries.filter((e) => !e.date);
+  return dated.concat(undated);
 }
 
 // Returns the new account's id, or null when it couldn't be added. The id
@@ -869,17 +930,31 @@ function dueCountdown(dueDate) {
   return `<span style="color: var(--text-secondary)">In ${days} days</span>`;
 }
 
-// The line under a bill's amount: what the value is waiting for. A settled bill
-// says when it was paid; an outstanding one says how long it has left. One
-// line, one meaning, in the same place either way.
+// What a bill is waiting for, in the fewest words that still say it.
+//
+// These ride on the same line as the due date, and the left of a row is about
+// 164px once the amount and the tick have taken theirs. Every word here is one
+// that line has to fit: "Due today" said "due" twice with the date beside it,
+// and "overdue" is "late" — the row is already tinted red when it is.
 function billTiming(item, isPaid) {
   if (isPaid) {
     // A settled bill is dated by its due date; the old Spend copy of a payment
     // had a date of its own. Both are read, because anyone's existing paid rows
     // are the Spend kind and anything paid from 2.8.3 is the other.
-    return `Paid on ${formatDate(item.date || item.dueDate)}`;
+    //
+    // No year, because it shares a line with the due date that already carries
+    // one. A bill paid a year late reads oddly; a bill paid on time does not,
+    // and the line has no room for both.
+    return `Paid ${formatDate(item.date || item.dueDate).replace(/,?\s*\d{4}$/, '')}`;
   }
-  return dueCountdown(item.dueDate);
+  const days = daysUntil(item.dueDate);
+  if (days < 0) {
+    const n = Math.abs(days);
+    return `<span style="color: var(--danger)">${n} day${n === 1 ? '' : 's'} late</span>`;
+  }
+  if (days === 0) return '<span style="color: var(--warning)">Today</span>';
+  if (days <= 7) return `<span style="color: var(--warning)">${days} day${days === 1 ? '' : 's'}</span>`;
+  return `<span style="color: var(--text-secondary)">${days} days</span>`;
 }
 
 // The paperclip appears only when there is a picture. It used to sit on every
@@ -1202,7 +1277,7 @@ async function renderDue(container) {
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
-                <div class="item-meta">Due ${formatDate(item.dueDate)}</div>
+                <div class="item-meta">${formatDate(item.dueDate)} <span class="item-timing${isPaid ? ' item-timing--paid' : ''}">· ${billTiming(item, isPaid)}</span></div>
                 <div class="item-meta item-meta--sub">
                   ${escapeHTML(item.category)}
                   ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
@@ -1213,7 +1288,6 @@ async function renderDue(container) {
             <div class="row-end">
               <div class="value-cell">
                 ${currency(item.amount)}
-                <div class="item-sub${isPaid ? ' item-sub--paid' : ''}">${billTiming(item, isPaid)}</div>
               </div>
               <div class="row-actions">
                 ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
@@ -1314,17 +1388,20 @@ async function renderSavings(container) {
         // amount would be unreadable on a green card.
         const done = item.target > 0 && item.current >= item.target;
         return `
-          <div class="item-row${done ? ' item-row--done' : ''}" data-edit-type="savings" data-edit-id="${item.id}">
+          <div class="item-row item-row--lines${done ? ' item-row--done' : ''}" data-edit-type="savings" data-edit-id="${item.id}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
-                <div class="item-meta">${escapeHTML(item.category)} · ${goalPct}% complete</div>
+                <div class="item-meta">${goalPct}% complete</div>
+                <div class="item-meta item-meta--sub">
+                  ${escapeHTML(item.category)}
+                  <span class="item-timing">of ${currency(item.target)}</span>
+                </div>
               </div>
             </div>
             <div class="row-end">
               <div class="value-cell value-cell--wide">
                 <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
-                <div class="stat-card-sub">of ${currency(item.target)}</div>
                 <div class="stat-card-progress" style="margin-top: 8px;">
                   <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
                 </div>
@@ -1355,25 +1432,28 @@ function renderAccountRow(row) {
   ].filter(([, v]) => v > 0);
 
   return `
-    <div class="item-row item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
+    <div class="item-row item-row--lines item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
       <div class="item-row-main">
         <div class="item-info">
           <div class="item-title">${escapeHTML(row.name)}</div>
-          <div class="item-meta">
-            ${row.type === CASH_TYPE ? 'Cash' : 'Bank'}
-            ${parts.length
-              ? ` · ${parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · ')}`
-              : ''}
+          <div class="item-meta">${row.type === CASH_TYPE ? 'Cash' : 'Bank'}</div>
+          <div class="item-meta item-meta--sub">
+            <span class="item-timing">${[
+              parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · '),
+              (row.transferIn || row.transferOut || row.adjustment) ? transferSummary(row) : ''
+            ].filter(Boolean).join(' · ')}</span>
           </div>
         </div>
       </div>
-      <div class="value-cell value-cell--wide">
-        <div class="item-amount" style="color: ${over ? 'var(--danger)' : 'var(--text-primary)'};">
-          ${currency(row.balance)}
+      <div class="row-end">
+        <div class="value-cell value-cell--wide">
+          <div class="item-amount" style="color: ${over ? 'var(--danger)' : 'var(--text-primary)'};">
+            ${currency(row.balance)}
+          </div>
         </div>
-        ${row.transferIn || row.transferOut || row.adjustment
-          ? `<div class="stat-card-sub">${transferSummary(row)}</div>`
-          : ''}
+        <div class="row-actions">
+          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); openAccountActivity('${row.id}')">Activity</button>
+        </div>
       </div>
     </div>
   `;
@@ -1396,19 +1476,22 @@ function transferSummary(row) {
 // is one place for all three, so all three behave the same way.
 function renderIncomeRow(item) {
   return `
-    <div class="item-row" onclick="openIncomeSetup('${item.id}')">
+    <div class="item-row item-row--lines" onclick="openIncomeSetup('${item.id}')">
       <div class="item-row-main">
         <div class="item-info">
           <div class="item-title">${escapeHTML(item.title)}</div>
-          <div class="item-meta">
-            ${formatDate(item.date)} · ${escapeHTML(incomeCategoryLabel(item.category))}
+          <div class="item-meta">${formatDate(item.date)}</div>
+          <div class="item-meta item-meta--sub">
+            <span class="item-timing">${[
+              incomeCategoryLabel(item.category),
+              item.accountId ? accountName(item.accountId) : ''
+            ].filter(Boolean).join(' · ')}</span>
           </div>
         </div>
       </div>
       <div class="row-end">
         <div class="value-cell value-cell--wide">
           <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
-          <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
         </div>
         <div class="row-actions">
           <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${incomeRepeatLabel(item)}</button>
@@ -1532,6 +1615,45 @@ function accountCurrentBalance(accountId) {
   const account = accountById(accountId);
   if (!account) return '';
   return Math.round((account.opening || 0) * 100) / 100;
+}
+
+// What an account has held, over time. Editing the account and reading its
+// activity are different questions, so the row offers both: the row itself
+// edits, and this is one tap away beside it.
+async function openAccountActivity(id) {
+  const account = accountById(id);
+  if (!account) return;
+  const entries = await accountActivity(id);
+  const balance = (accountBalanceCache.get(id) || {}).balance || 0;
+
+  const rows = entries.length === 0
+    ? '<div class="empty-state"><div class="empty-state-text">Nothing recorded against this account yet</div></div>'
+    : `<div class="item-list">${entries.map((e) => `
+        <div class="item-row item-row--lines">
+          <div class="item-row-main">
+            <div class="item-info">
+              <div class="item-title">${escapeHTML(e.title || e.label)}</div>
+              <div class="item-meta">${e.date ? formatDate(e.date) : ''}</div>
+              <div class="item-meta item-meta--sub">${e.title ? `<span class="item-timing">${escapeHTML(e.label)}</span>` : ''}</div>
+            </div>
+          </div>
+          <div class="row-end">
+            <div class="value-cell value-cell--wide">
+              <div class="item-amount" style="color: var(--${e.tone === 'in' ? 'success' : 'danger'});">
+                ${e.amount < 0 ? '−' : '+'}${currency(Math.abs(e.amount))}
+              </div>
+            </div>
+          </div>
+        </div>`).join('')}</div>`;
+
+  openModal(escapeHTML(account.name), `
+    <div class="stat-card" style="margin-bottom: 16px;">
+      <div class="stat-card-header">
+        <span class="stat-card-title">${account.type === CASH_TYPE ? 'Cash' : 'Bank'}</span>
+      </div>
+      <div class="stat-card-value">${currency(balance)}</div>
+    </div>
+    ${rows}`);
 }
 
 function openAccountSetup(id) {
@@ -1727,8 +1849,7 @@ function toggleInfoTip(id, btn) {
    reason these exist instead of a search API.
 
    They are deliberately the questions a person actually asks of their own
-   statements: which day do I spend on, is this week normal, and which of my
-   standing charges have quietly gone up.
+   statements: which day do I spend on, and is this week normal.
    -------------------------------------------------------------------------- */
 
 const PATTERN_WEEKS = 8;
@@ -1849,83 +1970,9 @@ function weekComparison(spendItems) {
   };
 }
 
-// Standing charges: things marked as repeating, and whether the amount has moved.
-//
-// Grouped by name rather than by id, because a subscription is one thing entered
-// many times, not many things. Only the direction and size of the change is
-// reported, never advice about what to do about it.
-function standingCharges(spendItems) {
-  const groups = {};
-  for (const item of spendItems) {
-    if (!frequencyOf(item) || !item.date) continue;
-    const key = String(item.title || '').trim().toLowerCase();
-    if (!key) continue;
-    (groups[key] = groups[key] || { title: item.title, rows: [] }).rows.push(item);
-  }
-
-  const today = new Date();
-  const out = [];
-  for (const key of Object.keys(groups)) {
-    const g = groups[key];
-    g.rows.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-    const latest = g.rows[g.rows.length - 1];
-    const earlier = g.rows.slice(0, -1);
-    const latestAmount = Number(latest.amount) || 0;
-
-    // A mean of the earlier ones, not the single most recent before it: one odd
-    // month is noise and a shift across three is a price rise.
-    const previousAmount = earlier.length
-      ? earlier.reduce((n, r) => n + (Number(r.amount) || 0), 0) / earlier.length
-      : null;
-    const changePct = (previousAmount && previousAmount > 0)
-      ? ((latestAmount - previousAmount) / previousAmount) * 100
-      : null;
-
-    const lastDate = new Date(String(latest.date) + 'T00:00:00');
-    const daysSince = Number.isNaN(lastDate.getTime())
-      ? null : Math.round((today - lastDate) / 86400000);
-
-    out.push({
-      title: g.title,
-      amount: latestAmount,
-      previousAmount,
-      changePct,
-      occurrences: g.rows.length,
-      lastDate: latest.date,
-      // Two cycles of silence on something marked monthly is worth mentioning;
-      // one is not, and the forecast's own horizon is a year.
-      lapsed: daysSince !== null && daysSince > 75,
-      daysSince
-    });
-  }
-
-  // A charge that has gone quiet leads: "you may still be paying for something
-  // you don't use" is worth more attention than a price rise, and a £3 rise on
-  // a subscription you use every day is worth more than a £3 rise on one you
-  // don't. Lapsed first, then by how much money the change actually moves.
-  const impact = (c) => (c.changePct === null ? 0 : (Math.abs(c.changePct) / 100) * c.amount);
-  out.sort((a, b) => {
-    if (a.lapsed !== b.lapsed) return a.lapsed ? -1 : 1;
-    const ia = impact(a), ib = impact(b);
-    if (ib !== ia) return ib - ia;
-    return b.amount - a.amount;
-  });
-  return out;
-}
-
-function changeWord(pct) {
-  if (pct === null) return '';
-  if (Math.abs(pct) < 1) return 'about the same';
-  return pct > 0 ? `up ${Math.round(pct)}%` : `down ${Math.round(-pct)}%`;
-}
-
 function renderPatternsCard(patterns, week) {
   if (!patterns.enough) {
-    const have = patterns.recordedWeeks;
-    return `<div class="setting-hint" style="padding: 8px 0;">
-      A few more entries and this will show which days you actually spend on —
-      ${have} week${have === 1 ? '' : 's'} of spending so far.
-    </div>`;
+    return `<div class="setting-hint" style="padding: 8px 0;">${patterns.recordedWeeks} week${patterns.recordedWeeks === 1 ? '' : 's'} of spending so far.</div>`;
   }
   const peak = Math.max(...patterns.averages) || 1;
   const rows = patterns.averages.map((avg, i) => `
@@ -1937,46 +1984,19 @@ function renderPatternsCard(patterns, week) {
       <span class="category-amount">${currency(avg)}</span>
     </div>`).join('');
 
+  // One short line, because this is the only thing in the card the bars above
+  // don't already show. It used to be a full sentence naming the heaviest and
+  // lightest day, which is what the chart is for.
   const weekLine = week.enough
     ? (week.notable
-      ? `<div class="pattern-note">This week is <strong>${week.difference > 0 ? 'above' : 'below'} your usual</strong> — ${currency(Math.abs(week.difference))}${week.difference > 0 ? ' more' : ' less'} over ${week.elapsed} day${week.elapsed === 1 ? '' : 's'}, against an average of ${currency(week.usual)}.</div>`
-      : `<div class="pattern-note">This week is <strong>about your usual</strong> — ${currency(week.thisWeek)} so far against an average of ${currency(week.usual)}.</div>`)
-    : `<div class="pattern-note">Not enough weeks yet to compare this one against.</div>`;
+      ? `<div class="pattern-note">This week ${week.difference > 0 ? 'up' : 'down'} ${currency(Math.abs(week.difference))}</div>`
+      : `<div class="pattern-note">This week is usual</div>`)
+    : '';
 
   return `
     ${weekLine}
     <div class="pattern-sub">Average a day, last ${patterns.weeks} weeks</div>
-    ${rows}
-    <div class="pattern-note">
-      ${WEEKDAY_NAMES[patterns.busiest]} is your heaviest day at ${currency(patterns.averages[patterns.busiest])},
-      ${WEEKDAY_NAMES[patterns.quietest]} your lightest at ${currency(patterns.averages[patterns.quietest])}.
-    </div>`;
-}
-
-function renderStandingCard(charges) {
-  if (charges.length === 0) {
-    return `<div class="setting-hint" style="padding: 8px 0;">
-      Nothing is marked as repeating. Mark an entry or a bill as monthly or
-      yearly and its amount is tracked here over time.
-    </div>`;
-  }
-  const rows = charges.map((c) => {
-    const move = c.changePct === null ? ''
-      : `<span class="pattern-change pattern-change--${c.changePct > 1 ? 'up' : c.changePct < -1 ? 'down' : 'flat'}">${changeWord(c.changePct)}</span>`;
-    const lapsed = c.lapsed
-      ? `<span class="pattern-change pattern-change--flat">nothing for ${c.daysSince} days</span>` : '';
-    return `
-      <div class="pattern-row">
-        <span class="pattern-name">${escapeHTML(c.title)}</span>
-        <span class="pattern-amount">${currency(c.amount)}</span>
-        <span class="pattern-moves">${move}${lapsed}</span>
-      </div>`;
-  }).join('');
-  return `${rows}
-    <div class="pattern-note">
-      Grouped by name, newest entry first. A change is the newest amount against
-      the mean of the ones before it, so one odd month doesn't read as a rise.
-    </div>`;
+    ${rows}`;
 }
 
 // Asks GitHub what the newest published release is and compares it with the
@@ -2066,7 +2086,6 @@ async function renderReports(container) {
   // four weeks of noise.
   const weekday = weekdayAverages(spendItems);
   const week = weekComparison(spendItems);
-  const charges = standingCharges(spendItems);
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -2086,6 +2105,11 @@ async function renderReports(container) {
     </div>
     
     <div class="reports-grid">
+      <div class="report-card">
+        <h2 class="report-title">Forecast</h2>
+        ${renderForecastCard(forecast)}
+      </div>
+
       <div class="report-card">
         <h2 class="report-title">Spending by Category</h2>
         ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
@@ -2111,16 +2135,6 @@ async function renderReports(container) {
       <div class="report-card">
         <h2 class="report-title">Patterns</h2>
         ${renderPatternsCard(weekday, week)}
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Standing Charges</h2>
-        ${renderStandingCard(charges)}
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Forecast</h2>
-        ${renderForecastCard(forecast)}
       </div>
 
       <div class="report-card">
@@ -3031,32 +3045,10 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Data Management</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
-        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
-        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Start Over</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 15px;">
-          Delete everything and start from empty. There's no undo and no backup
-          of its own — export first if you might want any of it.
-        </p>
-        <button class="btn btn-danger" onclick="confirmRemoveAllData(this)" style="width: 100%;">Delete all data</button>
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">About</h2>
-        <p style="color: var(--text-secondary);">
-          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong><br>
-          A modern finance tracker<br>
-          All data stored locally<br>
-          No cloud, no login required
-        </p>
+        <h2 class="report-title">Currency</h2>
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
-            <div class="setting-label">Currency</div>
+            <div class="setting-label">${escapeHTML(getCurrencyCode())}</div>
           </div>
           <div class="setting-control">
             <select class="form-input form-input--mini" id="currency-select"
@@ -3067,19 +3059,41 @@ function renderSettings(container) {
             </select>
           </div>
         </div>
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Data Management</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
+        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
+        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">About</h2>
+        <p style="color: var(--text-secondary);">
+          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong><br>
+          All data stored locally · no cloud, no login<br>
+          <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
+             style="color: var(--accent);">Releases on GitHub</a>
+        </p>
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
             <div class="setting-label">Updates</div>
-            <div class="setting-hint" id="update-note">Checks the releases on GitHub. Nothing is sent but the request itself.</div>
           </div>
           <div class="setting-control">
             <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
           </div>
         </div>
-        <p class="setting-hint" style="margin-top: 8px;">
-          <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
-             style="color: var(--accent);">Releases on GitHub</a>
+        <div class="setting-hint" id="update-note"></div>
+      </div>
+
+      <div class="report-card report-card--danger">
+        <h2 class="report-title">Danger zone</h2>
+        <p style="color: var(--text-secondary); margin-bottom: 15px;">
+          Delete everything and start from empty. There's no undo and no backup
+          of its own — export first if you might want any of it.
         </p>
+        <button class="btn btn-danger" onclick="confirmRemoveAllData(this)" style="width: 100%;">Delete all data</button>
       </div>
     </div>
   `;
@@ -3208,29 +3222,18 @@ function notifySettingsHtml() {
   `;
 }
 
-// What the platform actually says, in plain words, with the button that fixes
-// it. This exists because a switch that silently refuses to move is the hardest
-// kind of bug to report: the person can see that notifications are allowed in
-// Android's own settings and reasonably conclude the app is lying about it.
+// `toggleBillsReminders` and `changeNotifyTime` used to be defined here as well
+// as in notify.js. app.js loads last, so its declarations silently replaced the
+// ones in notify.js — including the fix for the switch that would not repaint,
+// because this copy repainted *after* two bridge calls instead of before them.
+// Bills reminders therefore looked stuck on; toggling a different row forced a
+// repaint that finally showed the truth, which is exactly how it was reported.
 //
-// So the app says it too, and distinguishes the two cases that look identical
-// from the outside — "you said no" and "we can't ask" — instead of calling both
-// of them blocked.
-
-async function toggleBillsReminders() {
-  if (isNotifyEnabled()) await disableNotifications();
-  else await enableNotifications();
-  await scheduleAllReminders();
-  renderPage();
-}
+// Only one definition of a name may exist across these files. There is a test
+// for that, because nothing else in the build catches it.
 
 async function changeNotifyLead(days) {
   setNotifyLeadDays(days);
-  await scheduleAllReminders();
-}
-
-async function changeNotifyTime(value) {
-  setNotifyTime(value);
   await scheduleAllReminders();
 }
 
@@ -3798,19 +3801,11 @@ function buildForm(type, editId = null, existingCategory = null) {
           <input type="date" class="form-input" id="form-date" value="${localISO()}">
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Category</label>
-          <select class="form-input" id="form-category">
-            ${categoryOptionsHtml(existingCategory)}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Repeats</label>
-          <select class="form-input" id="form-recurring">
-            ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}">${f.label}</option>`).join('')}
-          </select>
-        </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select class="form-input" id="form-category">
+          ${categoryOptionsHtml(existingCategory)}
+        </select>
       </div>
       ${personHtml}
       ${accountHtml}
@@ -4143,7 +4138,6 @@ async function saveItem(type, editId = null) {
   const amount = parseFloat(document.getElementById('form-amount')?.value || document.getElementById('form-current')?.value || 0);
   const target = parseFloat(document.getElementById('form-target')?.value || 0);
   const category = document.getElementById('form-category').value;
-  const repeatChoice = document.getElementById('form-recurring')?.value || 'no';
   const personId = document.getElementById('form-person')?.value || null;
   const accountId = document.getElementById('form-account')?.value || null;
 
@@ -4153,7 +4147,13 @@ async function saveItem(type, editId = null) {
   }
 
   const fields = { title, category, personId, accountId };
-  if (type !== 'savings') {
+  // Spend has no Repeats control: what was spent is a one-off by definition,
+  // and a bill is where repetition belongs. Rows saved before that are left
+  // exactly as they are — the field is only written when the form actually
+  // offers the choice, so editing one can't quietly strip its frequency.
+  const repeatField = document.getElementById('form-recurring');
+  if (type !== 'savings' && repeatField) {
+    const repeatChoice = repeatField.value;
     // `recurring` is kept alongside the frequency so everything that already
     // reads the boolean (the pay-a-bill roll-forward, the recurring filters,
     // the Reports breakdowns) keeps working without a second pass over stored
