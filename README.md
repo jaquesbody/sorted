@@ -43,6 +43,8 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Move money between accounts when you transfer it for real, and adjust a balance by hand for anything the app can't infer (interest, fees, a correction)
 - Reports gains a "Where Your Money Is" card and a Forecast chart
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
+- Receipt reading is measured, not assumed. Four receipts with known answers — a total whose figure is printed on the line below, a VAT total sitting beneath a larger loyalty-points balance, a cash receipt where the tendered amount is the biggest number on the page, and one with no currency symbol anywhere — are drawn at three tilts and read through the real pipeline. Measured against that: **12/12 on amounts, 12/12 on titles, 12/12 on dates**, up from 10/12 and 9/12. Images are lifted before reading, because Tesseract wants text around 30px tall and a phone photo is often well under it: at 12px the decimal points disappear ("1.75" read as "175") and the date collapses
+- The amount found is the amount *owed*, not the cash handed over: "subtotal" is ranked below "total", "cash", "change" and card lines are excluded, and a total whose figure is on the next line is picked up from there
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
 - Light, dark, or follow-the-system theme, set in Settings and applied before the first paint
 - Android asks for the notification permission on first use (Android 13+ requires it, and without it the channel is created silently and nothing ever appears). The schedule is **inexact** on purpose — an exact alarm needs its own grant, and Play only allows it to alarm-clock apps
@@ -71,7 +73,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.19.0-debug.apk`](sorted-v2-2.19.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.20.0-debug.apk`](sorted-v2-2.20.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
