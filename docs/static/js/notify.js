@@ -33,6 +33,7 @@ const NOTIFY_SEEN_KEY = 'sorted-notify-seen';
 const NOTIFY_SPEND_KEY = 'sorted-notify-spend';
 const NOTIFY_SPEND_TIME_KEY = 'sorted-notify-spend-time';
 const NOTIFY_GOAL_KEY = 'sorted-notify-goal';
+const NOTIFY_GOAL_CADENCE_KEY = 'sorted-notify-goal-cadence';
 const NOTIFY_GOAL_LAST_KEY = 'sorted-notify-goal-last';
 
 // Android requires a channel from API 26, and a notification with no channel is
@@ -61,8 +62,16 @@ const NOTIFY_TIMES = [
 ];
 const DEFAULT_NOTIFY_TIME = '20:00';
 
-// How long a goal can go untouched before it is worth mentioning.
-const NOTIFY_GOAL_DAYS = 7;
+// How long a goal can go untouched before it is worth mentioning, and how often
+// after that. A daily nudge about saving is nagging, a monthly one is barely a
+// reminder, and the right answer depends entirely on the person — so it's a
+// choice rather than a constant.
+const NOTIFY_GOAL_CADENCES = [
+  { value: 'daily', label: 'Daily', days: 1 },
+  { value: 'weekly', label: 'Weekly', days: 7 },
+  { value: 'monthly', label: 'Monthly', days: 30 },
+];
+const DEFAULT_NOTIFY_GOAL_CADENCE = 'weekly';
 
 function notifySupported() {
   if (notifyIsNative()) return true;
@@ -143,6 +152,17 @@ function isGoalNudgeEnabled() {
 function setGoalNudgeEnabled(on) {
   if (on) localStorage.setItem(NOTIFY_GOAL_KEY, 'true');
   else localStorage.removeItem(NOTIFY_GOAL_KEY);
+}
+
+function goalNudgeCadence() {
+  const raw = localStorage.getItem(NOTIFY_GOAL_CADENCE_KEY);
+  const found = NOTIFY_GOAL_CADENCES.find((c) => c.value === raw);
+  return found || NOTIFY_GOAL_CADENCES.find((c) => c.value === DEFAULT_NOTIFY_GOAL_CADENCE);
+}
+
+function setGoalNudgeCadence(value) {
+  if (!NOTIFY_GOAL_CADENCES.some((c) => c.value === value)) return;
+  localStorage.setItem(NOTIFY_GOAL_CADENCE_KEY, value);
 }
 
 // When each goal last went up. A goal stores its current figure and nothing
@@ -244,7 +264,7 @@ async function goalsTouchedRecently() {
   const dates = goalTopUpDates();
   const today = localISO();
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - NOTIFY_GOAL_DAYS);
+  cutoff.setDate(cutoff.getDate() - goalNudgeCadence().days);
   const cutoffISO = localISO(cutoff);
   const recent = goals.some((g) => {
     const seen = dates[g.id];
@@ -381,7 +401,7 @@ async function scheduleAllReminders() {
     notifications.push({
       id: NOTIFY_ID_GOAL,
       title: 'Sorted — nothing going in',
-      body: `No goal has been topped up in ${NOTIFY_GOAL_DAYS} days.`,
+      body: `No goal has been topped up in ${goalNudgeCadence().days} days.`,
       channelId: NOTIFY_CHANNEL_ID,
       schedule: { at: plan.goals, allowWhileIdle: false },
       extra: { page: 'savings' }
@@ -505,7 +525,7 @@ async function checkBillNotifications() {
       const key = 'goal-' + today;
       if (g.any && !g.recent && notifySeen()[key] !== today) {
         if (fireNow('Sorted — nothing going in',
-                    `No goal has been topped up in ${NOTIFY_GOAL_DAYS} days.`,
+                    `No goal has been topped up in ${goalNudgeCadence().days} days.`,
                     'savings', key)) {
           markNotified(key, today);
           sent++;
@@ -635,7 +655,6 @@ async function settleReminder(kind) {
     const perm = await notificationPermission(true);
     notifyPermissionCache = perm;
     await scheduleAllReminders();
-    if (typeof refreshNotifyPermissionState === 'function') refreshNotifyPermissionState();
     return perm;
   } catch (err) {
     // A failure here is a reminder that isn't scheduled yet, not a setting that

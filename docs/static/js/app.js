@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.21.0';
+const APP_VERSION = '2.22.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -361,6 +361,10 @@ if (IS_NATIVE) {
   const list = document.querySelector('.sidebar .nav-list');
   if (bar && list) {
     bar.appendChild(list.cloneNode(true));
+    // On <html> as well as <body>: the head script sets it before first paint to
+    // stop the rail flashing, and the two have to agree or the phone layout is
+    // half applied depending on which one the cascade sees.
+    document.documentElement.classList.add('is-native');
     document.body.classList.add('is-native');
   }
 }
@@ -874,9 +878,13 @@ async function renderSpend(container) {
     <div class="stat-card" style="margin-bottom: 20px;">
       <div class="stat-card-header">
         <span class="stat-card-title">Monthly Total</span>
-        <span class="stat-card-sub">Year: ${currency(yearTotal)}</span>
       </div>
       <div class="stat-card-value">${currency(monthTotal)}</div>
+      <!-- Under the amount, not beside the title. Bills puts "Nothing overdue"
+           on this line, and having the two cards of the same app disagree about
+           where their second line goes is what makes the top of the screen jump
+           as you move between tabs. Same shape, same place. -->
+      <div class="stat-card-sub">Year: ${currency(yearTotal)}</div>
     </div>
     
     <div class="filter-bar" aria-label="Status">
@@ -1913,6 +1921,61 @@ function renderStandingCard(charges) {
     </div>`;
 }
 
+// Asks GitHub what the newest published release is and compares it with the
+// running build.
+//
+// The app has no server, so this is a plain unauthenticated request to one
+// public URL. It sends the request and nothing else: no build id, no device
+// detail, no data of yours. Nothing is downloaded or installed without asking —
+// Android requires a human to confirm any install regardless, and a finance app
+// quietly replacing itself is not something to do to someone by surprise.
+async function checkForUpdate(btn) {
+  const note = document.getElementById('update-note');
+  const say = (text) => { if (note) note.textContent = text; };
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = 'Check'; } };
+
+  const RELEASES_API = 'https://api.github.com/repos/jaquesbody/sorted/releases/latest';
+  try {
+    const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+    const data = await res.json();
+    const latest = String(data.tag_name || '').replace(/^v/, '');
+    const here = String(APP_VERSION || '');
+
+    // Compare as numbers, not strings: "2.9.0" is older than "2.10.0" and a
+    // string compare says otherwise, which is the sort of thing that quietly
+    // reports "up to date" forever.
+    const parts = (v) => String(v).split('.').map((n) => parseInt(n, 10) || 0);
+    const [a, b] = [parts(latest), parts(here)];
+    let cmp = 0;
+    for (let i = 0; i < 3; i++) {
+      const x = a[i] || 0, y = b[i] || 0;
+      if (x !== y) { cmp = x > y ? 1 : -1; break; }
+    }
+
+    if (!latest) {
+      say('Could not read the release name from GitHub.');
+    } else if (cmp > 0) {
+      say(`v${latest} is available — you have v${here}.`);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Get it';
+        btn.onclick = () => { window.open(data.html_url, '_blank', 'noopener'); };
+        return;
+      }
+    } else if (cmp === 0) {
+      say(`Up to date. This is v${here}.`);
+    } else {
+      say(`You have v${here}, which is newer than the published v${latest}.`);
+    }
+  } catch (err) {
+    say(`Could not check: ${String((err && err.message) || err)}`);
+  } finally {
+    restore();
+  }
+}
+
 // Reports Page
 async function renderReports(container) {
   const token = renderToken;
@@ -2283,6 +2346,23 @@ function forecastDayList(rangeMonths, startOffset) {
   return { days, start, end };
 }
 
+// The earliest day this device holds anything at all, as midnight local, or
+// null if it holds nothing. Anything earlier is not "no spending", it is "this
+// app wasn't in use", and the forecast must not draw a line through it.
+function earliestRecordedDate(...lists) {
+  let earliest = null;
+  for (const list of lists) {
+    for (const item of list || []) {
+      const raw = String(item.date || item.dueDate || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) continue;
+      if (!earliest || raw < earliest) earliest = raw;
+    }
+  }
+  if (!earliest) return null;
+  const d = new Date(earliest + 'T00:00:00');
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 const FORECAST_RANGES = [
   { value: 1, label: '1 month' },
   { value: 3, label: '3 months' },
@@ -2336,7 +2416,18 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   ]);
   const balances = await accountBalances();
   const today = todayMidnight();
-  const { days, start } = forecastDayList(rangeMonths, startOffset);
+  // Named span, not window: shadowing the global inside a function this long is
+  // asking for a bug three edits from now.
+  const span = forecastDayList(rangeMonths, startOffset);
+  // Nothing before this device's first entry is knowable. Stepping back six
+  // months on a young database used to draw a line anyway — the walk-back adds
+  // back bills and income it can see and subtracts spend it can't, which happens
+  // to produce a smooth plausible curve that is entirely fiction. The chart now
+  // starts where the data does, so an empty stretch is visibly empty rather
+  // than confidently wrong.
+  const firstKnown = earliestRecordedDate(spendItems, dueItems, incomeItems);
+  const days = span.days.filter((d) => !firstKnown || d >= firstKnown);
+  const start = days.length ? days[0] : span.start;
   const spendEstimate = forecastSpendEstimate(spendItems);
   const add = (map, iso, amount) => {
     if (!iso) return;
@@ -2877,15 +2968,15 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
+        <h2 class="report-title">Reminders</h2>
+        ${notifySettingsHtml()}
+      </div>
+
+      <div class="report-card">
         <h2 class="report-title">Data Management</h2>
         <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
         <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
         <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Reminders</h2>
-        ${notifySettingsHtml()}
       </div>
 
       <div class="report-card">
@@ -2904,6 +2995,32 @@ function renderSettings(container) {
           A modern finance tracker<br>
           All data stored locally<br>
           No cloud, no login required
+        </p>
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text">
+            <div class="setting-label">Currency</div>
+          </div>
+          <div class="setting-control">
+            <select class="form-input form-input--mini" id="currency-select"
+                    aria-label="Currency"
+                    onchange="setCurrencyCode(this.value); renderPage();">
+              ${CURRENCIES.map(([code, name]) =>
+                `<option value="${code}"${code === getCurrencyCode() ? 'selected' : ''}>${escapeHTML(name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text">
+            <div class="setting-label">Updates</div>
+            <div class="setting-hint" id="update-note">Checks the releases on GitHub. Nothing is sent but the request itself.</div>
+          </div>
+          <div class="setting-control">
+            <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
+          </div>
+        </div>
+        <p class="setting-hint" style="margin-top: 8px;">
+          <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
+             style="color: var(--accent);">Releases on GitHub</a>
         </p>
       </div>
     </div>
@@ -2978,14 +3095,25 @@ function notifySettingsHtml() {
   const sw = (on, label, action) => `
     <button class="switch" role="switch" aria-checked="${on}" aria-label="${label}"
             onclick="${action}"></button>`;
-  const picker = (id, options, handler, aria) => `
+  // The picker is always rendered, and only greyed out while its row is off.
+  //
+  // It used to appear and disappear with the switch, which meant the switch
+  // itself moved: a row was [label][picker][switch] while on and [label][switch]
+  // while off, so turning Bills off slid the switch left out from under a finger
+  // still resting on it. Three rows whose controls all shift is a strong
+  // candidate for "the toggles are crossed" — and it is why the control had to
+  // go somewhere even with the row off. A disabled dropdown keeps the layout
+  // fixed, and shows the setting you'd get if you switched the row on.
+  const picker = (id, options, handler, aria, enabled) => `
     <select class="form-input form-input--mini" id="${id}" aria-label="${aria}"
-            onchange="${handler}">${options}</select>`;
+            ${enabled ? '' : 'disabled'} onchange="${handler}">${options}</select>`;
 
   const leadOptions = NOTIFY_LEADS.map((l) =>
     `<option value="${l.value}"${l.value === getNotifyLeadDays() ? 'selected' : ''}>${l.label}</option>`).join('');
   const timeOptions = NOTIFY_TIMES.map((t) =>
     `<option value="${t.value}"${t.value === getNotifyTime() ? 'selected' : ''}>${t.label}</option>`).join('');
+  const cadenceOptions = NOTIFY_GOAL_CADENCES.map((c) =>
+    `<option value="${c.value}"${c.value === goalNudgeCadence().value ? 'selected' : ''}>${c.label}</option>`).join('');
 
   return `
     <div class="setting-row setting-row--inline setting-row--tight">
@@ -2993,9 +3121,7 @@ function notifySettingsHtml() {
         <div class="setting-label">Bills due</div>
       </div>
       <div class="setting-control">
-        ${bills && !needsPermission
-          ? picker('notify-lead', leadOptions, 'changeNotifyLead(Number(this.value))', 'Remind me')
-          : ''}
+        ${picker('notify-lead', leadOptions, 'changeNotifyLead(Number(this.value))', 'Remind me', bills && !needsPermission)}
         ${sw(bills, 'Remind me about bills due', 'toggleBillsReminders(this)')}
       </div>
     </div>
@@ -3005,9 +3131,7 @@ function notifySettingsHtml() {
         <div class="setting-label">Record spending</div>
       </div>
       <div class="setting-control">
-        ${spend && !needsPermission
-          ? picker('notify-spend-time', timeOptions, 'changeNotifyTime(this.value)', 'Remind me at')
-          : ''}
+        ${picker('notify-spend-time', timeOptions, 'changeNotifyTime(this.value)', 'Remind me at', spend && !needsPermission)}
         ${sw(spend, 'Remind me to record spending', "toggleNudge('spend', this)")}
       </div>
     </div>
@@ -3017,13 +3141,12 @@ function notifySettingsHtml() {
         <div class="setting-label">Savings goals</div>
       </div>
       <div class="setting-control">
+        ${picker('notify-goal-cadence', cadenceOptions, 'changeGoalCadence(this.value)',
+                 'Remind me every', goals && !needsPermission)}
         ${sw(goals, 'Remind me when a goal goes untouched', "toggleNudge('goal', this)")}
       </div>
     </div>
 
-    <p class="setting-hint" style="margin-top: 10px;">
-      ${notifyDeliveryNote()}<span id="notify-permission-state">${notifyPermissionLine()}</span>
-    </p>
   `;
 }
 
@@ -3035,89 +3158,6 @@ function notifySettingsHtml() {
 // So the app says it too, and distinguishes the two cases that look identical
 // from the outside — "you said no" and "we can't ask" — instead of calling both
 // of them blocked.
-function notifyPermissionLine() {
-  if (!notifySupported()) return '';
-  // No early return for a blocked browser, same reason as the card above: a
-  // blocked site is precisely the case where the user needs to be told, so
-  // saying nothing there was a bug of the same family.
-
-  const state = notifyPermissionCache
-    ? notifyPermissionCache.state
-    : (notifyIsNative() ? 'checking' : Notification.permission);
-  // What actually got handed to Android. This is the number that answers
-  // "did the schedule work", which the permission state alone can't tell you.
-  const pending = notifyPendingCount;
-
-  if (state === 'granted') {
-    const any = isNotifyEnabled() || isSpendNudgeEnabled() || isGoalNudgeEnabled();
-    if (!any) return '<br>Notifications are allowed. Switch one on above.';
-    return pending === null ? ''
-      // Zero is a real answer and a confusing one to read bare: Android took
-      // the schedule and there was simply nothing due. "Nothing to remind you
-      // about yet" says that; a bare 0 reads like the schedule failed.
-      : pending === 0
-        ? '<br>Nothing due yet — Android has the schedule and will use it when something is.'
-        : `<br>${pending} reminder${pending === 1 ? '' : 's'} scheduled with Android.`;
-  }
-  if (state === 'checking' || state === 'unknown') return '';
-  if (state === 'prompt' || state === 'prompt-with-rationale') {
-    return '<br>Sorted has not asked for permission yet — switch one on above.';
-  }
-  if (state === 'unavailable') {
-    return `<br>Notifications are unavailable in this build (${escapeHTML(
-      (notifyPermissionCache && notifyPermissionCache.detail) || 'no reason given')}).`;
-  }
-  // Denied. In a browser that means the site is blocked and only the browser's
-  // own settings can change it. On Android it is nearly always the app's
-  // notification switch being off rather than a refusal, and only Android
-  // Settings can change it — so the two say different things, because they are
-  // different problems with different fixes.
-  if (!notifyIsNative()) {
-    return `<br>Notifications are blocked for this site. They have to be re-allowed in the browser's own settings for this page.`;
-  }
-  return `<br><button class="btn btn-ghost btn-tiny" onclick="openAppNotificationSettings()">
-    Notifications are off for Sorted — open Android settings</button>`;
-}
-
-// Hands the user off to the system screen for this app's notifications.
-// Android 13+ can do this with an intent; on anything else the app settings
-// screen is the best available, and saying so beats a button that does nothing.
-function openAppNotificationSettings() {
-  try {
-    const cap = notifyCap();
-    if (cap && typeof cap.openAppNotificationSettings === 'function') {
-      return cap.openAppNotificationSettings();
-    }
-  } catch (err) { /* fall through to the message below */ }
-  showToast('Turn on notifications for Sorted in Android settings, then come back');
-}
-
-// What Android says is actually queued. Null until we've asked, which is
-// different from zero: zero means Android accepted the schedule and there was
-// nothing due, while null means we haven't been able to find out yet.
-let notifyPendingCount = null;
-
-// Refreshes the line above. Called whenever the page settles after a toggle, so
-// it reports the state after the change rather than the state before it.
-async function refreshNotifyPermissionState() {
-  if (!notifySupported()) return;
-  notifyPermissionCache = await notificationPermission(false);
-  if (notifyIsNative()) {
-    const pending = await pendingReminders();
-    notifyPendingCount = pending.length;
-  }
-  const el = document.getElementById('notify-permission-state');
-  if (el) el.innerHTML = notifyPermissionLine();
-}
-
-// "Reminders are on" and "a reminder will arrive at 8pm" are different claims,
-// and only one of them is true in a browser.
-function notifyDeliveryNote() {
-  if (notifyIsNative()) {
-    return 'Scheduled by Android, so they arrive whether or not Sorted is open. Bills go out in the morning; the other two at the time shown.';
-  }
-  return "There's no server, so nothing can arrive at a set time on its own. Sorted checks when you close it and when you open it again — add it to your home screen for that to reach you.";
-}
 
 async function toggleBillsReminders() {
   if (isNotifyEnabled()) await disableNotifications();
@@ -3133,6 +3173,11 @@ async function changeNotifyLead(days) {
 
 async function changeNotifyTime(value) {
   setNotifyTime(value);
+  await scheduleAllReminders();
+}
+
+async function changeGoalCadence(value) {
+  setGoalNudgeCadence(value);
   await scheduleAllReminders();
 }
 

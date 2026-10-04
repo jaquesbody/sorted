@@ -1720,6 +1720,13 @@ body {
   margin-top: 4px;
 }
 
+/* A row that's off keeps its picker in place so the switch doesn't move under a
+   finger — it just goes quiet. */
+.form-input--mini:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .form-input:focus {
   border-color: var(--accent);
 }
@@ -2394,19 +2401,23 @@ body.is-locked {
   display: none;
 }
 
+html.is-native .sidebar,
 body.is-native .sidebar {
   display: none;
 }
 
+html.is-native .app-topbar,
 body.is-native .app-topbar {
   left: 0;
 }
 
+html.is-native .content,
 body.is-native .content {
   margin-left: 0;
   padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
 }
 
+html.is-native .bottom-nav,
 body.is-native .bottom-nav {
   display: flex;
   position: fixed;

@@ -17,6 +17,18 @@ try {
   var t = localStorage.getItem('sorted-theme');
   if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
 } catch (e) { /* private mode / storage disabled — dark is the default */ }
+
+// The phone layout before first paint, for the same reason. The class was being
+// added by app.js, which loads after the stylesheet has already painted, so the
+// side rail — the widest thing on screen — appeared for a frame and vanished.
+// On a phone that reads as the desktop app failing to start. ?native here is
+// also what the desktop preview link uses.
+try {
+  var cap = window.Capacitor;
+  var native = !!(cap && cap.isNativePlatform && cap.isNativePlatform())
+    || new URLSearchParams(location.search).has('native');
+  if (native) document.documentElement.classList.add('is-native');
+} catch (e) { /* leave the desktop layout; app.js adds it if it can */ }
 </script>
 </head>
 <body>
