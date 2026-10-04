@@ -71,7 +71,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.18.0-debug.apk`](sorted-v2-2.18.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.19.0-debug.apk`](sorted-v2-2.19.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 

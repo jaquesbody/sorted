@@ -602,21 +602,47 @@ function permissionMessage(state) {
 
 // Switching ONE reminder on.
 //
-// The flag is set FIRST, unconditionally. A settings switch that refuses to
-// record what you just asked for, because a platform API returned something
-// unexpected, is worse than one that warns afterwards: you can see a warning
-// and act on it, but a switch that silently does nothing looks broken and
-// leaves you with no way to find out why.
+// Order matters more than anything else here, and getting it wrong is what
+// made this take four releases to fix:
 //
-// So the order is: remember the choice, then ask for permission, then schedule,
-// then say what the permission turned out to be. If the permission can't be had,
-// the reminder stays switched on and keeps trying — the state is repaired the
-// moment Android grants it, on the next foreground.
+//   1. record the choice
+//   2. repaint
+//   3. THEN talk to the platform
+//
+// The flag used to be written first but the repaint came after the permission
+// request, and on Android that request puts a system dialog on screen. The whole
+// handler was awaiting, so the switch did not repaint until you switched tabs —
+// which is exactly the symptom reported. A settings control must never have its
+// own repaint queued behind a bridge call that may block on a dialog, may be
+// slow, or may never answer.
+//
+// Permission is asked for afterwards and reported afterwards. If it can't be had
+// the reminder stays on and keeps trying, picking itself up the moment Android
+// grants it.
 async function turnReminderOn(kind) {
   if (kind === 'bills') setNotifyEnabled(true);
   else if (kind === 'spend') setSpendNudgeEnabled(true);
   else if (kind === 'goal') setGoalNudgeEnabled(true);
-  return notificationPermission(true);
+  renderPage();
+  return settleReminder(kind);
+}
+
+// Everything after the repaint. Isolated in its own function so that no
+// rejection, hang or slow bridge call can reach back and stop the view from
+// having already shown what the user asked for.
+async function settleReminder(kind) {
+  try {
+    const perm = await notificationPermission(true);
+    notifyPermissionCache = perm;
+    await scheduleAllReminders();
+    if (typeof refreshNotifyPermissionState === 'function') refreshNotifyPermissionState();
+    return perm;
+  } catch (err) {
+    // A failure here is a reminder that isn't scheduled yet, not a setting that
+    // wasn't recorded. Say so rather than pretending the whole thing worked.
+    console.error('Could not settle reminder:', err);
+    return { state: 'unknown', detail: String((err && err.message) || err) };
+  }
 }
 
 // Kept because the old call sites and any saved habit may still reach for it.
@@ -640,36 +666,27 @@ const REMINDER_LABELS = { bills: 'Bill reminders', spend: 'Spending reminders', 
 
 async function toggleBillsReminders() {
   if (isNotifyEnabled()) {
-    await disableNotifications();
-    await scheduleAllReminders();
+    setNotifyEnabled(false);
     renderPage();
+    await scheduleAllReminders();
     return;
   }
+  // turnReminderOn records the flag and repaints before anything is awaited.
   const perm = await turnReminderOn('bills');
-  await scheduleAllReminders();
-  // Rendered before the toast so the switch is visibly on first, whatever the
-  // permission turns out to say. Nothing in the permission path can stop it.
-  renderPage();
-  notifyPermissionCache = perm;
   reportReminderOutcome('bills', perm);
-  // Asks Android what it actually has queued, and writes it into the Settings
-  // line. The permission state alone can't tell you whether the schedule landed.
-  if (typeof refreshNotifyPermissionState === 'function') refreshNotifyPermissionState();
 }
 
 async function toggleNudge(kind) {
   const on = kind === 'spend' ? isSpendNudgeEnabled() : isGoalNudgeEnabled();
   if (on) {
-    await disableNudge(kind);
+    if (kind === 'spend') setSpendNudgeEnabled(false);
+    else if (kind === 'goal') setGoalNudgeEnabled(false);
     renderPage();
+    await scheduleAllReminders();
     return;
   }
   const perm = await turnReminderOn(kind);
-  await scheduleAllReminders();
-  renderPage();
-  notifyPermissionCache = perm;
   reportReminderOutcome(kind, perm);
-  if (typeof refreshNotifyPermissionState === 'function') refreshNotifyPermissionState();
 }
 
 // Says what happened, and how long it stays up. A permission problem that
