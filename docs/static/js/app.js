@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.25.0';
+const APP_VERSION = '2.26.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -639,8 +639,11 @@ async function renderDashboard(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--end">
       ${monthNavHtml('dash', dashViewedDate)}
+      <button class="icon-btn${syncConfigured() ? '' : ' icon-btn--quiet'}" id="sync-refresh"
+              onclick="dashboardSyncNow(this)" aria-label="Sync and refresh"
+              title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
 
     <div class="dashboard-grid">
@@ -911,6 +914,152 @@ const GOAL_TICK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" s
 
 // Paperclip shown on rows that have a stored receipt.
 const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>';
+
+// The dashboard's refresh button: sync if there is somewhere to sync to, then
+// re-read either way.
+//
+// With no sync configured it is still worth a press — it re-reads the database,
+// which is the thing you want after an import — so it works either way and just
+// says which of the two it did.
+async function dashboardSyncNow(btn) {
+  if (btn) btn.classList.add('is-busy');
+  let message = '';
+  try {
+    if (syncConfigured()) {
+      const res = await syncNow();
+      if (!res.ok) message = res.error;
+      else if (res.did === 'pulled') message = 'Synced from your server';
+      else if (res.did === 'pushed') message = 'Sent to your server';
+      else if (res.did === 'created') message = 'Server set up';
+      else message = 'Already up to date';
+    }
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  if (btn) btn.classList.remove('is-busy');
+  await renderPage();
+  if (message) showToast(message);
+}
+
+function syncConfigured() {
+  const s = syncSettings();
+  const t = SYNC_TRANSPORTS[s.transport];
+  return !!(t && t.available && s.url);
+}
+
+// The Sync card.
+//
+// Every transport is listed, whether or not it is built yet, because the choice
+// of where the file lives is the decision and the list is how it's made. What
+// isn't built says so rather than being hidden: a sync option that silently
+// does nothing is worse than one that admits it isn't there yet.
+//
+// The snapshot file itself is the same whatever the transport, so switching is a
+// matter of pointing at a different address — which is the honest answer to
+// "how easy is it to change my mind later".
+function syncSettingsHtml() {
+  const s = syncSettings();
+  const active = SYNC_TRANSPORTS[s.transport];
+  const options = Object.keys(SYNC_TRANSPORTS).map((key) => {
+    const t = SYNC_TRANSPORTS[key];
+    return `<option value="${key}"${key === s.transport ? ' selected' : ''}>${escapeHTML(t.label)}${t.available ? '' : ' (not yet)'}</option>`;
+  }).join('');
+
+  const hasBackup = !!syncBackup();
+  const status = !active
+    ? 'Pick where to sync to.'
+    : !active.available
+      ? 'That option is not built yet.'
+      : !s.url
+        ? 'No address set.'
+        : 'Ready';
+
+  return `
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label setting-label--title">Sync</div>
+      </div>
+      <div class="setting-control">
+        <select class="form-input form-input--mini" id="sync-transport"
+                aria-label="Where to sync to"
+                onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
+      </div>
+    </div>
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Address</div>
+        <div class="setting-hint">${escapeHTML(active ? active.blurb : '')}</div>
+      </div>
+      <div class="setting-control setting-control--wide">
+        <input class="form-input form-input--mini" id="sync-url" type="url" inputmode="url"
+               placeholder="${escapeHTML(active ? active.urlHint : '')}"
+               value="${escapeHTML(s.url)}"
+               ${active && active.available ? '' : 'disabled'}
+               onchange="setSyncSettings({url: this.value.trim()})">
+      </div>
+    </div>
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Status</div>
+        <div class="setting-hint">${escapeHTML(status)}</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" onclick="syncFromSettings(this)"
+                ${active && active.available && s.url ? '' : 'disabled'}>Sync now</button>
+      </div>
+    </div>
+    ${hasBackup ? `
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Replaced copy</div>
+        <div class="setting-hint">Kept from the last time this device took data from the server</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" onclick="restoreSyncBackupFromSettings(this)">Restore</button>
+      </div>
+    </div>` : ''}
+    <p class="setting-hint" style="margin-top: 10px;">
+      The whole of your data goes in one file, and whichever device wrote it last
+      is what the other one gets. Run the host on a machine that stays on:
+      <code>node tools/sync-host.mjs</code>
+    </p>`;
+}
+
+async function syncFromSettings(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  let message;
+  try {
+    const res = await syncNow();
+    if (!res.ok) message = res.error;
+    else if (res.did === 'pulled') message = 'Took data from your server';
+    else if (res.did === 'pushed') message = 'Sent your data';
+    else if (res.did === 'created') message = 'Server set up';
+    else message = 'Already up to date';
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+}
+
+async function restoreSyncBackupFromSettings(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Restoring…'; }
+  let message;
+  try {
+    const res = await restoreSyncBackup();
+    message = res.ok ? 'Restored the copy that was replaced' : res.error;
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+}
+
+// The refresh arrow on the dashboard. Spins while a sync is running, so the
+// button that can take a second is visibly the one doing it.
+const REFRESH_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 3 21 9 15 9"></polyline></svg>';
 
 // How a bill reads at a glance. Only counted down when the number is worth
 // acting on: a raw "522 days" for a bill due in 2028 told the user nothing
@@ -3059,6 +3208,10 @@ function renderSettings(container) {
             </select>
           </div>
         </div>
+      </div>
+
+      <div class="report-card">
+        ${syncSettingsHtml()}
       </div>
 
       <div class="report-card">

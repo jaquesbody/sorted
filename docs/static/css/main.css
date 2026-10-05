@@ -2006,6 +2006,60 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* A control that needs room for an address rather than a word. */
+.setting-control--wide {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.setting-control--wide .form-input {
+  min-width: 0;
+  width: 100%;
+  text-align: right;
+}
+
+/* The dashboard's sync-and-refresh button. Quieter than the month arrows beside
+   it, because it is used occasionally rather than constantly — and quieter
+   still when there is nowhere to sync to, which is the state it starts in. */
+.icon-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.icon-btn--quiet {
+  opacity: 0.55;
+}
+
+/* The one thing in the app that spins. Without it a sync that takes a second is
+   indistinguishable from a button that did nothing. */
+.icon-btn.is-busy svg {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn.is-busy svg { animation-duration: 2.4s; }
+}
+
 /* The lock settings' controls sit beside their label rather than pushed to the
    far edge, so pairing a dropdown with the sentence describing it doesn't mean
    travelling the width of the card. Applied to the whole lock block rather

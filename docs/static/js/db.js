@@ -120,6 +120,16 @@ function normaliseId(id) {
   return (typeof id === 'string' && /^-?\d+$/.test(id)) ? Number(id) : id;
 }
 
+// Tells the sync layer that the data changed. Every write, every delete and
+// every wipe goes through here, which is the point: a deletion leaves no record
+// behind to carry a timestamp, so without this the app could not tell that
+// anything had changed and a bill deleted on one device would never travel.
+//
+// sync.js loads after this one, so the guard is load order, not a cycle.
+function dataChanged() {
+  if (typeof syncTouch === 'function') syncTouch();
+}
+
 async function addItem(storeName, item) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -134,7 +144,7 @@ async function addItem(storeName, item) {
     // The id the record itself carries, not request.id: that's only populated
     // when the store's key generator made the key, and every new row now
     // brings its own.
-    request.onsuccess = () => resolve(record.id);
+    request.onsuccess = () => { dataChanged(); resolve(record.id); };
     request.onerror = () => reject(request.error);
   });
 }
@@ -153,7 +163,7 @@ async function updateItem(storeName, item) {
     // getItem/deleteItem, one layer up.
     const record = { ...item, id: normaliseId(item.id), updatedAt: new Date().toISOString() };
     const request = store.put(record);
-    request.onsuccess = () => resolve(record.id);
+    request.onsuccess = () => { dataChanged(); resolve(record.id); };
     request.onerror = () => reject(request.error);
   });
 }
@@ -164,7 +174,7 @@ async function deleteItem(storeName, id) {
     const tx = db.transaction(storeName, 'readwrite');
     const store = tx.objectStore(storeName);
     const request = store.delete(normaliseId(id));
-    request.onsuccess = () => resolve();
+    request.onsuccess = () => { dataChanged(); resolve(); };
     request.onerror = () => reject(request.error);
   });
 }
@@ -283,6 +293,9 @@ async function clearAllData() {
   }
 
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  // A wipe is the biggest change this database can undergo, and it leaves
+  // nothing behind to carry a timestamp.
+  dataChanged();
   return { total, counts };
 }
 

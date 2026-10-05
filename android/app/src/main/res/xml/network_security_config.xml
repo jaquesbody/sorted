@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext, for exactly one purpose: reaching a sync host on the local network.
+
+  The app's own origin is https://localhost, and Android has blocked cleartext
+  HTTP by default since API 28 (this app targets 36). Without this, a sync to
+  http://192.168.x.x is refused by the OS before it leaves the phone.
+
+  Why it is scoped the way it is, and why it is not scoped more tightly:
+
+  Android's network security config addresses hosts by name or literal address.
+  It has no way to express "only RFC1918 ranges", so a home server on a dynamic
+  address cannot be permitted without permitting cleartext generally. That is
+  the whole of the trade being made here:
+
+    - HTTPS traffic is untouched. The only outbound request the app makes over
+      TLS is the release check against GitHub.
+    - No data is sent anywhere by this permission. The app has no server, no
+      account and no analytics; enabling cleartext opens a protocol, it does not
+      open an endpoint.
+    - It does mean that if the WebView were ever compromised by something the
+      app loads, an attacker could exfiltrate over plain HTTP without a
+      certificate to present. Accepted, because the alternative is a Sync
+      setting that silently cannot work.
+
+  Removing this file and the android:networkSecurityConfig attribute from the
+  manifest reverts the app to cleartext-blocked; nothing else depends on it, and
+  every other feature keeps working.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
