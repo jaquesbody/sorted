@@ -42,6 +42,24 @@ const NOTIFY_BLOCKED_KEY = 'sorted-notify-blocked';
 
 // Android requires a channel from API 26, and a notification with no channel is
 // silently dropped.
+// Marks a notification as not needing an exact alarm.
+//
+// This is the other half of not holding SCHEDULE_EXACT_ALARM, and it is not
+// optional. The plugin defaults `isExactNotification` to **true**, and its
+// schedule() then does this:
+//
+//   if (any notification wants an exact alarm && Android 12+ && we may not
+//       schedule exact alarms) -> open "Alarms and reminders" in Settings
+//
+// So without this flag on every notification, the first schedule() of every app
+// launch throws the user out of the app and into Android's settings, and the app
+// is unreachable until they go back. That is not a subtle degradation: it made
+// 2.30.0 unopenable.
+//
+// With it false the plugin goes straight to setAndAllowWhileIdle, which is what
+// we have always said we wanted and what dropping the permission was for.
+const INEXACT = { isExactNotification: false };
+
 const NOTIFY_CHANNEL_ID = 'sorted-reminders';
 // Bill reminders go out in the morning; the two nudges use a time you choose,
 // because "remind me to record spending" at 9am is a different sentence.
@@ -401,6 +419,7 @@ async function scheduleAllReminders() {
       title: 'Sorted — bill due',
       body: billNotificationText(entry.bill, entry.days),
       channelId: NOTIFY_CHANNEL_ID,
+      ...INEXACT,
       schedule: { at: entry.at, allowWhileIdle: false },
       extra: { page: 'due', billId: entry.bill.id }
     });
@@ -411,6 +430,7 @@ async function scheduleAllReminders() {
       title: 'Sorted — nothing recorded today',
       body: 'Anything you spent today? A minute now saves guessing later.',
       channelId: NOTIFY_CHANNEL_ID,
+      ...INEXACT,
       schedule: { at: plan.spend, allowWhileIdle: false },
       extra: { page: 'spend' }
     });
@@ -421,6 +441,7 @@ async function scheduleAllReminders() {
       title: 'Sorted — nothing going in',
       body: `No goal has been topped up in ${goalNudgeCadence().days} days.`,
       channelId: NOTIFY_CHANNEL_ID,
+      ...INEXACT,
       schedule: { at: plan.goals, allowWhileIdle: false },
       extra: { page: 'savings' }
     });
@@ -498,6 +519,7 @@ function testReminderBody(at) {
     title: 'Sorted — test reminder',
     body: 'This arrived on its own, with nothing due.',
     channelId: NOTIFY_CHANNEL_ID,
+    ...INEXACT,
     // allowWhileIdle, unlike a real reminder. This one exists precisely so that
     // you can put the phone in your pocket and wait, and an alarm that will not
     // fire while the screen is off defeats the entire point of pressing the
@@ -559,6 +581,7 @@ async function showTestNotificationNow() {
         title: 'Sorted — notifications are on',
         body: 'If you can read this, the rest will arrive.',
         channelId: NOTIFY_CHANNEL_ID,
+        ...INEXACT,
         schedule: { at: past, allowWhileIdle: true },
         extra: { page: 'dashboard' }
       }]
