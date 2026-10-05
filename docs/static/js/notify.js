@@ -60,6 +60,12 @@ const NOTIFY_BLOCKED_KEY = 'sorted-notify-blocked';
 // we have always said we wanted and what dropping the permission was for.
 const INEXACT = { isExactNotification: false };
 
+// The status bar icon, by resource name: the plugin looks it up in res/drawable.
+// Without this the launcher icon is used, and Android tints that into a
+// featureless white blob — it is a rounded square with a background layer, and
+// neither means anything in a monochrome slot.
+const NOTIF_ICON = 'ic_stat_sorted';
+
 const NOTIFY_CHANNEL_ID = 'sorted-reminders';
 // Bill reminders go out in the morning; the two nudges use a time you choose,
 // because "remind me to record spending" at 9am is a different sentence.
@@ -420,6 +426,7 @@ async function scheduleAllReminders() {
       body: billNotificationText(entry.bill, entry.days),
       channelId: NOTIFY_CHANNEL_ID,
       ...INEXACT,
+      icon: NOTIF_ICON,
       schedule: { at: entry.at, allowWhileIdle: false },
       extra: { page: 'due', billId: entry.bill.id }
     });
@@ -431,6 +438,7 @@ async function scheduleAllReminders() {
       body: 'Anything you spent today? A minute now saves guessing later.',
       channelId: NOTIFY_CHANNEL_ID,
       ...INEXACT,
+      icon: NOTIF_ICON,
       schedule: { at: plan.spend, allowWhileIdle: false },
       extra: { page: 'spend' }
     });
@@ -442,6 +450,7 @@ async function scheduleAllReminders() {
       body: `No goal has been topped up in ${goalNudgeCadence().days} days.`,
       channelId: NOTIFY_CHANNEL_ID,
       ...INEXACT,
+      icon: NOTIF_ICON,
       schedule: { at: plan.goals, allowWhileIdle: false },
       extra: { page: 'savings' }
     });
@@ -520,6 +529,7 @@ function testReminderBody(at) {
     body: 'This arrived on its own, with nothing due.',
     channelId: NOTIFY_CHANNEL_ID,
     ...INEXACT,
+    icon: NOTIF_ICON,
     // allowWhileIdle, unlike a real reminder. This one exists precisely so that
     // you can put the phone in your pocket and wait, and an alarm that will not
     // fire while the screen is off defeats the entire point of pressing the
@@ -582,6 +592,7 @@ async function showTestNotificationNow() {
         body: 'If you can read this, the rest will arrive.',
         channelId: NOTIFY_CHANNEL_ID,
         ...INEXACT,
+        icon: NOTIF_ICON,
         schedule: { at: past, allowWhileIdle: true },
         extra: { page: 'dashboard' }
       }]

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.31.0';
+const APP_VERSION = '2.32.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -618,6 +618,53 @@ async function renderPage() {
 }
 
 // Dashboard
+function renderTotalMoneyCard(balances, spent, due, saved, savedTarget) {
+  const total = balances.reduce((n, b) => n + b.balance, 0);
+  const count = balances.length;
+  const over = total < 0;
+
+  // Bills still to come are drawn against the money there is. Savings is
+  // different: a goal is an intention, not an invoice, so it is measured against
+  // the target the user set rather than treated as money already spoken for.
+  const committed = Math.max(0, due);
+  const savedPart = Math.max(0, saved);
+  const spare = total - spent - committed - savedPart;
+
+  // Widths as a share of the largest thing being shown, so the parts are always
+  // readable and never vanish because the total is large.
+  const scale = Math.max(total, spent + committed + savedPart, 1);
+  const pct = (n) => Math.max(0, Math.min(100, (Math.max(0, n) / scale) * 100));
+
+  const parts = [
+    { key: 'spent', label: 'Spent', value: spent, tone: 'accent' },
+    { key: 'bills', label: 'Bills', value: committed, tone: 'danger' },
+    { key: 'savings', label: 'Savings', value: savedPart, tone: 'success' },
+    { key: 'left', label: 'Left', value: spare, tone: 'muted' }
+  ];
+
+  return `
+    <div class="stat-card total-card">
+      <div class="stat-card-header">
+        <span class="stat-card-title">Total money</span>
+        <span class="stat-card-sub">${count === 0 ? 'No accounts' : `${count} account${count === 1 ? '' : 's'}`}</span>
+      </div>
+      <div class="stat-card-value${over ? ' tone-danger' : ''}">${currency(total)}</div>
+      ${count === 0 ? '' : `
+      <div class="total-bar" role="img"
+           aria-label="${escapeHTML(parts.map((p) => `${p.label} ${currency(p.value)}`).join(', '))}">
+        ${parts.filter((p) => p.value > 0).map((p) => `
+          <span class="total-seg tone-${p.tone}" style="width: ${pct(p.value).toFixed(2)}%"
+                title="${escapeHTML(`${p.label} ${currency(p.value)}`)}"></span>`).join('')}
+      </div>
+      <div class="total-legend">
+        ${parts.map((p) => `
+          <span class="total-key"><i class="account-seg-swatch tone-${p.tone}"></i>${p.label} ${currency(p.value)}</span>`).join('')}
+      </div>
+      ${savedTarget > total && total > 0 ? `
+      <div class="stat-card-sub total-note">Your goals add up to more than you have</div>` : ''}`}
+    </div>`;
+}
+
 async function renderDashboard(container) {
   const token = renderToken;
   
@@ -647,7 +694,11 @@ async function renderDashboard(container) {
   // Category breakdowns
   const spendByCategory = groupByCategory(spendMonth, 'amount');
   const dueByCategory = groupByCategory(dueShown, 'amount');
-  
+
+  // What there is, and what has already been spoken for. Read once here and
+  // handed to both the new card and the trend below.
+  const balancesForDash = await accountBalances();
+
   if (token !== renderToken) return;
   container.innerHTML = `
     <div class="page-toolbar">
@@ -656,6 +707,8 @@ async function renderDashboard(container) {
               onclick="dashboardSyncNow(this)" aria-label="Sync and refresh"
               title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
+
+    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueTotal, savingsCurrent, savingsTarget)}
 
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
@@ -1521,16 +1574,6 @@ async function renderSavings(container) {
       <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
     </div>
 
-    <div class="section-head">
-      <span class="section-title">Income</span>
-      <span class="stat-card-sub">${currency(incomeTotal)}</span>
-    </div>
-    <div class="item-list">
-      ${incomeItems.length === 0
-        ? '<div class="empty-state"><div class="empty-state-text">No income recorded</div></div>'
-        : incomeItems.map(renderIncomeRow).join('')}
-    </div>
-
     <div class="section-head" id="goals-section">
       <span class="section-title">Goals</span>
     </div>
@@ -1575,6 +1618,16 @@ async function renderSavings(container) {
         `;
       }).join('')}
     </div>
+
+    <div class="section-head">
+      <span class="section-title">Income</span>
+      <span class="stat-card-sub">${currency(incomeTotal)}</span>
+    </div>
+    <div class="item-list">
+      ${incomeItems.length === 0
+        ? '<div class="empty-state"><div class="empty-state-text">No income recorded</div></div>'
+        : incomeItems.map(renderIncomeRow).join('')}
+    </div>
   `;
 }
 
@@ -1586,7 +1639,7 @@ function renderAccountRow(row) {
   const account = accountById(row.id);
   const over = row.balance < 0;
   const parts = [
-    ['Spend', row.spend],
+    ['Spent', row.spend],
     ['Bills', row.bills],
     ['Goals', row.savings]
   ].filter(([, v]) => v > 0);
@@ -2399,33 +2452,26 @@ function renderBalanceBreakdown(balances) {
       // Goals £0.00, In £0.00" says nothing — four zeros beside the number
       // that's already there is just noise competing with it.
       const parts = [
-        ['Spend', b.spend, 'accent'],
+        ['Spent', b.spend, 'accent'],
         ['Bills', b.bills, 'danger'],
         ['Goals', b.savings, 'success'],
         ['Income', b.income, 'muted'],
         ['Moved in', b.transferIn, 'muted']
       ].filter(([, v]) => v > 0);
+      // One line. It was two — name and amount, then what moved it underneath —
+      // which on a phone turns a card saying "you have one account" into four
+      // rows. The movement breakdown is not lost, it is the Dashboard's job now:
+      // the card there breaks total money into spent, bills, savings and what's
+      // left, which is the same figures in a form you can read at a glance.
       return `
         <div class="account-total">
           <div class="account-total-top">
             <span class="account-total-name">${escapeHTML(b.name)}</span>
             <span class="account-total-amount${b.balance < 0 ? ' is-negative' : ''}">${currency(b.balance)}</span>
           </div>
-          <div class="account-split">
-            ${parts.length
-              ? parts.map(([label, value, tone]) => balanceSegment(label, value, tone)).join('')
-              : '<span class="account-seg">Nothing recorded yet</span>'}
-          </div>
-        </div>
-      `;
+        </div>`;
     }).join('')}
   `;
-}
-
-function balanceSegment(label, value, tone) {
-  return `<span class="account-seg">
-    <i class="account-seg-swatch tone-${tone}"></i>${label} ${currency(value)}
-  </span>`;
 }
 
 /* Forecast
@@ -2497,6 +2543,7 @@ function averageNonRecurringSpend(spendItems) {
   // Extrapolating instead — £10 over two days scaled to a month — is worse: two
   // days is not a sample, and a single big purchase on day one would predict a
   // ruinous month. An unfinished month simply does not vote.
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const cutoff = new Date(now.getFullYear(), now.getMonth() - FORECAST_SPEND_MONTHS, 1);
   const inWindow = spendItems.filter((i) => {
     // Bill payments are excluded, and this is the fix for the duplication.
@@ -2506,11 +2553,42 @@ function averageNonRecurringSpend(spendItems) {
     // New payments never land here at all.
     if (i.paid === true) return false;
     const d = new Date(String(i.date || '') + 'T00:00:00');
-    return !Number.isNaN(d.getTime()) && d >= cutoff && d < new Date(now.getFullYear(), now.getMonth(), 1);
+    return !Number.isNaN(d.getTime()) && d >= cutoff && d < monthStart;
   });
-  if (inWindow.length === 0) return 0;
-  const months = new Set(inWindow.map((i) => i.date.slice(0, 7))).size;
-  return inWindow.reduce((n, i) => n + i.amount, 0) / months;
+  const completedMonths = new Set(inWindow.map((i) => i.date.slice(0, 7))).size;
+  const completedTotal = inWindow.reduce((n, i) => n + i.amount, 0);
+
+  // The month in progress counts too, and this is the answer to "the average
+  // never changes when I spend something".
+  //
+  // It used to be excluded outright, which was defensible arithmetic and looked
+  // like a bug: record £300 of spending today and not one figure on the forecast
+  // moved, because today is in a month that was not being counted at all.
+  //
+  // Counting it as a *whole* month was the previous attempt and was worse — six
+  // months at £100 each plus £10 logged two days into the seventh gave £85,
+  // because two days was being treated as a month. So the month in progress
+  // contributes what was actually spent against the share of it that has
+  // happened. Ten days into a 31-day month with £100 spent counts as £100 over
+  // a third of a month, which moves the average when the spending moves without
+  // a single day being able to swing a whole month on its own.
+  // Spelled out rather than reusing buildForecast's local helper: that one is
+  // declared inside a different function, and reaching for it here would be a
+  // ReferenceError — which on one-template-per-page blanks the whole page.
+  const daysInThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const elapsed = Math.max(1, now.getDate());
+  const thisMonthTotal = spendItems.reduce((n, i) => {
+    if (i.paid === true) return n;
+    const d = new Date(String(i.date || '') + 'T00:00:00');
+    if (Number.isNaN(d.getTime()) || d < monthStart || d > now) return n;
+    return n + (Number(i.amount) || 0);
+  }, 0);
+  const elapsedMonths = elapsed / daysInThisMonth;
+
+  const total = completedTotal + thisMonthTotal;
+  const months = completedMonths + elapsedMonths;
+  if (months <= 0) return 0;
+  return total / months;
 }
 
 function getForecastSpendOverride() {
@@ -2868,7 +2946,7 @@ function renderForecastCard(data) {
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
-    ['Spend', 'accent', ''],
+    ['Spent', 'accent', ''],
     ['Bills', 'danger', '']
   ].map(([label, tone, mod]) => `
     <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
@@ -3150,7 +3228,7 @@ function renderPersonBreakdown(spendItems, dueItems) {
 
   return `
     <div class="split-legend">
-      <span class="split-key"><i class="split-swatch tone-accent"></i>Spend</span>
+      <span class="split-key"><i class="split-swatch tone-accent"></i>Spent</span>
       <span class="split-key"><i class="split-swatch tone-danger"></i>Bills</span>
     </div>
     ${rows.map((r) => {
@@ -3247,7 +3325,7 @@ function renderSettings(container) {
             <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
           </div>
         </div>
-        <div class="setting-hint" id="update-note"></div>
+        <div class="setting-hint setting-hint--result" id="update-note"></div>
       </div>
 
       <div class="report-card report-card--danger">
@@ -3382,103 +3460,7 @@ function notifySettingsHtml() {
       </div>
     </div>
 
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label">Check it works</div>
-        <div class="setting-hint">${notifyTestHint()}</div>
-      </div>
-      <div class="setting-control">
-        <button class="btn btn-ghost" onclick="showTestNotification(this)">Show one now</button>
-      </div>
-    </div>
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label">Check an alarm</div>
-        <div class="setting-hint">${notifyAlarmHint()}</div>
-      </div>
-      <div class="setting-control">
-        <button class="btn btn-ghost" onclick="testReminderNow(this)">Arm one</button>
-      </div>
-    </div>
-    ${notifyPendingHtml()}
   `;
-}
-
-// What the phone says it has pending, rather than what Sorted believes it
-// asked for. The two can disagree — a permission withdrawn, an alarm dropped by
-// the system's battery rules — and a switch showing "on" is not evidence that
-// anything will actually arrive.
-function notifyPendingHtml() {
-  if (!notifyIsNative()) {
-    return `<div class="setting-hint" style="padding: 10px 0 0;">
-      Here they are checked when you open the app; a browser cannot wake it at a set hour.</div>`;
-  }
-  const pending = notifyPendingCache || [];
-  if (!pending.length) {
-    return `<div class="setting-hint" style="padding: 10px 0 0;">
-      Nothing scheduled. ${escapeHTML(inexactAlarmNote())}</div>`;
-  }
-  const when = (at) => (at ? at.toLocaleString('en-GB', {
-    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-  }) : 'no time set');
-  const rows = pending.slice()
-    .sort((a, b) => (a.at ? a.at.getTime() : 0) - (b.at ? b.at.getTime() : 0))
-    .map((n) => `<div class="pending-row">
-        <span class="pending-title">${escapeHTML(n.title)}</span>
-        <span class="pending-when">${escapeHTML(when(n.at))}</span>
-      </div>`).join('');
-  return `<div class="pending-list">${rows}</div>
-    <div class="setting-hint" style="padding-top: 10px;">${escapeHTML(inexactAlarmNote())}</div>`;
-}
-
-// Short on purpose. This sits in a two-column row beside a button, and a hint
-// long enough to fill its column pushes the control onto a line of its own —
-// which is the whole "each row on one line" rule the rest of this card keeps.
-function notifyTestHint() {
-  if (!notifyIsNative()) return 'Needs the phone build';
-  if (!notifyPermissionCache || notifyPermissionCache.state !== 'granted') {
-    return 'Turn a reminder on first';
-  }
-  return 'Straight away — proves Sorted can post at all';
-}
-
-function notifyAlarmHint() {
-  if (!notifyIsNative()) return 'Needs the phone build';
-  if (!notifyPermissionCache || notifyPermissionCache.state !== 'granted') {
-    return 'Turn a reminder on first';
-  }
-  // Short on purpose. This sits in a two-column row, and a hint long enough to
-  // fill its column pushes the control onto a line of its own.
-  return 'Five minutes, inexact — see below';
-}
-
-async function showTestNotification(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending\u2026'; }
-  let message;
-  try {
-    const res = await showTestNotificationNow();
-    message = res.ok
-      ? 'Look at your notification shade'
-      : res.error;
-  } catch (err) {
-    message = String((err && err.message) || err);
-  }
-  await renderPage();
-  if (message) showToast(message, 6000);
-}
-
-async function testReminderNow(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-  let message;
-  try {
-    const res = await sendTestReminder();
-    message = res.ok ? 'Armed for about five minutes — inexact, so not exactly then' : res.error;
-  } catch (err) {
-    message = String((err && err.message) || err);
-  }
-  await loadPendingReminders();
-  await renderPage();
-  if (message) showToast(message, 6000);
 }
 
 // `toggleBillsReminders` and `changeNotifyTime` used to be defined here as well

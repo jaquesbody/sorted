@@ -241,6 +241,58 @@ body {
   color: var(--text-secondary);
 }
 
+/* Total money, and the four parts it is already spoken for. Full width above the
+   four summary cards because it is the question they are all about; the bar is
+   one row so the whole figure reads at a glance rather than by addition. */
+.total-card {
+  margin-bottom: 20px;
+}
+
+.total-card .stat-card-value {
+  margin-bottom: 12px;
+}
+
+.total-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.total-seg {
+  display: block;
+  height: 100%;
+}
+
+.total-seg.tone-accent { background: var(--accent); }
+.total-seg.tone-danger { background: var(--danger); }
+.total-seg.tone-success { background: var(--success); }
+/* The remainder, and the part of the figure worth watching month to month.
+   Deliberately the quietest thing in the bar rather than the loudest: it is what
+   is left, not an alarm. */
+.total-seg.tone-muted { background: var(--text-secondary); opacity: 0.45; }
+
+.total-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 10px;
+}
+
+.total-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.total-note {
+  margin-top: 8px;
+}
+
 .stat-card-progress {
   height: 6px;
   background: var(--border);
@@ -2013,6 +2065,13 @@ body {
 .setting-label {
   font-size: 0.95rem;
   font-weight: 600;
+}
+
+/* An empty one must cost nothing. It is the element checkForUpdate writes its
+   answer into, and it sits on its own line whether or not there is an answer
+   yet — which is exactly the kind of blank line that reads as a mistake. */
+.setting-hint--result:empty {
+  display: none;
 }
 
 .setting-hint {

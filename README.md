@@ -24,7 +24,7 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Give someone a PIN and entering it instead of the app passcode both unlocks the app and switches to them, so the right person is marked without touching anything. The app passcode keeps working exactly as before, and anyone who can reach Settings can reset a PIN without knowing it — it says who you are, not that you're allowed in
 - A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
 - Marking a bill paid records who paid it, which can be someone other than the bill's owner
-- Spend, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
+- Spent, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - A bill you tick is still a bill: it stays in the list with the date you paid it, its tick un-pays it, and it can still be edited. Deleting a repeating bill asks which you mean — this one, or this one and every month of it
 - Every row reads as a small table: the amount on the right, its timing underneath, and the receipt paperclip, the person and the tick in one 24px row beneath that. The paperclip only appears when there's actually a picture
 - Recurring: say whether something repeats monthly or annually. It rolls its due date forward by that much when paid, and projects its own next occurrences into the months ahead — twelve months for monthly, the same time next year for annual — so stepping forward shows what those months hold instead of an empty page. Projected rows are dashed, marked, and have no buttons: they're a forecast, not something to pay
@@ -38,6 +38,11 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it. Settings lists a Syncthing folder and a hosted file as well, both marked *not yet* rather than quietly doing nothing
 - To run the other end, on any machine with Node: `node tools/sync-host.mjs`. It serves one file over your Wi-Fi and nothing else — no database, no accounts, no history — and prints the address to paste into Settings
 - Export writes a real file and hands it to Android's share sheet, so a backup can go wherever you want it — Drive, email, a cable. In a browser it is an ordinary download
+- Reminders, each off until you ask for it, saying exactly this:
+  - **"Sorted — bill due"** — *"Rent is due Thursday"* (or *"… is overdue"*)
+  - **"Sorted — nothing recorded today"** — *"Anything you spent today? A minute now saves guessing later."*
+  - **"Sorted — nothing going in"** — *"No goal has been topped up in 7 days."* (or your chosen cadence)
+  - Bills are said once a day per bill, so a bill left unpaid does not nag all morning. Reminders are inexact by design: Sorted does not ask Android for permission to wake exactly on the minute, so they arrive *near* the time rather than on it
 - Reminders you can check without waiting: two controls in Settings. **Show one now** posts a notification immediately, which proves Sorted is allowed to post at all. **Arm one** sets a real alarm five minutes out, which proves the phone accepted it — and that one is **inexact**, because Sorted deliberately does not hold Android's exact-alarm permission (a nudge about tonight's spending does not need to land on the minute, and the permission needs its own grant on Android 12+). So it arrives *near* five minutes rather than at it, and Sorted says so rather than promising a minute it cannot keep. Underneath both, the list is what the phone itself says is pending, read back from the system rather than from what Sorted believes it asked for — the two can disagree, and a switch showing "on" isn't proof anything will arrive
 - Reminders are rebuilt from the database every time anything changes — a bill paid, a spend recorded, a goal topped up, anything deleted, everything wiped — rather than tracked one at a time, so what arrives always matches the data
 - Switching tabs always opens at the top of the new tab rather than wherever you left the last one
@@ -81,7 +86,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.31.0-debug.apk`](sorted-v2-2.31.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.32.0-debug.apk`](sorted-v2-2.32.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 

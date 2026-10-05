@@ -38,8 +38,8 @@ const SYNC_TOUCHED_KEY = 'sorted-sync-touched';
 // of writing a `read`/`write` pair against the same two functions.
 //
 //  - lan        an always-on machine on the same Wi-Fi, reachable over HTTP
-//  - syncthing  a shared folder, no server and no account (not installed on
-//               other devices)
+//  - tailscale  the same HTTP file over Tailscale, so it works off the home
+//               network without exposing anything to the internet
 //  - cloud      a hosted file, which would contradict "no cloud, no login"
 const SYNC_TRANSPORTS = {
   lan: {
@@ -49,12 +49,17 @@ const SYNC_TRANSPORTS = {
     needsUrl: true,
     urlHint: 'http://192.168.1.10:8787/sorted-snapshot.json'
   },
-  syncthing: {
-    label: 'Syncthing folder',
-    available: false,
-    blurb: 'A shared folder, no server and no account',
+  // Not a different mechanism: the same one HTTP file, reached over Tailscale's
+  // private network instead of the home Wi-Fi. The sync host runs exactly as it
+  // does for LAN, and the address is the machine's Tailscale IP, which is stable
+  // wherever the machine is. So it works from a phone that is not at home, with
+  // nothing exposed to the internet and no port forwarding.
+  tailscale: {
+    label: 'Tailscale',
+    available: true,
+    blurb: 'The same file over your private network, from anywhere',
     needsUrl: true,
-    urlHint: 'file:// path Syncthing syncs'
+    urlHint: 'http://100.x.y.z:8787/sorted-snapshot.json'
   },
   cloud: {
     label: 'Hosted file',
