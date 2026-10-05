@@ -463,6 +463,9 @@ async function pendingReminders() {
 // wiped by the next rebuild of the schedule, and nothing marks it as seen —
 // tapping it goes nowhere in particular.
 const NOTIFY_ID_TEST = 900900;
+// A different id from the armed test: one is an alarm, this one has already fired,
+// and neither should be mistaken for the other in the pending list.
+const NOTIFY_ID_SHOW = 900901;
 // When the test reminder is due. Held here rather than nowhere because
 // `scheduleAllReminders` cancels everything and rebuilds from the plan, and the
 // test is not part of the plan — so without somewhere to remember it, putting
@@ -499,7 +502,12 @@ async function sendTestReminder(btn) {
   }
   const cap = notifyCap();
   await ensureChannel();
-  const at = new Date(Date.now() + 60000);
+  // Five minutes, not one. The alarm is *inexact*, and being inexact is
+  // deliberate — see inexactAlarmNote() — so a minute is not a promise the
+  // system has made. On a phone that batches background work, "about a minute"
+  // can honestly mean most of an afternoon, and a test that lies about when it
+  // will arrive is worse than one that admits it.
+  const at = new Date(Date.now() + 5 * 60 * 1000);
   localStorage.setItem(NOTIFY_TEST_AT_KEY, at.toISOString());
   try {
     await cap.schedule({ notifications: [testReminderBody(at)] });
@@ -507,8 +515,52 @@ async function sendTestReminder(btn) {
     localStorage.removeItem(NOTIFY_TEST_AT_KEY);
     return { ok: false, error: 'The phone refused it: ' + String((err && err.message) || err) };
   }
-  if (btn) btn.textContent = 'Sent';
-  return { ok: true, at: at.toISOString() };
+  if (btn) btn.textContent = 'Armed';
+  return { ok: true, at: at.toISOString(), inexact: true };
+}
+
+// Shows a notification immediately, rather than arming an alarm for later.
+//
+// The alarm is inexact, so "did the alarm work?" cannot be answered on any
+// timescale a person will sit and watch. This answers the other half straight
+// away — permission, channel and rendering — because the plugin fires a schedule
+// whose moment has already passed in-process instead of going through
+// AlarmManager. Between the two controls every part is covered: this proves the
+// notification can be shown at all, and the pending list proves the alarm was
+// accepted.
+async function showTestNotificationNow() {
+  if (!notifyIsNative()) {
+    return { ok: false, error: 'Showing a notification needs the phone build' };
+  }
+  if (!(await notifyPermissionGranted())) {
+    return { ok: false, error: 'Notifications are not allowed for Sorted yet' };
+  }
+  const cap = notifyCap();
+  await ensureChannel();
+  const past = new Date(Date.now() - 2000);
+  try {
+    await cap.schedule({
+      notifications: [{
+        id: NOTIFY_ID_SHOW,
+        title: 'Sorted — notifications are on',
+        body: 'If you can read this, the rest will arrive.',
+        channelId: NOTIFY_CHANNEL_ID,
+        schedule: { at: past, allowWhileIdle: true },
+        extra: { page: 'dashboard' }
+      }]
+    });
+  } catch (err) {
+    return { ok: false, error: 'The phone refused it: ' + String((err && err.message) || err) };
+  }
+  return { ok: true };
+}
+
+// Why a reminder may be late, stated once, where it is being waited for.
+function inexactAlarmNote() {
+  return 'Sorted does not ask for permission to wake exactly on the minute, so '
+    + 'reminders are inexact: they arrive near the time, not on it. That is right '
+    + 'for "Rent is due Thursday" and wrong for anything you are watching the '
+    + 'clock for.';
 }
 
 // ---------------------------------------------------------------- web path

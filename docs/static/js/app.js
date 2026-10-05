@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.28.0';
+const APP_VERSION = '2.29.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -3388,7 +3388,16 @@ function notifySettingsHtml() {
         <div class="setting-hint">${notifyTestHint()}</div>
       </div>
       <div class="setting-control">
-        <button class="btn btn-ghost" onclick="testReminderNow(this)">Send a test</button>
+        <button class="btn btn-ghost" onclick="showTestNotification(this)">Show one now</button>
+      </div>
+    </div>
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Check an alarm</div>
+        <div class="setting-hint">${notifyAlarmHint()}</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" onclick="testReminderNow(this)">Arm one</button>
       </div>
     </div>
     ${notifyPendingHtml()}
@@ -3406,7 +3415,8 @@ function notifyPendingHtml() {
   }
   const pending = notifyPendingCache || [];
   if (!pending.length) {
-    return `<div class="setting-hint" style="padding: 10px 0 0;">Nothing scheduled right now.</div>`;
+    return `<div class="setting-hint" style="padding: 10px 0 0;">
+      Nothing scheduled. ${escapeHTML(inexactAlarmNote())}</div>`;
   }
   const when = (at) => (at ? at.toLocaleString('en-GB', {
     day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
@@ -3417,7 +3427,8 @@ function notifyPendingHtml() {
         <span class="pending-title">${escapeHTML(n.title)}</span>
         <span class="pending-when">${escapeHTML(when(n.at))}</span>
       </div>`).join('');
-  return `<div class="pending-list">${rows}</div>`;
+  return `<div class="pending-list">${rows}</div>
+    <div class="setting-hint" style="padding-top: 10px;">${escapeHTML(inexactAlarmNote())}</div>`;
 }
 
 // Short on purpose. This sits in a two-column row beside a button, and a hint
@@ -3428,7 +3439,32 @@ function notifyTestHint() {
   if (!notifyPermissionCache || notifyPermissionCache.state !== 'granted') {
     return 'Turn a reminder on first';
   }
-  return 'Arrives in a minute';
+  return 'Straight away — proves Sorted can post at all';
+}
+
+function notifyAlarmHint() {
+  if (!notifyIsNative()) return 'Needs the phone build';
+  if (!notifyPermissionCache || notifyPermissionCache.state !== 'granted') {
+    return 'Turn a reminder on first';
+  }
+  // Short on purpose. This sits in a two-column row, and a hint long enough to
+  // fill its column pushes the control onto a line of its own.
+  return 'Five minutes, inexact — see below';
+}
+
+async function showTestNotification(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending\u2026'; }
+  let message;
+  try {
+    const res = await showTestNotificationNow();
+    message = res.ok
+      ? 'Look at your notification shade'
+      : res.error;
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
 }
 
 async function testReminderNow(btn) {
@@ -3436,7 +3472,7 @@ async function testReminderNow(btn) {
   let message;
   try {
     const res = await sendTestReminder();
-    message = res.ok ? 'Due in a minute — put the app down and wait' : res.error;
+    message = res.ok ? 'Armed for about five minutes — inexact, so not exactly then' : res.error;
   } catch (err) {
     message = String((err && err.message) || err);
   }
