@@ -611,11 +611,14 @@ body {
   margin-bottom: 4px;
 }
 
-/* The add-someone row sits under the list, so it needs a little air above. */
+/* The add-someone row sits under the list, so it needs a little air above. The
+   rule that used to be here drew a second line a few pixels below the one the
+   list rows had already drawn, which on the People card was two horizontal
+   lines four pixels apart — the clearest possible sign of a divider that was
+   doing nothing. The air is now the only separator. */
 .setting-row--add {
-  margin-top: 10px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 14px;
 }
 
 /* The add button and the dot that explains the page, as one group pinned to
@@ -2029,16 +2032,23 @@ body {
   outline-offset: 2px;
 }
 
-/* One line of settings: label and hint on the left, control on the right.
-   Wraps instead of crushing the hint into a one-word column when the card is
-   narrow — a three-button control and a sentence don't both fit in 280px. */
+/* One line of settings: label on the left, control on the right.
+
+   No divider between rows. There was one, and it was a line drawn through the
+   middle of a card to separate things the card had already separated — 13px of
+   padding above and below each row. On a two-row card it read as a rule across
+   an otherwise empty box, and on the Reminders card it put a line between three
+   rows that are obviously a set. The cards are the grouping; a rule inside one
+   is a second, weaker version of the same idea saying it again.
+
+   Wraps rather than crushing the label into a one-word column when the card is
+   narrow — a three-button control and a sentence don't both fit in 230px. */
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 15px;
   padding: 13px 0;
-  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 
@@ -2076,7 +2086,6 @@ body {
 }
 
 .setting-row:last-child {
-  border-bottom: none;
   padding-bottom: 0;
 }
 
