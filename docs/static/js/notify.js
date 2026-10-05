@@ -437,6 +437,49 @@ async function pendingReminders() {
   }
 }
 
+// A reminder in a minute, through exactly the same path as a real one.
+//
+// Waiting for a bill reminder to come round tells you very little: it conflates
+// the permission, the channel, the alarm and the notification itself, so a
+// failure in any of them looks the same. This exercises all four in about a
+// minute, and it is the only way to find out whether the phone is delivering
+// anything at all without editing real data to make something due.
+//
+// Scheduled rather than posted directly, on purpose: a test that bypassed
+// `schedule()` would prove nothing about the part most likely to be broken. It
+// carries its own id, so it can neither be mistaken for a real reminder nor be
+// wiped by the next rebuild of the schedule, and nothing marks it as seen —
+// tapping it goes nowhere in particular.
+const NOTIFY_ID_TEST = 900900;
+
+async function sendTestReminder(btn) {
+  if (!notifyIsNative()) {
+    return { ok: false, error: 'Testing a scheduled reminder needs the phone build' };
+  }
+  if (!(await notifyPermissionGranted())) {
+    return { ok: false, error: 'Notifications are not allowed for Sorted yet' };
+  }
+  const cap = notifyCap();
+  await ensureChannel();
+  const at = new Date(Date.now() + 60000);
+  try {
+    await cap.schedule({
+      notifications: [{
+        id: NOTIFY_ID_TEST,
+        title: 'Sorted — test reminder',
+        body: 'This arrived on its own, with nothing due.',
+        channelId: NOTIFY_CHANNEL_ID,
+        schedule: { at: at, allowWhileIdle: false },
+        extra: { page: 'dashboard' }
+      }]
+    });
+  } catch (err) {
+    return { ok: false, error: 'The phone refused it: ' + String((err && err.message) || err) };
+  }
+  if (btn) btn.textContent = 'Sent';
+  return { ok: true, at: at.toISOString() };
+}
+
 // ---------------------------------------------------------------- web path
 
 // Which bills we've already mentioned today. Keyed by bill id and stamped with
@@ -563,6 +606,16 @@ async function checkBillNotifications() {
 // switch in system settings — which is not the same thing as the runtime
 // permission, and is false for reasons the permission screen can't fix.
 let notifyPermissionCache = null;
+
+// What the phone last reported as pending. Read once when Settings opens rather
+// than on every render, because it is a bridge call and Settings is repainted
+// every time a switch moves.
+let notifyPendingCache = null;
+
+async function loadPendingReminders() {
+  notifyPendingCache = await pendingReminders();
+  return notifyPendingCache;
+}
 
 async function notificationPermission(request) {
   if (!notifyIsNative()) {

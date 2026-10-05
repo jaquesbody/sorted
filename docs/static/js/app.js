@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.26.0';
+const APP_VERSION = '2.27.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -573,6 +573,17 @@ async function renderPage() {
         break;
       case 'settings':
         renderSettings(content);
+        // The list of what the phone has pending is a bridge call, and it must
+        // not hold the page up: render from whatever is cached, then fill it in
+        // when it arrives. Awaiting it here meant a bridge call that was slow —
+        // or never answered, which is what a half-installed plugin does — left
+        // Settings not appearing at all, showing whatever was on screen before.
+        // That is the stale-screen fault from 2.23.0 in a new place.
+        loadPendingReminders().then(() => {
+          if (token !== renderToken) return;
+          if (currentPage !== 'settings') return;
+          renderSettings(content);
+        });
         break;
     }
   } catch (err) {
@@ -3371,7 +3382,67 @@ function notifySettingsHtml() {
       </div>
     </div>
 
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Check it works</div>
+        <div class="setting-hint">${notifyTestHint()}</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" onclick="testReminderNow(this)">Send a test</button>
+      </div>
+    </div>
+    ${notifyPendingHtml()}
   `;
+}
+
+// What the phone says it has pending, rather than what Sorted believes it
+// asked for. The two can disagree — a permission withdrawn, an alarm dropped by
+// the system's battery rules — and a switch showing "on" is not evidence that
+// anything will actually arrive.
+function notifyPendingHtml() {
+  if (!notifyIsNative()) {
+    return `<div class="setting-hint" style="padding: 10px 0 0;">
+      Here they are checked when you open the app; a browser cannot wake it at a set hour.</div>`;
+  }
+  const pending = notifyPendingCache || [];
+  if (!pending.length) {
+    return `<div class="setting-hint" style="padding: 10px 0 0;">Nothing scheduled right now.</div>`;
+  }
+  const when = (at) => (at ? at.toLocaleString('en-GB', {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+  }) : 'no time set');
+  const rows = pending.slice()
+    .sort((a, b) => (a.at ? a.at.getTime() : 0) - (b.at ? b.at.getTime() : 0))
+    .map((n) => `<div class="pending-row">
+        <span class="pending-title">${escapeHTML(n.title)}</span>
+        <span class="pending-when">${escapeHTML(when(n.at))}</span>
+      </div>`).join('');
+  return `<div class="pending-list">${rows}</div>`;
+}
+
+// Short on purpose. This sits in a two-column row beside a button, and a hint
+// long enough to fill its column pushes the control onto a line of its own —
+// which is the whole "each row on one line" rule the rest of this card keeps.
+function notifyTestHint() {
+  if (!notifyIsNative()) return 'Needs the phone build';
+  if (!notifyPermissionCache || notifyPermissionCache.state !== 'granted') {
+    return 'Turn a reminder on first';
+  }
+  return 'Arrives in a minute';
+}
+
+async function testReminderNow(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  let message;
+  try {
+    const res = await sendTestReminder();
+    message = res.ok ? 'Due in a minute — put the app down and wait' : res.error;
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await loadPendingReminders();
+  await renderPage();
+  if (message) showToast(message, 6000);
 }
 
 // `toggleBillsReminders` and `changeNotifyTime` used to be defined here as well

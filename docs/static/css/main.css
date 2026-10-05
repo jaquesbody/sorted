@@ -1820,6 +1820,38 @@ body {
   padding: 20px;
 }
 
+/* What the phone says is waiting to fire. Reads as a list rather than a
+   sentence, because it is a list — and because "nothing scheduled" is itself
+   usually the answer someone opening this page came for. */
+.pending-list {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pending-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.pending-title {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-when {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 /* After .report-card, not before it: both selectors are a single class, and
    .report-card sets the border with a shorthand, so whichever comes last wins
    outright. This one was first, and the card came out with an ordinary border
