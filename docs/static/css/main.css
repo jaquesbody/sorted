@@ -2078,6 +2078,19 @@ body {
   opacity: 0.55;
 }
 
+/* Taken out of the flow. Adding this to the dashboard's toolbar as a flex child
+   meant right-aligning the row, which slid the month selector across the screen
+   and put it somewhere the other three tabs don't have theirs. The month
+   navigator is at a fixed width and in the same place on Dashboard, Spend and
+   Bills, and that is worth more than a tidy flex row: the control you reach for
+   should be where your thumb already knows it is. */
+.icon-btn--float {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 /* The one thing in the app that spins. Without it a sync that takes a second is
    indistinguishable from a button that did nothing. */
 .icon-btn.is-busy svg {

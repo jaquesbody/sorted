@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.27.0';
+const APP_VERSION = '2.28.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -650,9 +650,9 @@ async function renderDashboard(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar page-toolbar--end">
+    <div class="page-toolbar">
       ${monthNavHtml('dash', dashViewedDate)}
-      <button class="icon-btn${syncConfigured() ? '' : ' icon-btn--quiet'}" id="sync-refresh"
+      <button class="icon-btn icon-btn--float${syncConfigured() ? '' : ' icon-btn--quiet'}" id="sync-refresh"
               onclick="dashboardSyncNow(this)" aria-label="Sync and refresh"
               title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>

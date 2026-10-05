@@ -1,6 +1,6 @@
 {
   "name": "sorted-v2",
-  "version": "2.27.0",
+  "version": "2.28.0",
   "description": "Modern finance tracker - spend, savings, and bills, all local and private",
   "main": "main.js",
   "scripts": {

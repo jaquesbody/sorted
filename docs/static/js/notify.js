@@ -412,6 +412,18 @@ async function scheduleAllReminders() {
     });
   }
 
+  // Put the test reminder back. Everything pending was just cancelled, and the
+  // rebuild has no reason to include it, so without this it survives only until
+  // the next foreground — which on a phone is almost immediately. Also the
+  // reason the plan being empty must not short-circuit: a test reminder on its
+  // own still has something to schedule.
+  const testAt = testReminderAt();
+  if (testAt && testAt.getTime() > Date.now()) {
+    notifications.push(testReminderBody(testAt));
+  } else if (testAt) {
+    localStorage.removeItem(NOTIFY_TEST_AT_KEY);
+  }
+
   if (notifications.length === 0) return 0;
   try {
     await cap.schedule({ notifications });
@@ -451,6 +463,32 @@ async function pendingReminders() {
 // wiped by the next rebuild of the schedule, and nothing marks it as seen —
 // tapping it goes nowhere in particular.
 const NOTIFY_ID_TEST = 900900;
+// When the test reminder is due. Held here rather than nowhere because
+// `scheduleAllReminders` cancels everything and rebuilds from the plan, and the
+// test is not part of the plan — so without somewhere to remember it, putting
+// the phone down and picking it up again would silently cancel the very thing
+// you were waiting for. That is what actually happened.
+const NOTIFY_TEST_AT_KEY = 'sorted-notify-test-at';
+
+function testReminderAt() {
+  const t = Date.parse(localStorage.getItem(NOTIFY_TEST_AT_KEY) || '');
+  return Number.isFinite(t) ? new Date(t) : null;
+}
+
+function testReminderBody(at) {
+  return {
+    id: NOTIFY_ID_TEST,
+    title: 'Sorted — test reminder',
+    body: 'This arrived on its own, with nothing due.',
+    channelId: NOTIFY_CHANNEL_ID,
+    // allowWhileIdle, unlike a real reminder. This one exists precisely so that
+    // you can put the phone in your pocket and wait, and an alarm that will not
+    // fire while the screen is off defeats the entire point of pressing the
+    // button.
+    schedule: { at: at, allowWhileIdle: true },
+    extra: { page: 'dashboard' }
+  };
+}
 
 async function sendTestReminder(btn) {
   if (!notifyIsNative()) {
@@ -462,18 +500,11 @@ async function sendTestReminder(btn) {
   const cap = notifyCap();
   await ensureChannel();
   const at = new Date(Date.now() + 60000);
+  localStorage.setItem(NOTIFY_TEST_AT_KEY, at.toISOString());
   try {
-    await cap.schedule({
-      notifications: [{
-        id: NOTIFY_ID_TEST,
-        title: 'Sorted — test reminder',
-        body: 'This arrived on its own, with nothing due.',
-        channelId: NOTIFY_CHANNEL_ID,
-        schedule: { at: at, allowWhileIdle: false },
-        extra: { page: 'dashboard' }
-      }]
-    });
+    await cap.schedule({ notifications: [testReminderBody(at)] });
   } catch (err) {
+    localStorage.removeItem(NOTIFY_TEST_AT_KEY);
     return { ok: false, error: 'The phone refused it: ' + String((err && err.message) || err) };
   }
   if (btn) btn.textContent = 'Sent';
