@@ -97,7 +97,21 @@ function notifyIsNative() {
 // that never gets here never registers it.
 let notifyCapPlugin = null;
 function notifyCap() {
-  if (!notifyCapPlugin) notifyCapPlugin = window.Capacitor.registerPlugin('LocalNotifications');
+  if (notifyCapPlugin) return notifyCapPlugin;
+  // Failing with a sentence rather than a TypeError, because this is the whole
+  // difference between "Sorted's reminders are switched off" and "Sorted is
+  // broken and here is an internal function name you can do nothing with".
+  //
+  // `registerPlugin` lives on the window only when Capacitor's runtime has been
+  // loaded. The Android build injects native-bridge.js, which is a different
+  // file and does not provide it, and the CLI does not copy the runtime into
+  // webDir — so an app that does not load capacitor.js has a window.Capacitor
+  // that answers isNativePlatform() perfectly and then throws here.
+  const reg = window.Capacitor && window.Capacitor.registerPlugin;
+  if (typeof reg !== 'function') {
+    throw new Error('This build is missing the Capacitor runtime, so reminders cannot work.');
+  }
+  notifyCapPlugin = reg.call(window.Capacitor, 'LocalNotifications');
   return notifyCapPlugin;
 }
 

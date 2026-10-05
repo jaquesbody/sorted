@@ -37,6 +37,7 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete
 - Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it. Settings lists a Syncthing folder and a hosted file as well, both marked *not yet* rather than quietly doing nothing
 - To run the other end, on any machine with Node: `node tools/sync-host.mjs`. It serves one file over your Wi-Fi and nothing else — no database, no accounts, no history — and prints the address to paste into Settings
+- Export writes a real file and hands it to Android's share sheet, so a backup can go wherever you want it — Drive, email, a cable. In a browser it is an ordinary download
 - Reminders you can check without waiting: two controls in Settings. **Show one now** posts a notification immediately, which proves Sorted is allowed to post at all. **Arm one** sets a real alarm five minutes out, which proves the phone accepted it — and that one is **inexact**, because Sorted deliberately does not hold Android's exact-alarm permission (a nudge about tonight's spending does not need to land on the minute, and the permission needs its own grant on Android 12+). So it arrives *near* five minutes rather than at it, and Sorted says so rather than promising a minute it cannot keep. Underneath both, the list is what the phone itself says is pending, read back from the system rather than from what Sorted believes it asked for — the two can disagree, and a switch showing "on" isn't proof anything will arrive
 - Reminders are rebuilt from the database every time anything changes — a bill paid, a spend recorded, a goal topped up, anything deleted, everything wiped — rather than tracked one at a time, so what arrives always matches the data
 - Switching tabs always opens at the top of the new tab rather than wherever you left the last one
@@ -80,7 +81,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.29.0-debug.apk`](sorted-v2-2.29.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.30.0-debug.apk`](sorted-v2-2.30.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 

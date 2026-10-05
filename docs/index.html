@@ -141,6 +141,15 @@ try {
      neither is needed until a receipt is picked, so they're fetched on demand
      by loadScriptOnce() in utils.js. The theme bootstrap above stays inline
      and unpainted-blocking on purpose — it has to run before the first paint. -->
+<!-- Capacitor's runtime. It defines window.Capacitor.registerPlugin, which is how
+     every native plugin is reached. The Android build injects only
+     native-bridge.js, which is NOT this file and does not provide it — and the
+     Capacitor CLI does not copy it into webDir. So a vanilla app that does not
+     load it has a window.Capacitor that answers isNativePlatform() and then
+     throws on every plugin call. Copied from
+     node_modules/@capacitor/core/dist/capacitor.js; there is a test that fails
+     if the committed copy drifts from the installed one. -->
+<script defer src="capacitor.js"></script>
 <script defer src="static/js/db.js"></script>
 <script defer src="static/js/utils.js"></script>
 <script defer src="static/js/settings.js"></script>
