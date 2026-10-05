@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.24.0';
+const APP_VERSION = '2.25.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2111,15 +2111,13 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Spending by Category</h2>
+        ${reportHead('<h2 class="report-title">Spending by Category</h2>', totalSpend, 'accent')}
         ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
-        ${reportTotalRow('Total Spent', totalSpend, 'accent')}
       </div>
       
       <div class="report-card">
-        <h2 class="report-title">Bills by Category</h2>
+        ${reportHead('<h2 class="report-title">Bills by Category</h2>', totalDue, 'danger')}
         ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue, 'danger')}
-        ${reportTotalRow('Total Due', totalDue, 'danger')}
       </div>
 
       <div class="report-card">
@@ -2128,7 +2126,8 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Where Your Money Is</h2>
+        ${reportHead('<h2 class="report-title">Where Your Money Is</h2>',
+          balances.reduce((n, b) => n + b.balance, 0), null)}
         ${renderBalanceBreakdown(balances)}
       </div>
 
@@ -2138,11 +2137,10 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title report-title--link" role="button" tabindex="0"
+        ${reportHead(`<h2 class="report-title report-title--link" role="button" tabindex="0"
             onclick="goToGoals()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToGoals();}"
-            title="Go to your goals">Savings by Goal</h2>
+            title="Go to your goals">Savings by Goal</h2>`, totalSavings, 'success')}
         ${renderSavingsBreakdown(savingsItems)}
-        ${reportTotalRow('Total Saved', totalSavings, 'success')}
       </div>
     </div>
   `;
@@ -2154,13 +2152,19 @@ async function renderReports(container) {
 // repeated all three in one place, which meant reading one number required
 // scrolling past two other cards to find it — and the total is the thing the
 // breakdown below it adds up to, so it belongs at the foot of that breakdown.
-function reportTotalRow(label, amount, tone) {
+// A card's title and its total, on one line.
+//
+// The total used to be a row of its own below the breakdown, which cost every
+// one of these cards a whole line to say something the heading already implies:
+// "Spending by Category ... £123.00". On a phone that line is a fifth of the
+// card. The label went with it — "Total Spent" under a heading that already
+// says Spending said the same thing twice.
+function reportHead(title, amount, tone) {
   return `
-    <div class="report-total">
-      <span class="report-total-label">${escapeHTML(label)}</span>
-      <span class="report-total-value${tone ? ' tone-' + tone : ''}">${currency(amount)}</span>
-    </div>
-  `;
+    <div class="report-head">
+      ${title}
+      <span class="report-head-total${tone ? ' tone-' + tone : ''}">${currency(amount)}</span>
+    </div>`;
 }
 
 // Savings goals measured against their own target, not against each other —
@@ -2229,7 +2233,6 @@ function renderBalanceBreakdown(balances) {
   if (!balances.length) {
     return '<div style="color: var(--text-secondary); padding: 20px 0;">No accounts yet</div>';
   }
-  const total = balances.reduce((n, b) => n + b.balance, 0);
   return `
     ${balances.map((b) => {
       // Only the things that actually moved. A row reading "Bills £0.00,
@@ -2256,7 +2259,6 @@ function renderBalanceBreakdown(balances) {
         </div>
       `;
     }).join('')}
-    ${reportTotalRow('Total', total, null)}
   `;
 }
 
@@ -3031,7 +3033,6 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">People</h2>
         ${peopleSettingsHtml()}
       </div>
 
@@ -3040,17 +3041,16 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Reminders</h2>
         ${notifySettingsHtml()}
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Currency</h2>
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
-            <div class="setting-label">${escapeHTML(getCurrencyCode())}</div>
+            <div class="setting-label setting-label--title">Currency</div>
           </div>
-          <div class="setting-control">
+          <div class="setting-control setting-control--split">
+            <span class="currency-code">${escapeHTML(getCurrencyCode())}</span>
             <select class="form-input form-input--mini" id="currency-select"
                     aria-label="Currency"
                     onchange="setCurrencyCode(this.value); renderPage();">
@@ -3069,10 +3069,9 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">About</h2>
         <p style="color: var(--text-secondary);">
           <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong><br>
-          All data stored locally · no cloud, no login<br>
+          All data stored locally · no cloud, no login ·
           <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
              style="color: var(--accent);">Releases on GitHub</a>
         </p>

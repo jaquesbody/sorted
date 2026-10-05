@@ -1395,29 +1395,35 @@ body {
   stroke-linejoin: round;
 }
 
-/* The foot of a Reports card: the total its own breakdown adds up to. */
-.report-total {
+/* The head of a Reports card: its title, and the total its breakdown adds up to.
+   They share one line because a card on a phone cannot spare a fifth of itself
+   to repeat what the heading already says. */
+.report-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
 }
 
-.report-total-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.report-head .report-title {
+  margin-bottom: 15px;
+  min-width: 0;
 }
 
-.report-total-value {
+.report-head-total {
   font-size: 1.15rem;
   font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
 }
+
+.report-head-total.tone-accent { color: var(--accent); }
+.report-head-total.tone-danger { color: var(--danger); }
+.report-head-total.tone-success { color: var(--success); }
+
+/* Patterns and Standing Charges. Deliberately quieter than the breakdown cards
+   next to them: these are observations, not totals, and a card that shouts a
+   habit at you is one you learn to scroll past. */
 
 /* Patterns and Standing Charges. Deliberately quieter than the breakdown cards
    next to them: these are observations, not totals, and a card that shouts a
@@ -1481,10 +1487,6 @@ body {
   color: var(--text-secondary);
   margin: 4px 0 10px;
 }
-
-.report-total-value.tone-accent { color: var(--accent); }
-.report-total-value.tone-danger { color: var(--danger); }
-.report-total-value.tone-success { color: var(--success); }
 
 /* The line under a row: "Paid 28 Sept 2026", "In 3 days", "3 days overdue".
    Takes the full width of the row and sits hard right, so the date a bill was
@@ -1992,6 +1994,16 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The current currency, named beside its own picker: "Currency  GBP  [v]".
+   Without the code the dropdown is the only thing saying which one is in use,
+   and it has to be opened to find out. */
+.currency-code {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
 }
 
 /* The lock settings' controls sit beside their label rather than pushed to the

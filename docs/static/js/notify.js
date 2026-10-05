@@ -35,6 +35,10 @@ const NOTIFY_SPEND_TIME_KEY = 'sorted-notify-spend-time';
 const NOTIFY_GOAL_KEY = 'sorted-notify-goal';
 const NOTIFY_GOAL_CADENCE_KEY = 'sorted-notify-goal-cadence';
 const NOTIFY_GOAL_LAST_KEY = 'sorted-notify-goal-last';
+// Which permission state, if any, has already been explained to the reader. See
+// reportReminderOutcome() — this exists so a blocked notice is said once rather
+// than on every tap.
+const NOTIFY_BLOCKED_KEY = 'sorted-notify-blocked';
 
 // Android requires a channel from API 26, and a notification with no channel is
 // silently dropped.
@@ -582,8 +586,19 @@ async function notificationPermission(request) {
     if (before && before.display === 'granted') {
       return { state: 'granted', detail: 'already granted' };
     }
+    // A refusal is an answer, and asking again does not change it — the only
+    // thing that does is the phone's own settings screen, which is exactly what
+    // the message tells them to go and use. So once a check has come back
+    // denied, this stops requesting and only re-checks.
+    //
+    // Re-checking is not redundant: the user may have been and gone and turned
+    // notifications on, and the reminder is meant to start working by itself the
+    // moment they have.
+    const knownDenied = notifyPermissionCache
+      && notifyPermissionCache.state === 'denied'
+      && before.display === 'denied';
     let asked = null;
-    if (request) {
+    if (request && !knownDenied) {
       asked = await cap.requestPermissions();
     }
     // Trust the re-check over the request's own answer: the two can disagree,
@@ -712,12 +727,25 @@ async function toggleNudge(kind) {
 // vanishes after three and a half seconds is a permission problem you can't act
 // on — so the one that matters is left long enough to read, and the Settings
 // line keeps it on screen afterwards.
+//
+// The blocked notice is said once per blocked run, not once per tap. "Turn on
+// notifications for Sorted in your phone settings" appeared every single time a
+// reminder was switched on, which is the least useful possible form of a
+// message about something the reader cannot fix from here: after the first time
+// it is not information, it is an obstacle between them and the switch they
+// were trying to move. It comes back if the state ever changes, and it goes for
+// good once notifications are allowed.
 function reportReminderOutcome(kind, perm) {
   const name = REMINDER_LABELS[kind] || 'Reminders';
   if (perm.state === 'granted') {
+    // Allowed at last: forget we ever said otherwise, so if it is blocked again
+    // later the reason is explained rather than assumed to be known.
+    localStorage.removeItem(NOTIFY_BLOCKED_KEY);
     showToast(`${name} on`);
     return;
   }
+  if (localStorage.getItem(NOTIFY_BLOCKED_KEY) === perm.state) return;
+  localStorage.setItem(NOTIFY_BLOCKED_KEY, perm.state);
   showToast(`${permissionMessage(perm.state).text}`, 8000);
 }
 
