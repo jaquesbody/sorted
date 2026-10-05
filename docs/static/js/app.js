@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.32.0';
+const APP_VERSION = '2.33.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1030,14 +1030,20 @@ function syncSettingsHtml() {
   }).join('');
 
   const hasBackup = !!syncBackup();
-  const status = !active
-    ? 'Pick where to sync to.'
-    : !active.available
-      ? 'That option is not built yet.'
-      : !s.url
-        ? 'No address set.'
-        : 'Ready';
+  // The button's own state is the status. It used to be a third row saying
+  // "Ready" or "No address set" in words, which is one more line to read and one
+  // more thing to keep in step with reality — a control that is enabled when it
+  // will work and disabled when it will not already says both of those.
+  const ready = !!(active && active.available && s.url);
 
+  // One address and one button, and that is the whole of it.
+  //
+  // This card was four rows — where, address, status, replaced copy — and then a
+  // paragraph underneath explaining that the data goes in one file and how to
+  // run the host. Every one of those was a line on a phone screen spent saying
+  // something the two controls already said. What was asked for was the simplest
+  // version that works: pick where, paste the address the host printed, press
+  // Sync now.
   return `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -1049,44 +1055,25 @@ function syncSettingsHtml() {
                 onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
       </div>
     </div>
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label">Address</div>
-        <div class="setting-hint">${escapeHTML(active ? active.blurb : '')}</div>
-      </div>
-      <div class="setting-control setting-control--wide">
-        <input class="form-input form-input--mini" id="sync-url" type="url" inputmode="url"
-               placeholder="${escapeHTML(active ? active.urlHint : '')}"
-               value="${escapeHTML(s.url)}"
-               ${active && active.available ? '' : 'disabled'}
-               onchange="setSyncSettings({url: this.value.trim()})">
-      </div>
-    </div>
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label">Status</div>
-        <div class="setting-hint">${escapeHTML(status)}</div>
-      </div>
-      <div class="setting-control">
-        <button class="btn btn-ghost" onclick="syncFromSettings(this)"
-                ${active && active.available && s.url ? '' : 'disabled'}>Sync now</button>
-      </div>
-    </div>
+    <div class="setting-label" style="margin-top: 14px;">Address</div>
+    <input class="form-input" id="sync-url" type="url" inputmode="url"
+           placeholder="${escapeHTML(active ? active.urlHint : '')}"
+           value="${escapeHTML(s.url)}"
+           style="width: 100%; margin-top: 6px; text-align: left;"
+           ${active && active.available ? '' : 'disabled'}
+           onchange="setSyncSettings({url: this.value.trim()})">
+    <button class="btn btn-primary" onclick="syncFromSettings(this)"
+            style="width: 100%; margin-top: 10px;"
+            ${ready ? '' : 'disabled'}>Sync now</button>
     ${hasBackup ? `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label">Replaced copy</div>
-        <div class="setting-hint">Kept from the last time this device took data from the server</div>
       </div>
       <div class="setting-control">
         <button class="btn btn-ghost" onclick="restoreSyncBackupFromSettings(this)">Restore</button>
       </div>
-    </div>` : ''}
-    <p class="setting-hint" style="margin-top: 10px;">
-      The whole of your data goes in one file, and whichever device wrote it last
-      is what the other one gets. Run the host on a machine that stays on:
-      <code>node tools/sync-host.mjs</code>
-    </p>`;
+    </div>` : ''}`;
 }
 
 async function syncFromSettings(btn) {
@@ -1562,18 +1549,6 @@ async function renderSavings(container) {
       </div>
     </div>
     
-    <div class="section-head">
-      <span class="section-title">Accounts</span>
-      <span class="stat-card-sub">${currency(totalBalance)}</span>
-    </div>
-    <div class="item-list">
-      ${balances.map(renderAccountRow).join('')}
-    </div>
-
-    <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
-      <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
-    </div>
-
     <div class="section-head" id="goals-section">
       <span class="section-title">Goals</span>
     </div>
@@ -1617,6 +1592,18 @@ async function renderSavings(container) {
           </div>
         `;
       }).join('')}
+    </div>
+
+    <div class="section-head">
+      <span class="section-title">Accounts</span>
+      <span class="stat-card-sub">${currency(totalBalance)}</span>
+    </div>
+    <div class="item-list">
+      ${balances.map(renderAccountRow).join('')}
+    </div>
+
+    <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
+      <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
     </div>
 
     <div class="section-head">
@@ -3312,10 +3299,9 @@ function renderSettings(container) {
 
       <div class="report-card">
         <p style="color: var(--text-secondary);">
-          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong><br>
-          All data stored locally · no cloud, no login ·
+          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong> ·
           <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
-             style="color: var(--accent);">Releases on GitHub</a>
+             style="color: var(--accent);">Releases</a>
         </p>
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
@@ -3429,7 +3415,7 @@ function notifySettingsHtml() {
     `<option value="${c.value}"${c.value === goalNudgeCadence().value ? 'selected' : ''}>${c.label}</option>`).join('');
 
   return `
-    <div class="setting-row setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
         <div class="setting-label">Bills due</div>
       </div>
@@ -3439,9 +3425,9 @@ function notifySettingsHtml() {
       </div>
     </div>
 
-    <div class="setting-row setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
-        <div class="setting-label">Record spending</div>
+        <div class="setting-label">Spending</div>
       </div>
       <div class="setting-control">
         ${picker('notify-spend-time', timeOptions, 'changeNotifyTime(this.value)', 'Remind me at', spend && !needsPermission)}
@@ -3449,9 +3435,9 @@ function notifySettingsHtml() {
       </div>
     </div>
 
-    <div class="setting-row setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
-        <div class="setting-label">Savings goals</div>
+        <div class="setting-label">Goals</div>
       </div>
       <div class="setting-control">
         ${picker('notify-goal-cadence', cadenceOptions, 'changeGoalCadence(this.value)',
@@ -3539,7 +3525,6 @@ function peopleSettingsHtml() {
         <button class="btn btn-primary" onclick="addPersonFromSettings()">Add</button>
       </div>
     </div>
-    ${people.length === 0 ? '<p class="setting-hint" style="margin-top: 12px;">Until you add anyone, entries are marked as Anyone\'s.</p>' : ''}
   `;
 }
 

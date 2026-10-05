@@ -40,6 +40,7 @@ const SYNC_TOUCHED_KEY = 'sorted-sync-touched';
 //  - lan        an always-on machine on the same Wi-Fi, reachable over HTTP
 //  - tailscale  the same HTTP file over Tailscale, so it works off the home
 //               network without exposing anything to the internet
+//  - syncthing  a folder something else already syncs (not built yet)
 //  - cloud      a hosted file, which would contradict "no cloud, no login"
 const SYNC_TRANSPORTS = {
   lan: {
@@ -60,6 +61,18 @@ const SYNC_TRANSPORTS = {
     blurb: 'The same file over your private network, from anywhere',
     needsUrl: true,
     urlHint: 'http://100.x.y.z:8787/sorted-snapshot.json'
+  },
+  // A shared folder and nothing else. No server to leave running and no
+  // address to type, which is the whole appeal: the folder is already there on
+  // both machines because something else is keeping it there, and Sorted reads
+  // and writes the same one file inside it. Listed because it was asked for,
+  // still marked not built until the read side is written and tested.
+  syncthing: {
+    label: 'Syncthing folder',
+    available: false,
+    blurb: 'A folder you already sync, no server to keep running',
+    needsUrl: true,
+    urlHint: 'file:// path to the synced folder'
   },
   cloud: {
     label: 'Hosted file',

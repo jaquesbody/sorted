@@ -35,7 +35,9 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Both are arithmetic on your own data. No network, no API key, no model, and nothing about your spending leaves the device — which is the whole reason they exist instead of a search API
 - Three reminders, each off until you ask for it: bills coming due or already overdue, nothing recorded today, and a savings goal going untouched. On Android these are scheduled by the system, so they arrive whether or not Sorted is open — bills in the morning, the other two at a time you pick. In a browser there's no way to wake the app at a set hour, so the same checks run when you open it and put it away, and the settings say so rather than implying more
 - Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete
-- Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it. Settings lists a Syncthing folder and a hosted file as well, both marked *not yet* rather than quietly doing nothing
+- Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
+- Setting it up is **one address and one button**: pick where in the dropdown, paste the address the host printed, press **Sync now**. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
+- Settings also lists a Tailscale address (works, and from outside the house) alongside a Syncthing folder and a hosted file, both marked *not yet* rather than quietly doing nothing
 - To run the other end, on any machine with Node: `node tools/sync-host.mjs`. It serves one file over your Wi-Fi and nothing else — no database, no accounts, no history — and prints the address to paste into Settings
 - Export writes a real file and hands it to Android's share sheet, so a backup can go wherever you want it — Drive, email, a cable. In a browser it is an ordinary download
 - Reminders, each off until you ask for it, saying exactly this:
@@ -86,7 +88,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.32.0-debug.apk`](sorted-v2-2.32.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.33.0-debug.apk`](sorted-v2-2.33.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 

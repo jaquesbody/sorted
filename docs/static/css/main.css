@@ -544,16 +544,7 @@ body {
    control under the heading — the Add-someone box by 50px, Appearance by 5px,
    so it looked like it worked on my phone and not on yours. These rows have no
    hint long enough to need a wrap, so they don't wrap at all. */
-.setting-row--inline {
-  flex-wrap: nowrap;
-}
 
-/* A picker inside a settings row. The default form input is a full-width field
-   for a form; here it sits beside a switch on the same line, so it's sized to
-   its own content and kept off the row's shrinking basis. */
-.setting-row--inline .setting-text {
-  flex: 0 1 auto;
-}
 
 .setting-label--title {
   font-size: 1.05rem;
@@ -1755,7 +1746,10 @@ body {
    specificity, so position is what decides. */
 .form-input--mini {
   width: auto;
-  min-width: 0;
+  /* Not 0. A picker squeezed to nothing is worse than one that takes up its
+     room: the widest option here is "1 week before", and this is the width below
+     which the browser starts clipping that in half. */
+  min-width: 64px;
   max-width: 116px;
   padding: 6px 8px;
   font-size: 0.85rem;
@@ -2048,6 +2042,39 @@ body {
   flex-wrap: wrap;
 }
 
+/* The label column is not 200px wide. `.setting-text { flex: 1 1 200px }` is
+   right for a row that wraps, where the label can have the space it needs, and
+   wrong for one that does not: a 200px basis means "Appearance" and "Passcode"
+   wrap on a 360px phone even though their controls fit alongside them easily.
+   This resets it to the label's own width, and it is load-bearing — deleting it
+   puts three cards back to two lines. */
+.setting-row--inline .setting-text {
+  flex: 0 1 auto;
+}
+
+/* A settings row is a label on the left and its control on the right, and by
+   default it may break onto two lines when they will not both fit — which is
+   what a text field wants, since a 40px input is not a control.
+
+   This is for the rows where it does not: a label with the picker and the
+   switch sitting underneath it is a row twice the height it needs to be, and on
+   a phone three of those stacked is a Reminders card you scroll past.
+
+   It was meant to be the default — `.setting-row--inline { flex-wrap: nowrap }`
+   existed for years and did nothing, because `.setting-row { flex-wrap: wrap }`
+   came later in this file at the same specificity and won. Hence the modifier,
+   declared after the base rule so it actually applies. */
+.setting-row--nowrap {
+  flex-wrap: nowrap;
+}
+
+/* The label keeps its full width in a nowrap row and the control gives ground
+   instead. Priority matters: if the label were the thing that shrank, "Record
+   spending" would wrap onto two lines and buy nothing at all. */
+.setting-row--nowrap .setting-text {
+  flex: 0 0 auto;
+}
+
 .setting-row:last-child {
   border-bottom: none;
   padding-bottom: 0;
@@ -2080,11 +2107,30 @@ body {
   margin-top: 3px;
 }
 
+/* A settings row is a label on the left and its control on the right, on ONE
+   line. The control used to be rigid (flex: 0 0 auto), so on a 360px phone the
+   row had no choice but to drop the control onto a second line: every Reminders
+   row came out as a label with the picker and the switch sitting underneath it.
+   That is what "linebreaks have snuck back in" looked like from the sofa, and it
+   was three rows out of three on the card.
+
+   Letting the control shrink is the whole fix. The switch is `flex: 0 0 auto`
+   inside it, so the switch never moves or resizes — which matters, because a
+   control that shifts under a finger still resting on it is the one failure
+   here that is genuinely dangerous. Only the picker gives ground. */
 .setting-control {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* A name field is the one control that cannot usefully shrink — a 40px input is
+   not a control, it is a mistake — so the add-someone row keeps its natural
+   width and wraps instead, exactly as it did before. */
+.setting-row--add .form-input {
+  min-width: 118px;
 }
 
 /* The current currency, named beside its own picker: "Currency  GBP  [v]".
@@ -2645,10 +2691,36 @@ body.is-native .bottom-nav {
 
 /* Small phones: six columns of labels get tight, so shrink the text a step
    rather than letting it spill past the bar. */
+/* A report heading and its total share one line, the total right-aligned, and
+   between them they have to fit the card. Measured: "Where Your Money Is" needs
+   145px at 0.9rem and had 144px to put it in, so it wrapped by a single pixel
+   and made the card taller than its contents — and a five-figure total brought
+   the same edge back at 393px, which is why this is not a 380px query.
+
+   The room comes from three places rather than one, because one pixel of slack
+   is not slack. The total goes down a step as well as the heading, and it
+   should: it was the larger of the two by two and a half pixels, which is not
+   what a card whose number is the point should look like. The total is still the
+   biggest thing on the line, and a tablet or a desktop is untouched. */
+@media (max-width: 430px) {
+  .report-head {
+    gap: 8px;
+  }
+
+  .report-head .report-title {
+    font-size: 0.9rem;
+  }
+
+  .report-head-total {
+    font-size: 0.95rem;
+  }
+}
+
 @media (max-width: 380px) {
   .bottom-nav .nav-item {
     font-size: 0.58rem;
   }
+
 }
 
 .bottom-nav .nav-item svg {
