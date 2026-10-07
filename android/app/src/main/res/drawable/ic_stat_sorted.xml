@@ -12,6 +12,12 @@
   White, because Android applies its own tint and only the alpha channel is
   used. Traced as one continuous stroke so the joins are round rather than
   mitred, which at this size is the difference between an S and a staircase.
+
+  fillColor is spelled out as fully transparent rather than left out. The path
+  is open — it ends at (6,17) and would be implicitly closed back to (18,7) —
+  so a fill, if one were applied, is a diagonal across the middle of the shape
+  rather than nothing at all. Saying so in the file costs one attribute and
+  removes the question.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
@@ -20,6 +26,7 @@
     android:viewportHeight="24">
     <path
         android:pathData="M18,7 L6,7 L6,12 L18,12 L18,17 L6,17"
+        android:fillColor="#00000000"
         android:strokeColor="#FFFFFFFF"
         android:strokeWidth="2.4"
         android:strokeLineCap="round"

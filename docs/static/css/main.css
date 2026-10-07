@@ -623,15 +623,17 @@ body {
    \u2014 a reader needs to be able to stop reading settings and start reading
    steps. */
 .setup-steps {
-  margin-top: 16px;
-  padding-top: 14px;
+  /* Not the 16/14 it was. The gap between the Sync now button and this heading
+     read as an empty line — the two controls and the steps under them are one
+     block, not three. The rule stays; only the air above and below it shrinks. */
+  margin-top: 6px;
+  padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
 .setup-steps-head {
   font-size: 0.8rem;
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
   margin-bottom: 8px;
@@ -2164,12 +2166,6 @@ body {
    yet — which is exactly the kind of blank line that reads as a mistake. */
 .setting-hint--result:empty {
   display: none;
-}
-
-/* The answer to "Check" sits in the corner the tap was in, not on a new line
-   at the left where it reads as a second, unexplained sentence. */
-.setting-hint--right {
-  text-align: right;
 }
 
 .setting-hint {

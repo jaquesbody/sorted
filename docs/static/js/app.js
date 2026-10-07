@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.35.0';
+const APP_VERSION = '2.36.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -3262,6 +3262,11 @@ function renderSettings(container) {
         <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
         <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
         <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
+        <!-- Say what the file has to be, at the button that reads it rather
+             than in the export dialog the user has already closed. "Import" on
+             its own invites every file on the phone, and the picker only
+             offers .json — so the format belongs on this card. -->
+        <p class="setting-hint">Reads a Sorted backup (.json) file</p>
       </div>
 
       <div class="report-card">
@@ -3273,17 +3278,20 @@ function renderSettings(container) {
             <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
           </div>
         </div>
-        <!-- Right under the button that produced it, and right-aligned: the
-             answer lands in the corner the tap was in rather than a line pushed
-             under the version. Below the row rather than above it, because above
-             it the note appearing would shove the Check button out from under
-             the next tap. -->
-        <div class="setting-hint setting-hint--result setting-hint--right" id="update-note"></div>
+        <!-- Top row first: "Updates" on the left with the button that acts on it
+             on the right, then the version directly underneath it, then whatever
+             Check says directly underneath that. The three stack as one column
+             under the heading, so the answer lands where the eye already is
+             rather than in the far corner of the card.
+
+             Still below the row rather than above it: above it, the note
+             appearing would shove the Check button out from under the next tap. -->
         <p style="color: var(--text-secondary);">
           <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong> ·
           <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
              style="color: var(--accent);">Releases</a>
         </p>
+        <div class="setting-hint setting-hint--result" id="update-note"></div>
       </div>
 
       <div class="report-card report-card--danger">
@@ -3404,7 +3412,7 @@ function notifySettingsHtml() {
 
     <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
-        <div class="setting-label">Spending</div>
+        <div class="setting-label">Spending (daily)</div>
       </div>
       <div class="setting-control">
         ${picker('notify-spend-time', timeOptions, 'changeNotifyTime(this.value)', 'Remind me at', spend && !needsPermission)}
@@ -3414,7 +3422,7 @@ function notifySettingsHtml() {
 
     <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
-        <div class="setting-label">Goals</div>
+        <div class="setting-label">Savings Goal</div>
       </div>
       <div class="setting-control">
         ${picker('notify-goal-cadence', cadenceOptions, 'changeGoalCadence(this.value)',
