@@ -75,12 +75,48 @@ const SYNC_TRANSPORTS = {
     urlHint: 'file:// path to the synced folder'
   },
   cloud: {
-    label: 'Hosted file',
+    label: 'Cloud',
     available: false,
     blurb: 'Works anywhere, but needs an account',
     needsUrl: true,
     urlHint: 'https://…'
   }
+};
+
+// What somebody actually does, for each one.
+//
+// This was missing and the card was asking the impossible: one address box, with
+// nothing saying where the address comes from. "Paste an address" is only a step
+// if someone knows which address, and only that somebody can tell.
+//
+// The two marked not built list the steps they will take rather than pretending
+// otherwise — a blank option tells you nothing, and a wrong one costs an
+// afternoon.
+const SYNC_SETUP_STEPS = {
+  lan: [
+    'Put this phone and the computer on the same Wi-Fi.',
+    'On the computer, open a terminal in the Sorted folder.',
+    'Run <code>node tools/sync-host.mjs</code> and leave it running.',
+    'It prints one line beginning <code>http://</code>. Copy that whole line.',
+    'Paste it above, then tap <strong>Sync now</strong>.'
+  ],
+  tailscale: [
+    'Install Tailscale on the computer that stays on, and sign in.',
+    'Install Tailscale on this phone, and sign in to the same account.',
+    'On the computer, run <code>node tools/sync-host.mjs</code> and leave it running.',
+    'Open Tailscale on the computer and copy its IP — it starts <code>100.</code>',
+    'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above, then tap <strong>Sync now</strong>.'
+  ],
+  syncthing: [
+    'Install Syncthing on the computer and on this phone, and pair them.',
+    'Pick a folder both of them sync.',
+    'Tell Sorted which folder, then tap <strong>Sync now</strong>.'
+  ],
+  cloud: [
+    'Sign in to a cloud drive that can be read and written from a phone.',
+    'Give Sorted access to one file in it.',
+    'Paste that file\'s address above, then tap <strong>Sync now</strong>.'
+  ]
 };
 
 // ---------------------------------------------------------------- settings

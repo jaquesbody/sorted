@@ -616,6 +616,52 @@ body {
    list rows had already drawn, which on the People card was two horizontal
    lines four pixels apart — the clearest possible sign of a divider that was
    doing nothing. The air is now the only separator. */
+/* What somebody actually does to set sync up, per transport. Its own block with
+   a rule above it, because unlike every other row in a settings card this one
+   genuinely is a separate thing: the rows are settings, this is instructions.
+   It is the one place on this screen where a horizontal line is the right call
+   \u2014 a reader needs to be able to stop reading settings and start reading
+   steps. */
+.setup-steps {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.setup-steps-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.setup-steps-note {
+  font-size: 0.8rem;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+.setup-steps-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.setup-steps-list li {
+  margin-bottom: 7px;
+}
+
+.setup-steps-list li:last-child {
+  margin-bottom: 0;
+}
+
+.setup-steps-list code {
+  font-size: 0.95em;
+}
+
 .setting-row--add {
   margin-top: 14px;
   padding-top: 14px;
@@ -1292,18 +1338,15 @@ body {
   color: var(--text-secondary);
 }
 
-/* An account row on the Savings page. */
 /* An account row on the Savings page. Tappable like every other row, so it
    keeps the hover rather than opting out of it. */
 
-/* Where Your Money Is: a balance, then the four numbers that made it. */
+/* Where Your Money Is: a balance. No rule between accounts: the card already
+   says these are a set, the rows have 12px of padding, and a line under each one
+   turned a list of two balances into a table. Same reasoning as dropping them
+   from the settings cards. */
 .account-total {
   padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.account-total:last-of-type {
-  border-bottom: none;
 }
 
 .account-total-top {
@@ -1479,6 +1522,7 @@ body {
    row — a flex item with flex-basis:100% can't wrap without wrap set, so with
    min-width:0 on the name it silently collapsed the title to nothing and the
    card read as a list of bare amounts. */
+/* No rule between pattern rows, for the same reason as the accounts above. */
 .pattern-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1486,11 +1530,6 @@ body {
   column-gap: 10px;
   align-items: baseline;
   padding: 9px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.pattern-row:last-of-type {
-  border-bottom: none;
 }
 
 .pattern-name {
@@ -1508,6 +1547,23 @@ body {
   font-weight: 600;
   white-space: nowrap;
   text-align: right;
+}
+
+/* Colour carries the direction so a column of movements can be read without
+   parsing the word first: more money going out is the same red as a bill, less
+   is the same green as a goal. Flat keeps the weight off, because a category
+   that did not move is not something to stop for. */
+.pattern-amount--up {
+  color: var(--danger);
+}
+
+.pattern-amount--down {
+  color: var(--success);
+}
+
+.pattern-amount--flat {
+  color: var(--text-secondary);
+  font-weight: 400;
 }
 
 /* The change sits under the pair rather than beside the name, so the eye
@@ -2108,6 +2164,12 @@ body {
    yet — which is exactly the kind of blank line that reads as a mistake. */
 .setting-hint--result:empty {
   display: none;
+}
+
+/* The answer to "Check" sits in the corner the tap was in, not on a new line
+   at the left where it reads as a second, unexplained sentence. */
+.setting-hint--right {
+  text-align: right;
 }
 
 .setting-hint {

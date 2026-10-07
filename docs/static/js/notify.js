@@ -69,6 +69,11 @@ const NOTIF_ICON = 'ic_stat_sorted';
 const NOTIFY_CHANNEL_ID = 'sorted-reminders';
 // Bill reminders go out in the morning; the two nudges use a time you choose,
 // because "remind me to record spending" at 9am is a different sentence.
+// How far apart two reminders may be before Android can be relied on to show
+// them as two reminders. Inexact alarms set for the same moment are delivered
+// in one batch, and a batch is read as a single event.
+const NUDGE_GAP_MS = 30 * 60 * 1000;
+
 const NOTIFY_BILL_HOUR = 9;
 
 const NOTIFY_LEADS = [
@@ -397,7 +402,21 @@ async function planReminders() {
 
   if (isGoalNudgeEnabled()) {
     const g = await goalsTouchedRecently();
-    if (g.any && !g.recent) plan.goals = nextTimeOfDay(plan.time, now);
+    if (g.any && !g.recent) {
+      let at = nextTimeOfDay(plan.time, now);
+      // Only when it would land on the spending nudge's own instant. Both use
+      // the same chosen time, so with nothing recorded and no goal topped up
+      // they were scheduled for the identical millisecond — which on a phone
+      // means one alarm batch, two notifications posted microseconds apart, and
+      // the status bar showing whichever arrived last. Reported on-device as
+      // "the Spending notification came through with the Goals message": it had
+      // not, there had simply never been room for both. Apart, they arrive as
+      // two separate things.
+      if (plan.spend && at.getTime() === plan.spend.getTime()) {
+        at = new Date(at.getTime() + NUDGE_GAP_MS);
+      }
+      plan.goals = at;
+    }
   }
 
   return plan;

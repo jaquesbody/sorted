@@ -36,10 +36,10 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Three reminders, each off until you ask for it: bills coming due or already overdue, nothing recorded today, and a savings goal going untouched. On Android these are scheduled by the system, so they arrive whether or not Sorted is open — bills in the morning, the other two at a time you pick. In a browser there's no way to wake the app at a set hour, so the same checks run when you open it and put it away, and the settings say so rather than implying more
 - Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete
 - Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
-- Setting it up is **one address and one button**: pick where in the dropdown, paste the address the host printed, press **Sync now**. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
-- Settings also lists a Tailscale address (works, and from outside the house) alongside a Syncthing folder and a hosted file, both marked *not yet* rather than quietly doing nothing
+- Setting it up is **one address and one button**: pick where in the dropdown, paste the address, press **Sync now**. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
+- Underneath sits **a numbered setup guide for whichever transport is selected** — where to get the address from, in order, including the command to run. Two of the four exist and are described as they work: **Home server** over your Wi-Fi, and **Tailscale** (works, and from outside the house, over the same file). **Syncthing** and **Cloud** are in the dropdown marked *not yet*, and their steps say so and describe the steps they will take rather than showing nothing
 - To run the other end, on any machine with Node: `node tools/sync-host.mjs`. It serves one file over your Wi-Fi and nothing else — no database, no accounts, no history — and prints the address to paste into Settings
-- Export writes a real file and hands it to Android's share sheet, so a backup can go wherever you want it — Drive, email, a cable. In a browser it is an ordinary download
+- Export offers three formats rather than one, because they do three different jobs: a **`.json` backup** (the only one Import can read back), a **`.csv`** of every dated movement for Excel, Numbers or Google Sheets, and a readable **`.txt`** statement grouped by month. It is handed to Android's share sheet — Drive, email, a cable — and is an ordinary download in a browser
 - Reminders, each off until you ask for it, saying exactly this:
   - **"Sorted — bill due"** — *"Rent is due Thursday"* (or *"… is overdue"*)
   - **"Sorted — nothing recorded today"** — *"Anything you spent today? A minute now saves guessing later."*
@@ -64,7 +64,7 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Check for updates in Settings: it asks GitHub for the newest release and compares versions numerically. Nothing is installed without you saying so — Android requires a human to confirm any install regardless
 - Android asks for the notification permission on first use (Android 13+ requires it, and without it the channel is created silently and nothing ever appears). The schedule is **inexact** on purpose — an exact alarm needs its own grant, and Play only allows it to alarm-clock apps
 - Optional passcode: a numeric keypad locks the app on launch and again after a set idle period (1, 5 or 30 minutes, or immediately when it's put away). Only a salted hash of the passcode is stored
-- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images and your list of people travel with the backup
+- Export as JSON backup, CSV or plain text; import reads the JSON backup and asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images and your list of people travel with the backup
 - Works in the browser, on the desktop as an Electron app, and on Android — where the six destinations sit in a bottom bar instead of a side rail
 
 ## Run It
@@ -88,7 +88,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.34.0-debug.apk`](sorted-v2-2.34.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.35.0-debug.apk`](sorted-v2-2.35.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
@@ -105,7 +105,7 @@ To rebuild it yourself (needs JDK 21 and the Android SDK):
 
 The signing key is committed at `android/debug.keystore` and pinned in `build.gradle`, so any machine can build an APK that installs as an update over an existing one. Android rejects an update signed with a different key, so if you ever change that file the next install will be refused and the only fix would be an uninstall — which deletes the data. Its fingerprint is recorded in `build.gradle`; if a build ever starts failing to install, check that the APK's certificate still matches the keystore's.
 
-Note: importing JSON works on every platform. Export uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
+Note: importing JSON works on every platform and accepts only a Sorted backup — a CSV cannot be read back, and guessing at arbitrary column layouts is how an import quietly corrupts a dataset. Export offers the three formats and uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
 
 ## Tech Stack
 

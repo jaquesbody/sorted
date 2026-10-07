@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.34.0';
+const APP_VERSION = '2.35.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -505,10 +505,12 @@ document.addEventListener('keydown', (e) => {
 // buttons share these handlers so both entry points behave identically.
 // Electron exposes a narrow preload bridge (no Node in the renderer).
 async function handleExport() {
+  // Electron gets its own dialog through the bridge; everywhere else the menu
+  // is the same three formats, so the choice is the same wherever it is tapped.
   if (window.sortedBridge) {
     await window.sortedBridge.exportData();
   } else {
-    await exportData();
+    openExportModal();
   }
 }
 
@@ -1065,6 +1067,14 @@ function syncSettingsHtml() {
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
+    <div class="setup-steps">
+      <div class="setup-steps-head">Setup</div>
+      ${active && !active.available
+        ? '<div class="setup-steps-note">Not built yet \u2014 these are the steps it will take.</div>' : ''}
+      <ol class="setup-steps-list">
+        ${(SYNC_SETUP_STEPS[s.transport] || []).map((step) => `<li>${step}</li>`).join('')}
+      </ol>
+    </div>
     ${hasBackup ? `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -2048,154 +2058,112 @@ function toggleInfoTip(id, btn) {
    no key, no model, nothing about you leaving the device — which is the whole
    reason these exist instead of a search API.
 
-   They are deliberately the questions a person actually asks of their own
-   statements: which day do I spend on, and is this week normal.
+   The metric this card used to show was which weekday you spend on. It was
+   called pointless, and it is: knowing that Saturday is heavy is not a fact you
+   can do anything about, and it is mostly decided by whichever day you happened
+   to buy one large thing. What somebody actually asks of their own statements
+   is which categories are costing more than they used to — "Utilities up £12" is
+   an observation with an answer attached to it.
+
+   So the weekday averages, the eight-week window and the "this week against
+   your usual one" comparison are all gone, rather than sitting alongside the
+   new number as two half-answers to different questions.
    -------------------------------------------------------------------------- */
 
-const PATTERN_WEEKS = 8;
-const WEEKDAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-// Midnight on the Monday of the week `d` falls in. Weeks start on Monday because
-// that is how a payslip and a bank statement count them, and a Sunday-start week
-// splits a weekend's spending across two.
-function weekStart(d) {
-  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const shift = (date.getDay() + 6) % 7;   // Sunday is 0, so +6 makes Monday 0
-  date.setDate(date.getDate() - shift);
-  return date;
-}
-
-// The weeks in the window that actually have something recorded in them.
+// Every category, this month against last month, over the same number of days.
 //
-// Averaging across all eight weeks whether or not you recorded anything in them
-// is wrong in a way that quietly misleads: with four weeks of data in an
-// eight-week window, "your usual week" came out at £35 instead of £70, so every
-// real week read as above average and the card was permanently alarmed. Empty
-// weeks are not zero-spend weeks, they are unrecorded ones.
-function recordedWeeks(spendItems, from, to) {
-  const weeks = new Set();
-  for (const item of spendItems) {
-    if (!item.date) continue;
-    const d = new Date(String(item.date) + 'T00:00:00');
-    if (Number.isNaN(d.getTime()) || d < from || d > to) continue;
-    weeks.add(weekStart(d).getTime());
-  }
-  return weeks;
-}
-
-// Average spend per weekday, over the last PATTERN_WEEKS weeks.
+// Spent and Bills are added together on purpose. A higher electricity bill is
+// not "spending" or "bills", it is money going out, and keeping them apart
+// would report the same category twice — once up in one card, once down in the
+// other — for a single change in one bill.
 //
-// Averaged over the window rather than a single recent week: one week is four
-// purchases on a Saturday and tells you Saturday is expensive, when really you
-// bought a sofa. Averaging the same weekday across eight weeks is the difference
-// between a pattern and a coincidence — across the weeks that were recorded, so
-// a fortnight of not entering anything doesn't halve every average.
-function weekdayAverages(spendItems) {
+// The same number of days, rather than this month against the whole of last
+// month: compared on the 4th, that reads as a catastrophe every single time and
+// the card would be permanently alarmed. Last month is clamped to its own
+// length as well, so the 31st compared with a "31st" February is not counted as
+// a shortfall either.
+function categoryShift(spendItems, dueItems) {
   const today = new Date();
-  const thisMonday = weekStart(today);
-  const windowStart = new Date(thisMonday);
-  windowStart.setDate(windowStart.getDate() - PATTERN_WEEKS * 7);
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  const day = today.getDate();
 
-  const weeks = recordedWeeks(spendItems, windowStart, today);
-  const divisor = weeks.size;
+  const thisStart = new Date(y, m, 1);
+  const thisEnd = new Date(y, m, day + 1);            // exclusive, through today
 
-  const sums = new Array(7).fill(0);
-  for (const item of spendItems) {
-    if (!item.date) continue;
-    const d = new Date(String(item.date) + 'T00:00:00');
-    if (Number.isNaN(d.getTime()) || d < windowStart || d > today) continue;
-    sums[(d.getDay() + 6) % 7] += Number(item.amount) || 0;
-  }
+  const lastY = m === 0 ? y - 1 : y;
+  const lastM = m === 0 ? 11 : m - 1;
+  const lastDay = Math.min(day, new Date(lastY, lastM + 1, 0).getDate());
+  const lastStart = new Date(lastY, lastM, 1);
+  const lastEnd = new Date(lastY, lastM, lastDay + 1);
 
-  const averages = divisor
-    ? sums.map((sum) => sum / divisor)
-    : sums.map(() => 0);
-  const total = averages.reduce((a, b) => a + b, 0);
-  const busiest = averages.reduce((best, v, i) => (v > averages[best] ? i : best), 0);
-  const quietest = averages.reduce((best, v, i) => (v < averages[best] ? i : best), 0);
-  return {
-    averages,
-    total,
-    busiest,
-    quietest,
-    weeks: PATTERN_WEEKS,
-    recordedWeeks: divisor,
-    // Only meaningful with enough data to be a pattern rather than a rumour.
-    enough: divisor >= 3 && sums.reduce((a, b) => a + b, 0) > 0
-  };
-}
-
-// This week against your ordinary one. A partial week is compared like for like:
-// the same number of days into it, so a Monday isn't 80% down by lunchtime and
-// called a saving.
-function weekComparison(spendItems) {
-  const today = new Date();
-  const thisMonday = weekStart(today);
-  const daysIn = (d) => (d.getDay() + 6) % 7;   // Monday 0
-
-  const elapsed = daysIn(today) + 1;           // today counts
-  const thisWeek = spendItems
-    .filter((i) => i.date && new Date(String(i.date) + 'T00:00:00') >= thisMonday)
-    .reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
-
-  // The previous PATTERN_WEEKS weeks, each truncated to `elapsed` days, so every
-  // one is compared over the same slice of the week.
-  const previousTotals = [];
-  for (let w = 1; w <= PATTERN_WEEKS; w++) {
-    const start = new Date(thisMonday);
-    start.setDate(start.getDate() - w * 7);
-    const end = new Date(start);
-    end.setDate(end.getDate() + elapsed);
-    let sum = 0;
-    for (const item of spendItems) {
-      if (!item.date) continue;
-      const d = new Date(String(item.date) + 'T00:00:00');
-      if (d >= start && d < end) sum += Number(item.amount) || 0;
+  const tally = (items, from, to) => {
+    const map = new Map();
+    for (const item of items || []) {
+      if (!item) continue;
+      const raw = item.date || item.dueDate;
+      if (!raw) continue;
+      const d = new Date(String(raw) + 'T00:00:00');
+      if (Number.isNaN(d.getTime()) || d < from || d >= to) continue;
+      const cat = item.category || 'General';
+      map.set(cat, (map.get(cat) || 0) + (Number(item.amount) || 0));
     }
-    previousTotals.push(sum);
-  }
+    return map;
+  };
 
-  // Only the weeks that were recorded. Averaging over empty ones is what made
-  // "your usual" read as £35 when four recorded weeks said £70.
-  const recorded = previousTotals.filter((v) => v > 0);
-  const usual = recorded.length ? recorded.reduce((a, b) => a + b, 0) / recorded.length : 0;
+  const all = [...(spendItems || []), ...(dueItems || [])];
+  const now = tally(all, thisStart, thisEnd);
+  const was = tally(all, lastStart, lastEnd);
+
+  const sum = (map) => [...map.values()].reduce((a, b) => a + b, 0);
+
+  const rows = [...new Set([...now.keys(), ...was.keys()])]
+    .map((cat) => ({
+      cat,
+      now: now.get(cat) || 0,
+      before: was.get(cat) || 0,
+      delta: (now.get(cat) || 0) - (was.get(cat) || 0)
+    }))
+    // Biggest mover first: the card answers "what changed", so a category that
+    // did not change is the least useful thing on it.
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
   return {
-    thisWeek,
-    usual,
-    elapsed,
-    difference: thisWeek - usual,
-    // Three pounds either way on a £40 week is rounding, not a change.
-    notable: usual > 0 && Math.abs(thisWeek - usual) / usual > 0.15,
-    enough: recorded.length >= 3
+    rows,
+    days: day,
+    thisMonth: sum(now),
+    lastMonth: sum(was),
+    // A month with nothing in it is not a month where everything fell — it is
+    // a month nobody has entered anything for yet, and announcing "down 100%"
+    // about that would be a lie told by arithmetic.
+    enough: sum(now) > 0
   };
 }
 
-function renderPatternsCard(patterns, week) {
-  if (!patterns.enough) {
-    return `<div class="setting-hint" style="padding: 8px 0;">${patterns.recordedWeeks} week${patterns.recordedWeeks === 1 ? '' : 's'} of spending so far.</div>`;
+// "up £12 (+18%)". A category with nothing behind it last month cannot have a
+// percentage, so it says what it is instead of inventing one.
+function categoryMovement(row) {
+  if (row.delta === 0) return 'no change';
+  const dir = row.delta > 0 ? 'up' : 'down';
+  const money = currency(Math.abs(row.delta));
+  if (row.before === 0) return `${dir} ${money} · new`;
+  const pct = Math.round((Math.abs(row.delta) / row.before) * 100);
+  return `${dir} ${money} (${row.delta > 0 ? '+' : '-'}${pct}%)`;
+}
+
+function renderPatternsCard(shift) {
+  if (!shift.enough || shift.rows.length === 0) {
+    return '<div class="setting-hint" style="padding: 8px 0;">Nothing recorded this month yet.</div>';
   }
-  const peak = Math.max(...patterns.averages) || 1;
-  const rows = patterns.averages.map((avg, i) => `
-    <div class="category-row">
-      <span class="category-name">${WEEKDAY_NAMES[i]}</span>
-      <div class="category-bar">
-        <div class="category-bar-fill" style="width: ${Math.round((avg / peak) * 100)}%"></div>
-      </div>
-      <span class="category-amount">${currency(avg)}</span>
+  const rows = shift.rows.map((r) => `
+    <div class="pattern-row">
+      <span class="pattern-name">${escapeHTML(r.cat)}</span>
+      <span class="pattern-amount ${r.delta > 0 ? 'pattern-amount--up'
+        : r.delta < 0 ? 'pattern-amount--down' : 'pattern-amount--flat'}">${categoryMovement(r)}</span>
     </div>`).join('');
 
-  // One short line, because this is the only thing in the card the bars above
-  // don't already show. It used to be a full sentence naming the heaviest and
-  // lightest day, which is what the chart is for.
-  const weekLine = week.enough
-    ? (week.notable
-      ? `<div class="pattern-note">This week ${week.difference > 0 ? 'up' : 'down'} ${currency(Math.abs(week.difference))}</div>`
-      : `<div class="pattern-note">This week is usual</div>`)
-    : '';
-
   return `
-    ${weekLine}
-    <div class="pattern-sub">Average a day, last ${patterns.weeks} weeks</div>
+    <div class="pattern-sub">Days 1-${shift.days} of this month and last</div>
     ${rows}`;
 }
 
@@ -2281,11 +2249,10 @@ async function renderReports(container) {
   // rent as still due.
   const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
 
-  // Computed from everything stored, not from the range chips: "which days do I
-  // spend on" is a habit, and scoping it to "this month" would answer it with
-  // four weeks of noise.
-  const weekday = weekdayAverages(spendItems);
-  const week = weekComparison(spendItems);
+  // Computed from everything stored rather than the range chips: this is its own
+  // month-by-month comparison, and scoping it to a filter that already means
+  // "this month" would compare this month with this month.
+  const shift = categoryShift(spendItems, dueItems);
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -2333,7 +2300,7 @@ async function renderReports(container) {
 
       <div class="report-card">
         <h2 class="report-title">Patterns</h2>
-        ${renderPatternsCard(weekday, week)}
+        ${renderPatternsCard(shift)}
       </div>
 
       <div class="report-card">
@@ -3247,17 +3214,6 @@ function renderSettings(container) {
   container.innerHTML = `
     <div class="reports-grid">
       <div class="report-card">
-        <div class="setting-row setting-row--inline setting-row--tight">
-          <div class="setting-text">
-            <div class="setting-label setting-label--title">Appearance</div>
-          </div>
-          <div class="setting-control">
-            ${themeSegment()}
-          </div>
-        </div>
-      </div>
-
-      <div class="report-card">
         ${peopleSettingsHtml()}
       </div>
 
@@ -3287,6 +3243,17 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text">
+            <div class="setting-label setting-label--title">Appearance</div>
+          </div>
+          <div class="setting-control">
+            ${themeSegment()}
+          </div>
+        </div>
+      </div>
+
+      <div class="report-card">
         ${syncSettingsHtml()}
       </div>
 
@@ -3298,11 +3265,6 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <p style="color: var(--text-secondary);">
-          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong> ·
-          <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
-             style="color: var(--accent);">Releases</a>
-        </p>
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
             <div class="setting-label">Updates</div>
@@ -3311,7 +3273,17 @@ function renderSettings(container) {
             <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
           </div>
         </div>
-        <div class="setting-hint setting-hint--result" id="update-note"></div>
+        <!-- Right under the button that produced it, and right-aligned: the
+             answer lands in the corner the tap was in rather than a line pushed
+             under the version. Below the row rather than above it, because above
+             it the note appearing would shove the Check button out from under
+             the next tap. -->
+        <div class="setting-hint setting-hint--result setting-hint--right" id="update-note"></div>
+        <p style="color: var(--text-secondary);">
+          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong> ·
+          <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
+             style="color: var(--accent);">Releases</a>
+        </p>
       </div>
 
       <div class="report-card report-card--danger">
@@ -3372,8 +3344,12 @@ async function confirmRemoveAllData(btn) {
 // picker only appears while its row is on, so a row that's off is a row with
 // nothing to decide, and the card is three lines tall instead of six.
 function notifySettingsHtml() {
+  // The card is named before anything can return early from it, so the message
+  // about a browser without notifications lands under a heading that says what
+  // the heading would have been rather than under nothing.
+  const head = '<h2 class="report-title">Notifications</h2>';
   if (!notifySupported()) {
-    return '<p class="setting-hint">This browser has no notifications.</p>';
+    return head + '<p class="setting-hint">This browser has no notifications.</p>';
   }
   // Deliberately no "permission denied" early return here. There was one, and it
   // replaced the whole card with a paragraph — so the moment asking for
@@ -3415,6 +3391,7 @@ function notifySettingsHtml() {
     `<option value="${c.value}"${c.value === goalNudgeCadence().value ? 'selected' : ''}>${c.label}</option>`).join('');
 
   return `
+    ${head}
     <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
         <div class="setting-label">Bills due</div>
@@ -3514,7 +3491,13 @@ function peopleSettingsHtml() {
       </div>
     </div>`).join('');
 
+  // A title and a line saying why anyone would use it. The card had neither, so
+  // it opened straight into a list of names with only "Add someone" to explain
+  // what the list was for — which is a list of people and not obviously a
+  // setting.
   return `
+    <h2 class="report-title">People</h2>
+    <p style="color: var(--text-secondary); margin-bottom: 15px;">Track more accurately who is spending and saving</p>
     ${rows}
     <div class="setting-row setting-row--add setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -4622,42 +4605,170 @@ async function markPaid(id) {
 // if called twice for the same name.
 let capExport = null;
 
-async function exportData() {
-  const data = await getAllData();
-  const json = JSON.stringify(data, null, 2);
-  const name = `sorted-backup-${localISO()}.json`;
+// Three formats, because one file could not do all three jobs and the app was
+// shipping only the one that does none of them well. A raw JSON dump restores
+// perfectly and is unreadable to anybody holding it, which is the wrong shape
+// for "Export Data" on a phone: what came back was a file that opened as a wall
+// of braces, so it read as not working.
+//
+//   .json  the real backup — this is the only one Import accepts, and the only
+//          one that can put a phone back after a reset
+//   .csv   one row per movement, opens in Excel, Numbers and Google Sheets
+//   .txt   readable anywhere, no app required
+const EXPORT_KINDS = {
+  json: { ext: 'json', mime: 'application/json', suffix: 'backup-' },
+  csv: { ext: 'csv', mime: 'text/csv', suffix: '' },
+  txt: { ext: 'txt', mime: 'text/plain', suffix: '' }
+};
 
-  // Capacitor/Android: the WebView can't process blob: downloads (the click
-  // silently does nothing), so write the backup into the app cache and hand
-  // it to the system share sheet via the FileProvider instead.
-  if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-    try {
-      if (!capExport) {
-        capExport = {
-          fs: window.Capacitor.registerPlugin('Filesystem'),
-          share: window.Capacitor.registerPlugin('Share'),
-        };
-      }
-      const { uri } = await capExport.fs.writeFile({ path: name, data: json, directory: 'CACHE' });
-      await capExport.share.share({ title: 'Sorted backup', files: [uri] });
-      showToast('Backup ready to share');
-    } catch (err) {
-      const msg = String((err && err.message) || err);
-      if (/cancel/i.test(msg)) return; // backing out of the share sheet isn't an error
-      console.error('Export failed:', err);
-      showToast(`Export failed: ${msg}`);
+// The stores worth listing as rows, and what each is called once it is a line.
+// Accounts, transfers and people are structure rather than movements: they
+// belong in the backup and mean nothing in a spreadsheet.
+const EXPORT_ROWS = [
+  { store: 'spend', kind: 'Spent' },
+  { store: 'due', kind: 'Bill' },
+  { store: 'income', kind: 'Income' }
+];
+
+function exportMovementRows(data) {
+  const out = [];
+  for (const spec of EXPORT_ROWS) {
+    for (const item of (Array.isArray(data[spec.store]) ? data[spec.store] : [])) {
+      if (!item) continue;
+      const person = item.personId ? personById(item.personId) : null;
+      out.push({
+        kind: spec.kind,
+        date: String(item.date || item.dueDate || ''),
+        title: String(item.title || ''),
+        category: String(item.category || ''),
+        amount: Number(item.amount) || 0,
+        paid: spec.store === 'due' ? (item.paid === true ? 'yes' : 'no') : '',
+        person: person ? String(person.name) : ''
+      });
     }
+  }
+  // Oldest first, so a spreadsheet sorted by nothing at all still reads as a
+  // statement rather than as the order IndexedDB happened to return.
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function exportCsv(data) {
+  // Quoted where a value could contain the separator. Getting this wrong is how
+  // a spreadsheet silently turns one column into three, so it is quoted even
+  // when it does not strictly need to be.
+  const cell = (v) => {
+    const text = String(v == null ? '' : v);
+    return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+  };
+  const head = ['Date', 'Type', 'Description', 'Category', 'Amount', 'Paid', 'Person'];
+  const lines = exportMovementRows(data).map((r) =>
+    [r.date, r.kind, r.title, r.category, r.amount.toFixed(2), r.paid, r.person].map(cell).join(','));
+  // BOM: without it Excel on Windows reads the first column as mojibake and
+  // every date as text.
+  return '\ufeff' + head.join(',') + '\n' + lines.join('\n') + (lines.length ? '\n' : '');
+}
+
+function exportText(data) {
+  const rows = exportMovementRows(data);
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+  const out = ['Sorted', 'Exported ' + localISO(), ''];
+
+  let month = '';
+  let totals = {};
+  const flush = () => {
+    if (!month) return;
+    const parts = Object.keys(totals)
+      .filter((k) => totals[k] !== 0)
+      .map((k) => k + ' ' + currency(totals[k]));
+    out.push('  ' + parts.join('   '));
+    out.push('');
+  };
+
+  for (const r of rows) {
+    const key = r.date
+      ? MONTHS[Number(r.date.slice(5, 7)) - 1] + ' ' + r.date.slice(0, 4)
+      : 'Undated';
+    if (key !== month) { flush(); month = key; totals = {}; out.push(key); }
+    const when = r.date ? r.date.slice(8, 10) + ' ' + MONTHS[Number(r.date.slice(5, 7)) - 1].slice(0, 3) : '--';
+    const who = r.person ? ' (' + r.person + ')' : '';
+    const paid = r.paid === 'no' ? ' [due]' : '';
+    out.push('  ' + when + '  ' + r.kind.padEnd(7) + ' '
+      + (r.title + who + paid).padEnd(34) + currency(r.amount));
+    totals[r.kind] = (totals[r.kind] || 0) + r.amount;
+  }
+  flush();
+  if (rows.length === 0) out.push('Nothing recorded yet.');
+  return out.join('\n') + '\n';
+}
+
+async function buildExport(kind) {
+  const data = await getAllData();
+  if (kind === 'csv') return { text: exportCsv(data), mime: EXPORT_KINDS.csv.mime };
+  if (kind === 'txt') return { text: exportText(data), mime: EXPORT_KINDS.txt.mime };
+  return { text: JSON.stringify(data, null, 2), mime: EXPORT_KINDS.json.mime };
+}
+
+// One file, either handed to the system share sheet or dropped as a download.
+// The Android path exists because a WebView cannot act on a blob: URL — the
+// click it needs to follow is silently ignored — so the file is written into
+// the app cache and handed over through the FileProvider instead.
+async function deliverExport(name, text, mime) {
+  if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+    if (!capExport) {
+      capExport = {
+        fs: window.Capacitor.registerPlugin('Filesystem'),
+        share: window.Capacitor.registerPlugin('Share')
+      };
+    }
+    const { uri } = await capExport.fs.writeFile({ path: name, data: text, directory: 'CACHE' });
+    await capExport.share.share({ title: 'Sorted export', dialogTitle: 'Share export', files: [uri] });
     return;
   }
-
-  // Web: browser download.
-  const blob = new Blob([json], { type: 'application/json' });
+  const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function exportData(kind = 'json') {
+  const spec = EXPORT_KINDS[kind] || EXPORT_KINDS.json;
+  const name = `sorted-${spec.suffix}${localISO()}.${spec.ext}`;
+  try {
+    const { text, mime } = await buildExport(kind);
+    await deliverExport(name, text, mime);
+    if (!(window.Capacitor && window.Capacitor.isNativePlatform())) showToast('Saved ' + name);
+    else showToast('Ready to share');
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    if (/cancel/i.test(msg)) return; // backing out of the share sheet isn't an error
+    console.error('Export failed:', err);
+    showToast(`Export failed: ${msg}`);
+  }
+}
+
+// The menu itself. Offered rather than buried behind a setting because the three
+// formats answer three different questions and nobody should have to guess
+// which one they were going to get.
+function openExportModal() {
+  openModal('Export data', `
+    <p class="form-label">Only the backup file (.json) can be imported back.</p>
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('json')">Backup file (.json)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('csv')">Spreadsheet (.csv)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('txt')">Plain text (.txt)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="closeModal()">Cancel</button>`);
+}
+
+async function runExport(kind) {
+  closeModal();
+  await exportData(kind);
 }
 
 async function importData() {
