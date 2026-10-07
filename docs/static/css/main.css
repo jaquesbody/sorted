@@ -241,6 +241,58 @@ body {
   color: var(--text-secondary);
 }
 
+/* Total money, and the four parts it is already spoken for. Full width above the
+   four summary cards because it is the question they are all about; the bar is
+   one row so the whole figure reads at a glance rather than by addition. */
+.total-card {
+  margin-bottom: 20px;
+}
+
+.total-card .stat-card-value {
+  margin-bottom: 12px;
+}
+
+.total-bar {
+  display: flex;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--border);
+}
+
+.total-seg {
+  display: block;
+  height: 100%;
+}
+
+.total-seg.tone-accent { background: var(--accent); }
+.total-seg.tone-danger { background: var(--danger); }
+.total-seg.tone-success { background: var(--success); }
+/* The remainder, and the part of the figure worth watching month to month.
+   Deliberately the quietest thing in the bar rather than the loudest: it is what
+   is left, not an alarm. */
+.total-seg.tone-muted { background: var(--text-secondary); opacity: 0.45; }
+
+.total-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 10px;
+}
+
+.total-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.total-note {
+  margin-top: 8px;
+}
+
 .stat-card-progress {
   height: 6px;
   background: var(--border);
@@ -377,12 +429,6 @@ body {
   text-align: right;
 }
 
-/* A bill's "Paid 29 Sept" line rides with the amount rather than under the
-   title, so the left of the row is title and nothing else. */
-.value-cell .item-sub--paid {
-  text-align: right;
-}
-
 /* Actions sit left of the value, never inside it. A tick that shifts the number
    it belongs to is the clearest possible way to lose a row's reading. */
 .row-actions {
@@ -498,13 +544,7 @@ body {
    control under the heading — the Add-someone box by 50px, Appearance by 5px,
    so it looked like it worked on my phone and not on yours. These rows have no
    hint long enough to need a wrap, so they don't wrap at all. */
-.setting-row--inline {
-  flex-wrap: nowrap;
-}
 
-.setting-row--inline .setting-text {
-  flex: 0 1 auto;
-}
 
 .setting-label--title {
   font-size: 1.05rem;
@@ -571,11 +611,60 @@ body {
   margin-bottom: 4px;
 }
 
-/* The add-someone row sits under the list, so it needs a little air above. */
-.setting-row--add {
-  margin-top: 10px;
-  padding-top: 12px;
+/* The add-someone row sits under the list, so it needs a little air above. The
+   rule that used to be here drew a second line a few pixels below the one the
+   list rows had already drawn, which on the People card was two horizontal
+   lines four pixels apart — the clearest possible sign of a divider that was
+   doing nothing. The air is now the only separator. */
+/* What somebody actually does to set sync up, per transport. Its own block with
+   a rule above it, because unlike every other row in a settings card this one
+   genuinely is a separate thing: the rows are settings, this is instructions.
+   It is the one place on this screen where a horizontal line is the right call
+   \u2014 a reader needs to be able to stop reading settings and start reading
+   steps. */
+.setup-steps {
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+
+.setup-steps-head {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.setup-steps-note {
+  font-size: 0.8rem;
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+.setup-steps-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.setup-steps-list li {
+  margin-bottom: 7px;
+}
+
+.setup-steps-list li:last-child {
+  margin-bottom: 0;
+}
+
+.setup-steps-list code {
+  font-size: 0.95em;
+}
+
+.setting-row--add {
+  margin-top: 14px;
+  padding-top: 14px;
 }
 
 /* The add button and the dot that explains the page, as one group pinned to
@@ -1096,13 +1185,17 @@ body {
 /* Toast — transient feedback (import results, validation messages) */
 .toast {
   position: fixed;
-  bottom: 24px;
+  /* Higher than the bottom nav it was sitting behind, so a message about
+     notifications is never hidden by the tab bar, and wide enough that the
+     longest one wraps to two lines instead of four. */
+  bottom: 86px;
   left: 50%;
+  width: min(360px, calc(100vw - 32px));
   transform: translateX(-50%);
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  padding: 10px 18px;
+  padding: 12px 18px;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   z-index: 300;
@@ -1245,18 +1338,15 @@ body {
   color: var(--text-secondary);
 }
 
-/* An account row on the Savings page. */
 /* An account row on the Savings page. Tappable like every other row, so it
    keeps the hover rather than opting out of it. */
 
-/* Where Your Money Is: a balance, then the four numbers that made it. */
+/* Where Your Money Is: a balance. No rule between accounts: the card already
+   says these are a set, the rows have 12px of padding, and a line under each one
+   turned a list of two balances into a table. Same reasoning as dropping them
+   from the settings cards. */
 .account-total {
   padding: 12px 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.account-total:last-of-type {
-  border-bottom: none;
 }
 
 .account-total-top {
@@ -1394,33 +1484,111 @@ body {
   stroke-linejoin: round;
 }
 
-/* The foot of a Reports card: the total its own breakdown adds up to. */
-.report-total {
+/* The head of a Reports card: its title, and the total its breakdown adds up to.
+   They share one line because a card on a phone cannot spare a fifth of itself
+   to repeat what the heading already says. */
+.report-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
 }
 
-.report-total-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.report-head .report-title {
+  margin-bottom: 15px;
+  min-width: 0;
 }
 
-.report-total-value {
+.report-head-total {
   font-size: 1.15rem;
   font-weight: 700;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
-.report-total-value.tone-accent { color: var(--accent); }
-.report-total-value.tone-danger { color: var(--danger); }
-.report-total-value.tone-success { color: var(--success); }
+.report-head-total.tone-accent { color: var(--accent); }
+.report-head-total.tone-danger { color: var(--danger); }
+.report-head-total.tone-success { color: var(--success); }
+
+/* Patterns and Standing Charges. Deliberately quieter than the breakdown cards
+   next to them: these are observations, not totals, and a card that shouts a
+   habit at you is one you learn to scroll past. */
+
+/* Patterns and Standing Charges. Deliberately quieter than the breakdown cards
+   next to them: these are observations, not totals, and a card that shouts a
+   habit at you is one you learn to scroll past. */
+
+/* A pattern row: day and its average, side by side. A grid rather than a flex
+   row — a flex item with flex-basis:100% can't wrap without wrap set, so with
+   min-width:0 on the name it silently collapsed the title to nothing and the
+   card read as a list of bare amounts. */
+/* No rule between pattern rows, for the same reason as the accounts above. */
+.pattern-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name amount";
+  column-gap: 10px;
+  align-items: baseline;
+  padding: 9px 0;
+}
+
+.pattern-name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.95rem;
+}
+
+.pattern-amount {
+  grid-area: amount;
+  font-size: 0.95rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* Colour carries the direction so a column of movements can be read without
+   parsing the word first: more money going out is the same red as a bill, less
+   is the same green as a goal. Flat keeps the weight off, because a category
+   that did not move is not something to stop for. */
+.pattern-amount--up {
+  color: var(--danger);
+}
+
+.pattern-amount--down {
+  color: var(--success);
+}
+
+.pattern-amount--flat {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* The change sits under the pair rather than beside the name, so the eye
+   reads down a column of numbers instead of scanning for a second one. */
+
+
+
+.pattern-note {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin: 10px 0 14px;
+  line-height: 1.45;
+}
+
+.pattern-note strong {
+  color: var(--text-primary);
+}
+
+.pattern-sub {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 4px 0 10px;
+}
 
 /* The line under a row: "Paid 28 Sept 2026", "In 3 days", "3 days overdue".
    Takes the full width of the row and sits hard right, so the date a bill was
@@ -1435,14 +1603,28 @@ body {
   min-width: 0;
 }
 
-/* A paid bill's line. It used to sit under a green "Paid" lozenge that said
-   the same thing, so the lozenge went and the date carries the state itself —
-   which is why this one is green and left-aligned: a settled bill reads as a
-   fact about the row, not a caption hanging off the amount. */
-.item-sub--paid {
-  text-align: left;
+/* The line under a projected row: "Repeats monthly". Not `.item-timing` —
+   it spans the whole row rather than sitting in the third line, because it is
+   about the projection itself and not about this occurrence. */
+
+/* The third line of every item row: the parts that qualify it rather than
+   identify it. A bill's timing, a goal's target, an account's movements and an
+   income's category all live here, so the third line means the same thing on
+   every tab and the right-hand column is the amount on every tab. That is what
+   lets a Spend row and a Bills row be the same height. */
+.item-timing {
+  color: var(--text-secondary);
+}
+
+/* A settled bill reads as a fact about the row, so its timing carries the
+   state in the colour the old green lozenge used to. */
+.item-timing--paid {
   color: var(--success);
   font-weight: 600;
+}
+
+.item-row--done .item-timing {
+  color: #06180d;
 }
 
 /* Month Navigator */
@@ -1616,6 +1798,40 @@ body {
   transition: border-color 0.15s ease;
 }
 
+/* A picker inside a settings row. The default form input is a full-width field
+   for a form; here it sits beside a switch on one line, so it is sized to its
+   own content and allowed to shrink rather than pushing the switch off the
+   card. It has to come after .form-input, which is width:100% — same
+   specificity, so position is what decides. */
+.form-input--mini {
+  width: auto;
+  /* Not 0. A picker squeezed to nothing is worse than one that takes up its
+     room: the widest option here is "1 week before", and this is the width below
+     which the browser starts clipping that in half. */
+  min-width: 64px;
+  max-width: 116px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  flex: 0 1 auto;
+}
+
+/* A button inside a sentence of explanatory text — the permission state line.
+   Full height would break the line's leading, so it's sized to sit in it. */
+.btn-tiny {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+/* A row that's off keeps its picker in place so the switch doesn't move under a
+   finger — it just goes quiet. */
+.form-input--mini:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .form-input:focus {
   border-color: var(--accent);
 }
@@ -1702,9 +1918,55 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  /* Was 20px with no margin below, so a screen of settings was mostly padding. */
-  padding: 18px;
-  margin-bottom: 14px;
+  /* Matches .stat-card exactly. Reports and Settings hold these in a
+     .reports-grid, which supplies the 20px gap — a margin-bottom here was
+     added to that gap rather than replacing it, so those two pages had 34px
+     between cards where the dashboard had 20. */
+  padding: 20px;
+}
+
+/* What the phone says is waiting to fire. Reads as a list rather than a
+   sentence, because it is a list — and because "nothing scheduled" is itself
+   usually the answer someone opening this page came for. */
+.pending-list {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.pending-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.pending-title {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-when {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* After .report-card, not before it: both selectors are a single class, and
+   .report-card sets the border with a shorthand, so whichever comes last wins
+   outright. This one was first, and the card came out with an ordinary border
+   and only a red heading. */
+.report-card--danger {
+  border-color: var(--danger);
+}
+
+.report-card--danger .report-title {
+  color: var(--danger);
 }
 
 .report-title {
@@ -1826,21 +2088,60 @@ body {
   outline-offset: 2px;
 }
 
-/* One line of settings: label and hint on the left, control on the right.
-   Wraps instead of crushing the hint into a one-word column when the card is
-   narrow — a three-button control and a sentence don't both fit in 280px. */
+/* One line of settings: label on the left, control on the right.
+
+   No divider between rows. There was one, and it was a line drawn through the
+   middle of a card to separate things the card had already separated — 13px of
+   padding above and below each row. On a two-row card it read as a rule across
+   an otherwise empty box, and on the Reminders card it put a line between three
+   rows that are obviously a set. The cards are the grouping; a rule inside one
+   is a second, weaker version of the same idea saying it again.
+
+   Wraps rather than crushing the label into a one-word column when the card is
+   narrow — a three-button control and a sentence don't both fit in 230px. */
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 15px;
   padding: 13px 0;
-  border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
 }
 
+/* The label column is not 200px wide. `.setting-text { flex: 1 1 200px }` is
+   right for a row that wraps, where the label can have the space it needs, and
+   wrong for one that does not: a 200px basis means "Appearance" and "Passcode"
+   wrap on a 360px phone even though their controls fit alongside them easily.
+   This resets it to the label's own width, and it is load-bearing — deleting it
+   puts three cards back to two lines. */
+.setting-row--inline .setting-text {
+  flex: 0 1 auto;
+}
+
+/* A settings row is a label on the left and its control on the right, and by
+   default it may break onto two lines when they will not both fit — which is
+   what a text field wants, since a 40px input is not a control.
+
+   This is for the rows where it does not: a label with the picker and the
+   switch sitting underneath it is a row twice the height it needs to be, and on
+   a phone three of those stacked is a Reminders card you scroll past.
+
+   It was meant to be the default — `.setting-row--inline { flex-wrap: nowrap }`
+   existed for years and did nothing, because `.setting-row { flex-wrap: wrap }`
+   came later in this file at the same specificity and won. Hence the modifier,
+   declared after the base rule so it actually applies. */
+.setting-row--nowrap {
+  flex-wrap: nowrap;
+}
+
+/* The label keeps its full width in a nowrap row and the control gives ground
+   instead. Priority matters: if the label were the thing that shrank, "Record
+   spending" would wrap onto two lines and buy nothing at all. */
+.setting-row--nowrap .setting-text {
+  flex: 0 0 auto;
+}
+
 .setting-row:last-child {
-  border-bottom: none;
   padding-bottom: 0;
 }
 
@@ -1858,17 +2159,126 @@ body {
   font-weight: 600;
 }
 
+/* An empty one must cost nothing. It is the element checkForUpdate writes its
+   answer into, and it sits on its own line whether or not there is an answer
+   yet — which is exactly the kind of blank line that reads as a mistake. */
+.setting-hint--result:empty {
+  display: none;
+}
+
+/* The answer to "Check" sits in the corner the tap was in, not on a new line
+   at the left where it reads as a second, unexplained sentence. */
+.setting-hint--right {
+  text-align: right;
+}
+
 .setting-hint {
   font-size: 0.8rem;
   color: var(--text-secondary);
   margin-top: 3px;
 }
 
+/* A settings row is a label on the left and its control on the right, on ONE
+   line. The control used to be rigid (flex: 0 0 auto), so on a 360px phone the
+   row had no choice but to drop the control onto a second line: every Reminders
+   row came out as a label with the picker and the switch sitting underneath it.
+   That is what "linebreaks have snuck back in" looked like from the sofa, and it
+   was three rows out of three on the card.
+
+   Letting the control shrink is the whole fix. The switch is `flex: 0 0 auto`
+   inside it, so the switch never moves or resizes — which matters, because a
+   control that shifts under a finger still resting on it is the one failure
+   here that is genuinely dangerous. Only the picker gives ground. */
 .setting-control {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* A name field is the one control that cannot usefully shrink — a 40px input is
+   not a control, it is a mistake — so the add-someone row keeps its natural
+   width and wraps instead, exactly as it did before. */
+.setting-row--add .form-input {
+  min-width: 118px;
+}
+
+/* The current currency, named beside its own picker: "Currency  GBP  [v]".
+   Without the code the dropdown is the only thing saying which one is in use,
+   and it has to be opened to find out. */
+.currency-code {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+}
+
+/* A control that needs room for an address rather than a word. */
+.setting-control--wide {
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: flex-end;
+}
+
+.setting-control--wide .form-input {
+  min-width: 0;
+  width: 100%;
+  text-align: right;
+}
+
+/* The dashboard's sync-and-refresh button. Quieter than the month arrows beside
+   it, because it is used occasionally rather than constantly — and quieter
+   still when there is nowhere to sync to, which is the state it starts in. */
+.icon-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.icon-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.icon-btn--quiet {
+  opacity: 0.55;
+}
+
+/* Taken out of the flow. Adding this to the dashboard's toolbar as a flex child
+   meant right-aligning the row, which slid the month selector across the screen
+   and put it somewhere the other three tabs don't have theirs. The month
+   navigator is at a fixed width and in the same place on Dashboard, Spend and
+   Bills, and that is worth more than a tidy flex row: the control you reach for
+   should be where your thumb already knows it is. */
+.icon-btn--float {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* The one thing in the app that spins. Without it a sync that takes a second is
+   indistinguishable from a button that did nothing. */
+.icon-btn.is-busy svg {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn.is-busy svg { animation-duration: 2.4s; }
 }
 
 /* The lock settings' controls sit beside their label rather than pushed to the
@@ -2290,19 +2700,23 @@ body.is-locked {
   display: none;
 }
 
+html.is-native .sidebar,
 body.is-native .sidebar {
   display: none;
 }
 
+html.is-native .app-topbar,
 body.is-native .app-topbar {
   left: 0;
 }
 
+html.is-native .content,
 body.is-native .content {
   margin-left: 0;
   padding-bottom: calc(84px + env(safe-area-inset-bottom, 0px));
 }
 
+html.is-native .bottom-nav,
 body.is-native .bottom-nav {
   display: flex;
   position: fixed;
@@ -2348,10 +2762,36 @@ body.is-native .bottom-nav {
 
 /* Small phones: six columns of labels get tight, so shrink the text a step
    rather than letting it spill past the bar. */
+/* A report heading and its total share one line, the total right-aligned, and
+   between them they have to fit the card. Measured: "Where Your Money Is" needs
+   145px at 0.9rem and had 144px to put it in, so it wrapped by a single pixel
+   and made the card taller than its contents — and a five-figure total brought
+   the same edge back at 393px, which is why this is not a 380px query.
+
+   The room comes from three places rather than one, because one pixel of slack
+   is not slack. The total goes down a step as well as the heading, and it
+   should: it was the larger of the two by two and a half pixels, which is not
+   what a card whose number is the point should look like. The total is still the
+   biggest thing on the line, and a tablet or a desktop is untouched. */
+@media (max-width: 430px) {
+  .report-head {
+    gap: 8px;
+  }
+
+  .report-head .report-title {
+    font-size: 0.9rem;
+  }
+
+  .report-head-total {
+    font-size: 0.95rem;
+  }
+}
+
 @media (max-width: 380px) {
   .bottom-nav .nav-item {
     font-size: 0.58rem;
   }
+
 }
 
 .bottom-nav .nav-item svg {

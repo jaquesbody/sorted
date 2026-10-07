@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The icon in the status bar.
+
+  It was the launcher icon, which Android tints into a featureless white blob —
+  the launcher icon is a full-colour rounded square with a background layer, and
+  neither of those means anything at 24dp in a monochrome slot. A status bar icon
+  has to be a flat silhouette, so this is a stroked "S" and nothing else: one
+  path, no fill, no background, and it sits inside the 24dp box with room to
+  spare, which Android requires or it crops the shape.
+
+  White, because Android applies its own tint and only the alpha channel is
+  used. Traced as one continuous stroke so the joins are round rather than
+  mitred, which at this size is the difference between an S and a staircase.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M18,7 L6,7 L6,12 L18,12 L18,17 L6,17"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

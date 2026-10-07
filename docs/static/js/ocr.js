@@ -12,6 +12,61 @@
    the confirm step is not optional.
    ============================================================================= */
 
+// Tesseract wants text roughly 30px tall — about 300dpi on paper. A receipt
+// photographed on a phone is often well under that, and at 12px it stops being
+// reliably readable: measured, a receipt 560px wide came back with its decimal
+// points gone ("1.75" read as "175") and its date collapsed to "200202".
+//
+// Lifting it costs nothing on device and is the single biggest accuracy lever
+// available without sending the image anywhere.
+const OCR_MIN_WIDTH = 1000;
+const OCR_MAX_WIDTH = 2400;
+
+// Returns a PNG blob of the same receipt, prepared for recognition. Falls back
+// to the original on any failure: a receipt that reads badly is better than a
+// receipt that reads as an error.
+async function preprocessForOCR(file) {
+  try {
+    const bitmap = await createImageBitmap(file);
+    let scale = 1;
+    if (bitmap.width < OCR_MIN_WIDTH) {
+      scale = Math.min(OCR_MAX_WIDTH / bitmap.width, 3);
+    } else if (bitmap.width > OCR_MAX_WIDTH) {
+      scale = OCR_MAX_WIDTH / bitmap.width;
+    }
+
+    const width = Math.round(bitmap.width * scale);
+    const height = Math.round(bitmap.height * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    // White, not transparent: a transparent area reads as black ink.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    // Smoothing off when lifting, so upscaling doesn't blur the glyph edges
+    // into each other — the opposite of what a smoother read wants.
+    ctx.imageSmoothingEnabled = scale > 1 ? false : true;
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    if (typeof bitmap.close === 'function') bitmap.close();
+
+    // Deliberately no binarisation here. It looked like an obvious win and was
+    // measured to be a loss: greyscaling and cutting at Otsu's threshold got the
+    // grocery receipts' decimals and dates right, but chewed up dense
+    // low-contrast lines — a receipt's card line read "2840" as "B40", and the
+    // one date that was still being missed stopped being missed once the
+    // threshold was removed. Upscaling alone scored 12/12 on amounts and on
+    // dates; upscaling plus binarisation scored 12/12 and 11/12. The threshold
+    // code went rather than staying behind a flag.
+
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    return blob || file;
+  } catch (err) {
+    console.warn('Receipt preprocessing skipped:', err);
+    return file;
+  }
+}
+
 async function runOCR(imageFile, onProgress, onWorker) {
   // Fetched on demand — see loadScriptOnce() in utils.js.
   await loadScriptOnce('static/vendor/tesseract/tesseract.min.js');
@@ -25,7 +80,17 @@ async function runOCR(imageFile, onProgress, onWorker) {
   });
   if (onWorker) onWorker(worker);
 
-  const { data: { text } } = await worker.recognize(imageFile);
+  // PSM 6, "assume a single uniform block of text", which is what a receipt is:
+  // one column, no page furniture. The default (3) spends effort hunting for
+  // columns and headers and misreads till paper as a page with regions.
+  try {
+    await worker.setParameters({ tessedit_pageseg_mode: '6' });
+  } catch (err) {
+    console.warn('Could not set page segmentation mode:', err);
+  }
+
+  const prepared = await preprocessForOCR(imageFile);
+  const { data: { text } } = await worker.recognize(prepared);
   await worker.terminate();
   return text;
 }
@@ -61,19 +126,93 @@ function runOCRWithTimeout(imageFile, onProgress, timeoutMs = 25000) {
   return Promise.race([work, timeout]);
 }
 
-function guessAmountFromText(text) {
-  const moneyRegex = /£?\s?(\d{1,4}\.\d{2})/;
-  const lines = text.split('\n');
+// Words that mark the figure the receipt is asking you for, strongest first.
+// Ordered rather than tested as a set because "SUBTOTAL" contains "total" and a
+// discount, a service charge or a deposit between the two makes them different
+// numbers — on a receipt with a 10% off coupon the subtotal is the wrong answer
+// and it was winning because the old test was just /total/i.
+const TOTAL_WEIGHTS = [
+  [/\bgrand\s*total\b/i, 100],
+  [/\btotal\s*due\b/i, 95],
+  [/\bamount\s*due\b/i, 92],
+  [/\bto\s*pay\b/i, 90],
+  [/\bnet\s*due\b/i, 88],
+  [/\bbalance\s*due\b/i, 86],
+  [/\bbalance\b/i, 70],
+  [/\bamount\b/i, 68],
+  [/\btotal\b/i, 66],
+  [/\bsubtotal\b/i, 30],
+];
 
-  for (const line of lines) {
-    if (/total/i.test(line)) {
-      const match = line.match(moneyRegex);
-      if (match) return parseFloat(match[1]);
-    }
+// Words about how you paid rather than what you owed. The old fallback took the
+// largest number anywhere on the page, so any receipt with a CASH line returned
+// the cash you handed over: measured, a Sainsbury's receipt for £8.60 read back
+// as £10.00 because CASH 10.00 was the biggest figure on it.
+const TENDER_WORDS =
+  /\b(cash|change|tendered|amount\s*received|received|given|visa|mastercard|maestro|amex|debit\s*card|credit\s*card|card\s*payment|paid\s*by|coins?|notes?)\b/i;
+
+// A money figure, preferring one with two decimal places. Also catches the
+// thousands separator a till prints, and pence-only totals.
+const MONEY = /(?:\u00a3|GBP)?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d{1,5}\.\d{2})/g;
+
+function moneyOn(line) {
+  const found = [];
+  MONEY.lastIndex = 0;
+  let m;
+  while ((m = MONEY.exec(line)) !== null) {
+    const n = parseFloat(String(m[1]).replace(/,/g, ''));
+    if (Number.isFinite(n)) found.push(n);
   }
+  return found;
+}
 
-  const allMatches = [...text.matchAll(/£?\s?(\d{1,4}\.\d{2})/g)].map((m) => parseFloat(m[1]));
-  return allMatches.length > 0 ? Math.max(...allMatches) : 0;
+// A line's claim to being the total, 0 if it isn't claiming.
+function totalWeight(line) {
+  if (TENDER_WORDS.test(line)) return 0;
+  let best = 0;
+  for (const [re, weight] of TOTAL_WEIGHTS) {
+    if (re.test(line)) best = Math.max(best, weight);
+  }
+  return best;
+}
+
+function guessAmountFromText(text) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return 0;
+
+  // 1. The best line that names a total, largest figure on it. A total word with
+  //    no figure on its own line — "TOTAL" above the number, which is how a lot
+  //    of receipts print it — borrows from the line below.
+  let best = { score: 0, amount: 0 };
+  lines.forEach((line, i) => {
+    const score = totalWeight(line);
+    if (!score) return;
+    let money = moneyOn(line);
+    if (money.length === 0 && i + 1 < lines.length && !totalWeight(lines[i + 1])) {
+      money = moneyOn(lines[i + 1]);
+    }
+    if (!money.length) return;
+    const amount = Math.max(...money);
+    if (score > best.score || (score === best.score && amount > best.amount)) {
+      best = { score: score, amount: amount };
+    }
+  });
+  if (best.score > 0) return best.amount;
+
+  // 2. No total anywhere. The largest figure on a line that isn't about payment
+  //    — the amount, not the cash.
+  const candidates = [];
+  lines.forEach((line) => {
+    if (TENDER_WORDS.test(line)) return;
+    candidates.push(...moneyOn(line));
+  });
+  if (candidates.length > 0) return Math.max(...candidates);
+
+  // 3. Nothing but tender lines. The smallest is the most likely total, since a
+  //    receipt always shows change as a smaller figure than the cash.
+  const tendered = [];
+  lines.forEach((line) => tendered.push(...moneyOn(line)));
+  return tendered.length > 0 ? Math.min(...tendered) : 0;
 }
 
 function guessTitleFromText(text) {
@@ -93,6 +232,19 @@ function guessTitleFromText(text) {
 function guessDateFromText(text) {
   const months = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
   const monthAlt = 'jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec';
+  // The same months, but tolerant of the one substitution OCR actually makes
+  // here: "2 Oct 2026" recognised as "20ct 2026", with a zero where the letter
+  // O belongs. Measured on a drawn receipt at three tilts — it was the only
+  // reason a date was being missed entirely, since "oct" cannot match "0ct".
+  const monthAltLoose = 'jan|feb|mar|apr|may|jun|jul|aug|sep|[o0]ct|nov|dec';
+  // Any digits in what matched are recognition noise — but a zero can BE the
+  // noise, standing in for the letter O. Folding 0 back to o has to happen
+  // before the rest is stripped, or "0ct" reduces to "ct" and looks up nothing.
+  const monthKey = (s) => String(s || '')
+    .toLowerCase()
+    .replace(/0/g, 'o')
+    .replace(/[^a-z]/g, '')
+    .slice(0, 3);
   const currentYear = new Date().getFullYear();
 
   const make = (year, month, day) => {
@@ -128,9 +280,21 @@ function guessDateFromText(text) {
   }
 
   // Day + month name: "25 Sep 2026", "25th September", optional year.
-  const nameRe = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${monthAlt})[a-z]*\\.?,?\\s*(\\d{2,4})?\\b`, 'i');
+  const nameRe = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${monthAltLoose})[a-z]*\\.?,?\\s*(\\d{2,4})?\\b`, 'i');
   m = text.match(nameRe);
-  if (m) { const r = make(m[3], months[m[2].slice(0, 3).toLowerCase()], m[1]); if (r) return r; }
+  if (m) { const r = make(m[3], months[monthKey(m[2])], m[1]); if (r) return r; }
+
+  // A day and a month name with no space between them, because the space was
+  // lost in recognition rather than on the paper. "2 Oct 2026" comes back as
+  // "20ct 2026" often enough to be worth handling: the day is one or two digits
+  // and the month name follows immediately, so peel digits off the front until
+  // what's left starts a month. Only 1-31 is accepted, which is what keeps "1st"
+  // in a line number or a quantity from being read as a day.
+  const gluedRe = new RegExp(`(\\d{1,2})(${monthAltLoose})[a-z]*\\.?\\s*,?\\s*(\\d{2,4})`, 'ig');
+  while ((m = gluedRe.exec(text)) !== null) {
+    const r = make(m[3], months[monthKey(m[2])], m[1]);
+    if (r) return r;
+  }
 
   // Month first: "Sep 25, 2026", "September 25".
   const monthFirstRe = new RegExp(`\\b(${monthAlt})[a-z]*\\.?,?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s*(\\d{2,4})?\\b`, 'i');

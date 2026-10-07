@@ -24,15 +24,29 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Give someone a PIN and entering it instead of the app passcode both unlocks the app and switches to them, so the right person is marked without touching anything. The app passcode keeps working exactly as before, and anyone who can reach Settings can reset a PIN without knowing it — it says who you are, not that you're allowed in
 - A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
 - Marking a bill paid records who paid it, which can be someone other than the bill's owner
-- Spend, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
+- Spent, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
 - A bill you tick is still a bill: it stays in the list with the date you paid it, its tick un-pays it, and it can still be edited. Deleting a repeating bill asks which you mean — this one, or this one and every month of it
 - Every row reads as a small table: the amount on the right, its timing underneath, and the receipt paperclip, the person and the tick in one 24px row beneath that. The paperclip only appears when there's actually a picture
 - Recurring: say whether something repeats monthly or annually. It rolls its due date forward by that much when paid, and projects its own next occurrences into the months ahead — twelve months for monthly, the same time next year for annual — so stepping forward shows what those months hold instead of an empty page. Projected rows are dashed, marked, and have no buttons: they're a forecast, not something to pay
 - A month selector on Dashboard, Spend and Bills, all the same width; tap the month name to jump back to the current one
 - Bills filters — All, Confirmed, Pending, Recurring — over the month's bills paid as well as unpaid, so a month you've already dealt with is still worth looking at
-- Reports: spending, bills and savings goals broken down by category, over all time, this month or this year. Each card carries its own total underneath its breakdown
-- Bill reminders: a notification when a bill is due or already overdue, with a lead time you choose. There's no server, so nothing can wake the app at a set time — Sorted checks when you open it, and only when it isn't already in front of you
+- Reports: spending, bills and savings goals broken down by category, over all time, this month or this year. Each card carries its total on the same line as its heading
+- Patterns: which days you actually spend on, averaged over the last eight weeks, and whether this week is a normal one. Averages come from the weeks you recorded in, not from empty ones — otherwise a quiet fortnight reads as you spending half as much on every day
+- Both are arithmetic on your own data. No network, no API key, no model, and nothing about your spending leaves the device — which is the whole reason they exist instead of a search API
+- Three reminders, each off until you ask for it: bills coming due or already overdue, nothing recorded today, and a savings goal going untouched. On Android these are scheduled by the system, so they arrive whether or not Sorted is open — bills in the morning, the other two at a time you pick. In a browser there's no way to wake the app at a set hour, so the same checks run when you open it and put it away, and the settings say so rather than implying more
 - Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete
+- Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
+- Setting it up is **one address and one button**: pick where in the dropdown, paste the address, press **Sync now**. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
+- Underneath sits **a numbered setup guide for whichever transport is selected** — where to get the address from, in order, including the command to run. Two of the four exist and are described as they work: **Home server** over your Wi-Fi, and **Tailscale** (works, and from outside the house, over the same file). **Syncthing** and **Cloud** are in the dropdown marked *not yet*, and their steps say so and describe the steps they will take rather than showing nothing
+- To run the other end, on any machine with Node: `node tools/sync-host.mjs`. It serves one file over your Wi-Fi and nothing else — no database, no accounts, no history — and prints the address to paste into Settings
+- Export offers three formats rather than one, because they do three different jobs: a **`.json` backup** (the only one Import can read back), a **`.csv`** of every dated movement for Excel, Numbers or Google Sheets, and a readable **`.txt`** statement grouped by month. It is handed to Android's share sheet — Drive, email, a cable — and is an ordinary download in a browser
+- Reminders, each off until you ask for it, saying exactly this:
+  - **"Sorted — bill due"** — *"Rent is due Thursday"* (or *"… is overdue"*)
+  - **"Sorted — nothing recorded today"** — *"Anything you spent today? A minute now saves guessing later."*
+  - **"Sorted — nothing going in"** — *"No goal has been topped up in 7 days."* (or your chosen cadence)
+  - Bills are said once a day per bill, so a bill left unpaid does not nag all morning. Reminders are inexact by design: Sorted does not ask Android for permission to wake exactly on the minute, so they arrive *near* the time rather than on it
+- Reminders you can check without waiting: two controls in Settings. **Show one now** posts a notification immediately, which proves Sorted is allowed to post at all. **Arm one** sets a real alarm five minutes out, which proves the phone accepted it — and that one is **inexact**, because Sorted deliberately does not hold Android's exact-alarm permission (a nudge about tonight's spending does not need to land on the minute, and the permission needs its own grant on Android 12+). So it arrives *near* five minutes rather than at it, and Sorted says so rather than promising a minute it cannot keep. Underneath both, the list is what the phone itself says is pending, read back from the system rather than from what Sorted believes it asked for — the two can disagree, and a switch showing "on" isn't proof anything will arrive
+- Reminders are rebuilt from the database every time anything changes — a bill paid, a spend recorded, a goal topped up, anything deleted, everything wiped — rather than tracked one at a time, so what arrives always matches the data
 - Switching tabs always opens at the top of the new tab rather than wherever you left the last one
 - A "Who Spent What" report: one bar per person, its length their share of the household total, split blue for what they spent and red for what they owe. Money nobody is marked against is its own row, so the card adds up to the summary
 - Month navigation and status filters
@@ -42,10 +56,15 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Move money between accounts when you transfer it for real, and adjust a balance by hand for anything the app can't infer (interest, fees, a correction)
 - Reports gains a "Where Your Money Is" card and a Forecast chart
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
+- Receipt reading is measured, not assumed. Four receipts with known answers — a total whose figure is printed on the line below, a VAT total sitting beneath a larger loyalty-points balance, a cash receipt where the tendered amount is the biggest number on the page, and one with no currency symbol anywhere — are drawn at three tilts and read through the real pipeline. Measured against that: **12/12 on amounts, 12/12 on titles, 12/12 on dates**, up from 10/12 and 9/12. Images are lifted before reading, because Tesseract wants text around 30px tall and a phone photo is often well under it: at 12px the decimal points disappear ("1.75" read as "175") and the date collapses
+- The amount found is the amount *owed*, not the cash handed over: "subtotal" is ranked below "total", "cash", "change" and card lines are excluded, and a total whose figure is on the next line is picked up from there
 - Receipts are kept with the entry — a paperclip on the row opens it full size, and the Edit popup can view, replace or remove it. PDFs are stored as a first-page image
-- Light, dark, or follow-the-system theme, set in Settings and applied before the first paint
+- Light, dark, or follow-the-system theme, set in Settings and applied before the first paint — as is the phone layout itself, so the side rail never flashes on launch
+- Change the currency in Settings: fifty-one of them. Your figures are stored as plain numbers, so changing the symbol never rewrites anything
+- Check for updates in Settings: it asks GitHub for the newest release and compares versions numerically. Nothing is installed without you saying so — Android requires a human to confirm any install regardless
+- Android asks for the notification permission on first use (Android 13+ requires it, and without it the channel is created silently and nothing ever appears). The schedule is **inexact** on purpose — an exact alarm needs its own grant, and Play only allows it to alarm-clock apps
 - Optional passcode: a numeric keypad locks the app on launch and again after a set idle period (1, 5 or 30 minutes, or immediately when it's put away). Only a salted hash of the passcode is stored
-- Export / import your whole dataset as JSON — importing asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images and your list of people travel with the backup
+- Export as JSON backup, CSV or plain text; import reads the JSON backup and asks first: merge (existing kept, duplicates skipped) or replace everything (double-confirmed). Receipt images and your list of people travel with the backup
 - Works in the browser, on the desktop as an Electron app, and on Android — where the six destinations sit in a bottom bar instead of a side rail
 
 ## Run It
@@ -69,7 +88,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.14.0-debug.apk`](sorted-v2-2.14.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.35.0-debug.apk`](sorted-v2-2.35.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
@@ -86,7 +105,7 @@ To rebuild it yourself (needs JDK 21 and the Android SDK):
 
 The signing key is committed at `android/debug.keystore` and pinned in `build.gradle`, so any machine can build an APK that installs as an update over an existing one. Android rejects an update signed with a different key, so if you ever change that file the next install will be refused and the only fix would be an uninstall — which deletes the data. Its fingerprint is recorded in `build.gradle`; if a build ever starts failing to install, check that the APK's certificate still matches the keystore's.
 
-Note: importing JSON works on every platform. Export uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
+Note: importing JSON works on every platform and accepts only a Sorted backup — a CSV cannot be read back, and guessing at arbitrary column layouts is how an import quietly corrupts a dataset. Export offers the three formats and uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
 
 ## Tech Stack
 
@@ -94,13 +113,16 @@ Note: importing JSON works on every platform. Export uses the native save dialog
 - Electron for the desktop shell
 - IndexedDB for local storage, plus `localStorage` for the theme and passcode
 - Zero runtime dependencies in the web app (OCR and PDF libraries are vendored in the repo)
+- `@capacitor/local-notifications`, for scheduled reminders on Android. It's the only plugin the app uses, and it needs no server
 - Tesseract and pdf.js are loaded on demand, when a receipt is actually picked, rather than on every page load — they are two thirds of the payload and a screen doesn't need either
 
 ## Privacy
 
 No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
 
-Accounts, income and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere. The Forecast card projects your balance **day by day** over a window you choose — 1, 3, 6 or 12 months — from your balances, your income's dates, your bills' dates and an average of your other spending. Step it back a month and it shows days you actually recorded rather than a projection. It tells you the lowest point your balance reaches and when, which is usually just before payday.
+Accounts, income and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere.
+
+Reminders are local too, and can only be as private as the thing they mention: a bill notification carries its title and amount, and the spending nudge says whether today is empty. Anyone holding the phone can read that from the lock screen — the same exposure the app's own lock screen already has. There's no server that could see any of it, and no reminder can be turned into anything that reaches anyone else. The Forecast card projects your balance **day by day** over a window you choose — 1, 3, 6 or 12 months — from your balances, your income's dates, your bills' dates and an average of your other spending. Step it back a month and it shows days you actually recorded rather than a projection. It tells you the lowest point your balance reaches and when, which is usually just before payday.
 
 People are labels, not accounts: a person is a name and a colour, and anyone can switch who they're being. That makes attribution useful on a shared device and useless against anyone determined — it is not access control.
 

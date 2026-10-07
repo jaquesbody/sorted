@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
@@ -38,4 +40,27 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Reminders. POST_NOTIFICATIONS is the Android 13+ runtime prompt; without
+         it the channel is created silently and nothing ever appears.
+         RECEIVE_BOOT_COMPLETED lets the plugin reschedule after a restart, since
+         a scheduled alarm does not survive one.
+
+         Deliberately NOT SCHEDULE_EXACT_ALARM. It needs a separate user grant on
+         Android 12+ and Play restricts it to alarm-clock apps, and a nudge about
+         tonight's spending being unrecorded does not need to land on the minute.
+         Inexact scheduling is a few minutes of slack and no extra prompt. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- The notification plugin's own manifest asks for SCHEDULE_EXACT_ALARM,
+         so it arrives in the merged APK whether we want it or not. We don't:
+         nothing here claims to be an alarm clock, and the schedule is inexact
+         on purpose (see the note above). Leaving it in is the one way to be sure
+         of a silent prompt on someone's phone — the system may ask at install,
+         or just quietly drop the notifications. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"
+                     tools:node="remove" />
+    <uses-permission android:name="android.permission.WAKE_LOCK"
+                     tools:node="remove" />
 </manifest>
