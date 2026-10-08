@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.43.0';
+const APP_VERSION = '2.44.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -3955,7 +3955,15 @@ async function toggleIncomeRecurring(id, btn) {
 // The categories offered, in the order they're meant to be scanned. Bills get
 // the same list as spend: a bill is spending that hasn't happened yet, and two
 // lists meant the same word could break down differently in Reports.
-const CATEGORIES = ['Utilities', 'Motor', 'Entertainment', 'Shopping', 'General', 'Travel', 'One-Off'];
+//
+// Groceries, Eating out, Health and Home were added because a receipt can
+// actually tell them apart, which the original six could not express: a
+// supermarket, a restaurant and a pharmacy were all "Shopping" or "General".
+// Values are free text on the item, so adding here changes nothing about
+// anything already filed — `categoryOptionsHtml` keeps a stored value that is
+// off this list offered, so an old "Food" stays editable rather than being
+// quietly rewritten to the first option.
+const CATEGORIES = ['Groceries', 'Eating out', 'Health', 'Home', 'Utilities', 'Motor', 'Entertainment', 'Shopping', 'Travel', 'One-Off', 'General'];
 
 // Savings goals are a separate list: they're savings for a purpose, not a
 // purchase, so "Utilities" or "Motor" never fit one. Reports breaks savings
@@ -3967,10 +3975,17 @@ const SAVINGS_CATEGORIES = ['Holiday', 'Car', 'Christmas', 'One-Off', 'Other'];
 // "Mortgage" would show the select falling back to its first option, and
 // pressing Save would quietly rewrite the category — the dropdown would change
 // real data just because the list changed.
+//
+// A blank first row, so "no category yet" is a state the form can be in. The
+// select used to open on its first real option, which meant saving without
+// touching it filed the entry under that one — and it is also what lets a
+// receipt fill the category in: something has to be empty for a suggestion to
+// be a suggestion rather than an overwrite.
 function categoryOptionsHtml(extra, list = CATEGORIES) {
   const current = extra && String(extra);
   const options = current && !list.includes(current) ? [current, ...list] : list;
-  return options.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+  const blank = current ? '' : '<option value="">Not set</option>';
+  return blank + options.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
 }
 
 function buildForm(type, editId = null, existingCategory = null) {
@@ -4322,6 +4337,7 @@ async function ocrPrefill(file) {
   // Spend has form-date (pre-filled with today), bills have form-dueDate
   // (starts empty) — whichever the open form owns gets the receipt date.
   const dateEl = document.getElementById('form-date') || document.getElementById('form-dueDate');
+  const categoryEl = document.getElementById('form-category');
 
   try {
     // Store the image first: even if OCR fails or guesses wrong, the photo is
@@ -4337,11 +4353,15 @@ async function ocrPrefill(file) {
     const title = guessTitleFromText(text);
     const amount = guessAmountFromText(text);
     const date = guessDateFromText(text);
+    const category = guessCategoryFromText(text, title);
     if (titleEl && !titleEl.value && title) titleEl.value = title;
     if (amountEl && !amountEl.value && amount > 0) amountEl.value = amount;
     // The date fields ship with defaults (today / empty), so unlike title and
     // amount this one is always overwritten when the receipt shows a date.
     if (dateEl && date) dateEl.value = date;
+    // Only ever into an empty category. It is a <select>, so a suggestion that
+    // is wrong costs one tap — the same deal as the title and the amount.
+    if (categoryEl && !categoryEl.value && category) categoryEl.value = category;
     setOcrStatus(date
       ? 'Done — check title, amount and date, then save.'
       : 'Done — check title and amount, then save.');

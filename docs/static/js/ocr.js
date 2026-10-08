@@ -464,6 +464,86 @@ function titleScore(line, index, total) {
   return score;
 }
 
+/* -----------------------------------------------------------------------------
+   Category inference.
+
+   A receipt usually says what it was for — a supermarket's name, "DIESEL", a
+   pharmacy — and the category is the field that costs the most taps to get
+   right by hand. So it is suggested from the text, exactly as the title, the
+   amount and the date are: it fills an empty field and is never written over
+   anything already there, and it is a <select>, so a wrong suggestion is one
+   tap to correct.
+
+   Two things make it work. The words are matched with the same substitution
+   tolerance as the total and tender words, because the photo that reads T0TAL
+   reads TESC0. And the title is tried on its own before the whole receipt,
+   because the shop's name is the most reliably-read line and a word like
+   "petrol" in an item list is much weaker evidence than "SHELL GARAGE" at the
+   top.
+   -------------------------------------------------------------------------- */
+
+const CATEGORY_KEYWORDS = {
+  'Eating out': [
+    'restaurant', 'cafe', 'coffee', 'starbucks', 'costa coffee', 'caffe nero', 'pret a manger',
+    'mcdonalds', 'burger king', 'kfc', 'subway', 'dominos', 'pizza hut', 'nandos', 'wagamama',
+    'weatherspoons', 'greggs', 'diner', 'bistro', 'eatery', 'takeaway', 'fish and chips',
+    'gastropub', 'pub', 'inn', 'bar',
+  ],
+  Health: [
+    'pharmacy', 'chemist', 'boots', 'dentist', 'dental', 'optician', 'specsavers', 'surgery',
+    'clinic', 'hospital', 'veterinary', 'vets', 'physio', 'chiropodist', 'hearing care',
+  ],
+  Home: [
+    'ikea', 'homebase', 'wickes', 'argos', 'dunelm', 'dfs', 'john lewis', 'wilkinson', 'wilko',
+    'furniture', 'hardware', 'kitchens', 'carpets', 'curtains', 'bedding', 'toolstation',
+  ],
+  Motor: [
+    'petrol', 'diesel', 'fuel', 'shell', 'esso', 'texaco', 'gulf', 'garage', 'motoring', 'halfords',
+    'kwik fit', 'tyres', 'car wash', 'parking', 'trainline', 'railway', 'taxi',
+  ],
+  Utilities: [
+    'electric', 'electricity', 'gas', 'water', 'council tax', 'energy', 'power', 'broadband',
+    'internet', 'telephone', 'mobile phone', 'tv licence', 'severn trent', 'thames water', 'edf',
+    'eon', 'british gas', 'npower', 'octopus energy', 'virgin media',
+  ],
+  Groceries: [
+    'tesco', 'sainsburys', 'asda', 'morrisons', 'aldi', 'lidl', 'waitrose', 'co-op', 'coop',
+    'marks and spencer', 'm&s', 'iceland', 'farmfoods', 'spar', 'costcutter', 'budgens', 'londis',
+    'nisa', 'premier', 'costco', 'whole foods', 'greengrocer', 'butchers', 'bakers', 'deli',
+    'off licence',
+  ],
+  Entertainment: [
+    'cinema', 'odeon', 'vue', 'cineworld', 'theatre', 'netflix', 'spotify', 'amazon prime',
+    'disney', 'steam', 'playstation', 'xbox', 'nintendo', 'waterstones', 'hobbycraft',
+    'the range', 'gaming',
+  ],
+  Travel: [
+    'hotel', 'travel', 'airline', 'easyjet', 'ryanair', 'british airways', 'booking.com', 'expedia',
+    'holiday', 'flight', 'hostel', 'guest house', 'hygiene',
+  ],
+  Shopping: [
+    'amazon', 'ebay', 'tk maxx', 'primark', 'next', 'h&m', 'zara', 'new look', 'sports direct',
+    'currys', 'asos', 'debenhams', 'peacocks', 'dorothy perkins',
+  ],
+};
+
+// Ordered most specific first: where two categories could both match a name,
+// the one that names a way of spending beats the one that names a shop.
+const CATEGORY_WORDS = Object.entries(CATEGORY_KEYWORDS).map(([name, words]) => [
+  name, new RegExp(`\\b(${words.map(fuzzyBody).join('|')})\\b`, 'i'),
+]);
+
+function guessCategoryFromText(text, title) {
+  const heading = String(title || '').trim();
+  // The shop's name first — the line the engine reads best.
+  if (heading) {
+    for (const [name, re] of CATEGORY_WORDS) if (re.test(heading)) return name;
+  }
+  const all = `${heading}\n${String(text || '')}`;
+  for (const [name, re] of CATEGORY_WORDS) if (re.test(all)) return name;
+  return null;
+}
+
 function guessTitleFromText(text) {
   const lines = text
     .split('\n')
