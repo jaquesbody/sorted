@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.38.0';
+const APP_VERSION = '2.39.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -4293,6 +4293,18 @@ function setOcrStatus(text) {
   if (el) el.textContent = ocrStatusText;
 }
 
+// Why the read failed, in words that let the next report be specific. The one
+// line used to cover every cause and named none of them, so a deadline that
+// had been reached and a photo that could not be opened both came out as the
+// same sentence about the file — which read as a verdict on the receipt.
+function ocrFailureText(err) {
+  const message = String((err && err.message) || err || '');
+  if (err && err.code === 'ocr-stall') return 'Reading stopped — pick the receipt again.';
+  if (/could not read that image/i.test(message)) return 'That photo could not be opened — try a JPEG.';
+  if (/could not render that PDF/i.test(message)) return 'That PDF could not be opened — enter the details manually.';
+  return 'Could not read that file — enter the details manually.';
+}
+
 async function ocrPrefill(file) {
   const titleEl = document.getElementById('form-title');
   const amountEl = document.getElementById('form-amount');
@@ -4324,7 +4336,7 @@ async function ocrPrefill(file) {
       : 'Done — check title and amount, then save.');
   } catch (err) {
     console.error('OCR failed:', err);
-    setOcrStatus('Could not read that file — enter the details manually.');
+    setOcrStatus(ocrFailureText(err));
   }
 }
 

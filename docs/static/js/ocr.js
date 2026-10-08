@@ -95,10 +95,38 @@ async function runOCR(imageFile, onProgress, onWorker) {
   return text;
 }
 
-function runOCRWithTimeout(imageFile, onProgress, timeoutMs = 25000) {
+// Recognition is slow because a phone is not a desk, not because the photo is
+// bad. Measured on a packed 2400-wide receipt on a fast desktop: 16.6s end to
+// end, of which 16.0s is `recognize` alone — and that image is one this code
+// deliberately prepared, downscaled to the width Tesseract wants. A 25s wall
+// clock was therefore not a safety net but a coin flip at a desk and a certain
+// loss on a handset: it cut those runs off with seconds to spare here, and on
+// a phone several times slower it cut every one of them off. That is what
+// "Could not read that file" was reporting — the receipt was never given the
+// time to be read, so how clear it was never came into it.
+//
+// The thing the old message suspected — a file that failed to load, a worker
+// that died — does not look like slowness, it looks like silence: the engine
+// stops saying anything at all. So the deadline is silence rather than elapsed
+// time. The logger reports progress every 250-500ms throughout, with only a
+// 39ms gap before it finishes, so anything still ticking is still working and
+// may take as long as it needs; nothing heard for OCR_STALL_MS means nothing
+// is coming.
+const OCR_STALL_MS = 45000;
+
+function runOCRWithTimeout(imageFile, onProgress, stallMs = OCR_STALL_MS) {
   let worker = null;
-  let timedOut = false;
+  let stalled = false;
   let timer = null;
+  let giveUp = () => {};
+
+  const stall = new Promise((_, reject) => {
+    giveUp = () => {
+      const err = new Error(`OCR stopped reporting progress for ${stallMs}ms`);
+      err.code = 'ocr-stall';
+      reject(err);
+    };
+  });
 
   const killWorker = () => {
     const w = worker;
@@ -107,23 +135,31 @@ function runOCRWithTimeout(imageFile, onProgress, timeoutMs = 25000) {
     if (w) Promise.resolve(w.terminate()).catch(() => {});
   };
 
-  const work = runOCR(imageFile, onProgress, (w) => {
+  // Restart the deadline on every word from the engine. The first beat() is
+  // what covers the script load and worker creation, before there is a logger.
+  const beat = () => {
+    if (stalled) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      stalled = true;
+      killWorker(); // a stalled OCR used to leak the worker forever
+      giveUp();
+    }, stallMs);
+  };
+
+  const work = runOCR(imageFile, (msg) => {
+    beat();
+    if (onProgress) onProgress(msg);
+  }, (w) => {
     worker = w;
     // createWorker may only finish after we gave up — kill it then.
-    if (timedOut) killWorker();
+    if (stalled) killWorker();
   }).finally(() => {
     if (timer) clearTimeout(timer);
   });
 
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      timedOut = true;
-      killWorker(); // a timed-out OCR used to leak the worker forever
-      reject(new Error('Timed out after 25s — likely a file failed to load'));
-    }, timeoutMs);
-  });
-
-  return Promise.race([work, timeout]);
+  beat();
+  return Promise.race([work, stall]);
 }
 
 // Words that mark the figure the receipt is asking you for, strongest first.
