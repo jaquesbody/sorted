@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.39.0';
+const APP_VERSION = '2.40.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -4299,7 +4299,13 @@ function setOcrStatus(text) {
 // same sentence about the file — which read as a verdict on the receipt.
 function ocrFailureText(err) {
   const message = String((err && err.message) || err || '');
-  if (err && err.code === 'ocr-stall') return 'Reading stopped — pick the receipt again.';
+  if (err && err.code === 'ocr-stall') {
+    // Where it stopped is the whole answer: "Preparing the photo" and
+    // "recognizing text 60%" are different faults, and the previous wording
+    // made them one sentence about the file.
+    const at = err.lastStatus ? ` at “${err.lastStatus}”` : '';
+    return `Reading stopped${at} — pick the receipt again.`;
+  }
   if (/could not read that image/i.test(message)) return 'That photo could not be opened — try a JPEG.';
   if (/could not render that PDF/i.test(message)) return 'That PDF could not be opened — enter the details manually.';
   return 'Could not read that file — enter the details manually.';

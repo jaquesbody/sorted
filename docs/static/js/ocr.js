@@ -25,8 +25,15 @@ const OCR_MAX_WIDTH = 2400;
 // Returns a PNG blob of the same receipt, prepared for recognition. Falls back
 // to the original on any failure: a receipt that reads badly is better than a
 // receipt that reads as an error.
-async function preprocessForOCR(file) {
+//
+// onTick is not decoration. Everything here is a stretch in which Tesseract
+// says nothing at all — decoding the photo, scaling it, re-encoding it — and
+// runOCRWithTimeout's deadline only knows the pipeline is alive when something
+// reports. Called before the decode and again before the encode, because those
+// two are the slow parts and the encode is the slow one.
+async function preprocessForOCR(file, onTick) {
   try {
+    if (onTick) onTick('Preparing the photo…');
     const bitmap = await createImageBitmap(file);
     let scale = 1;
     if (bitmap.width < OCR_MIN_WIDTH) {
@@ -59,6 +66,9 @@ async function preprocessForOCR(file) {
     // dates; upscaling plus binarisation scored 12/12 and 11/12. The threshold
     // code went rather than staying behind a flag.
 
+    // Before the encode, not after: encoding a 2400x3200 PNG is the slowest
+    // thing in here and the part that has to be covered.
+    if (onTick) onTick('Preparing the photo…');
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
     return blob || file;
   } catch (err) {
@@ -68,6 +78,16 @@ async function preprocessForOCR(file) {
 }
 
 async function runOCR(imageFile, onProgress, onWorker) {
+  // Every stage announces itself, and not only for the person watching. The
+  // deadline below can only tell "working" from "stuck" by being told
+  // something, and the spans between Tesseract's own reports — loading the
+  // script, decoding the photo, scaling it, re-encoding it, and the gap
+  // between `recognize` being called and its first percentage — are stretches
+  // in which the engine says nothing at all. Measured on a desktop they total
+  // about 1.7s; on a handset the same spans are the longest quiet period in
+  // the whole pipeline, and a deadline that only listened to Tesseract fired
+  // in the middle of a read that was still going.
+  if (onProgress) onProgress('Starting the reader…');
   // Fetched on demand — see loadScriptOnce() in utils.js.
   await loadScriptOnce('static/vendor/tesseract/tesseract.min.js');
   const worker = await Tesseract.createWorker('eng', 1, {
@@ -89,7 +109,11 @@ async function runOCR(imageFile, onProgress, onWorker) {
     console.warn('Could not set page segmentation mode:', err);
   }
 
-  const prepared = await preprocessForOCR(imageFile);
+  const prepared = await preprocessForOCR(imageFile, onProgress);
+  // Announced before the call rather than after, because the quiet span is the
+  // image going across to the worker and the page being set up — nothing is
+  // reported again until Tesseract has text of its own to report on.
+  if (onProgress) onProgress('Reading receipt…');
   const { data: { text } } = await worker.recognize(prepared);
   await worker.terminate();
   return text;
@@ -119,11 +143,16 @@ function runOCRWithTimeout(imageFile, onProgress, stallMs = OCR_STALL_MS) {
   let stalled = false;
   let timer = null;
   let giveUp = () => {};
+  // What the pipeline said last. The failure has to name it: the same message
+  // used to come back for every cause, and a deadline arriving mid-read was
+  // reported as though the photo were unreadable.
+  let lastStatus = '';
 
   const stall = new Promise((_, reject) => {
     giveUp = () => {
       const err = new Error(`OCR stopped reporting progress for ${stallMs}ms`);
       err.code = 'ocr-stall';
+      err.lastStatus = lastStatus;
       reject(err);
     };
   });
@@ -148,6 +177,7 @@ function runOCRWithTimeout(imageFile, onProgress, stallMs = OCR_STALL_MS) {
   };
 
   const work = runOCR(imageFile, (msg) => {
+    lastStatus = msg;
     beat();
     if (onProgress) onProgress(msg);
   }, (w) => {
