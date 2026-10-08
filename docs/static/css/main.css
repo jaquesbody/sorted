@@ -1342,7 +1342,7 @@ body {
    turned a list of two balances into a table. Same reasoning as dropping them
    from the settings cards. */
 .account-total {
-  padding: 12px 0;
+  padding: 4px 0;
 }
 
 .account-total-top {
@@ -1525,7 +1525,9 @@ body {
   grid-template-areas: "name amount";
   column-gap: 10px;
   align-items: baseline;
-  padding: 9px 0;
+  /* 4px either side is the 8px a `.category-row` gets between its rows, so the
+     three breakdown cards have one rhythm between them. */
+  padding: 4px 0;
 }
 
 .pattern-name {
@@ -1578,9 +1580,12 @@ body {
   color: var(--text-primary);
 }
 
+/* The note under the Patterns heading. It used to be its own size entirely —
+   0.72rem with letter-spacing, when every other note on the page is the
+   standard `.setting-hint` — so it read as part of the heading's own styling
+   rather than as the caption it is. */
 .pattern-sub {
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
+  font-size: 0.8rem;
   color: var(--text-secondary);
   margin: 4px 0 10px;
 }
@@ -2767,7 +2772,13 @@ body.is-native .bottom-nav {
     gap: 8px;
   }
 
-  .report-head .report-title {
+  /* Every Reports card's heading, not only the ones that carry a total. The
+     rule used to shrink just `.report-head .report-title`, so a heading with a
+     total beside it rendered at 0.9rem and a plain one at 1rem — Patterns next
+     to Spending by Category, on the same page, differing by a pixel and a half.
+     Spending by Category is the standard; the rest now follow it. */
+  .report-head .report-title,
+  .report-card > .report-title {
     font-size: 0.9rem;
   }
 

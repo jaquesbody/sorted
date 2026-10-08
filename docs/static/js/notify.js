@@ -461,8 +461,10 @@ async function scheduleAllReminders() {
   if (plan.spend) {
     notifications.push({
       id: NOTIFY_ID_SPEND,
-      title: 'Sorted — nothing recorded today',
-      body: 'Anything you spent today? A minute now saves guessing later.',
+      // "Sorted — spent anything today?" reads as a question; the old
+      // "nothing recorded today" read as a nag about a field left blank.
+      title: 'Sorted — spent anything today?',
+      body: 'A minute now saves guessing later.',
       channelId: NOTIFY_CHANNEL_ID,
       ...INEXACT,
       smallIcon: NOTIF_ICON,
@@ -473,8 +475,8 @@ async function scheduleAllReminders() {
   if (plan.goals) {
     notifications.push({
       id: NOTIFY_ID_GOAL,
-      title: 'Sorted — nothing going in',
-      body: `No goal has been topped up in ${goalNudgeCadence().days} days.`,
+      title: 'Sorted — any savings to add?',
+      body: 'Nothing has gone in for a while.',
       channelId: NOTIFY_CHANNEL_ID,
       ...INEXACT,
       smallIcon: NOTIF_ICON,
@@ -716,8 +718,8 @@ async function checkBillNotifications() {
     if (isSpendNudgeEnabled() && !(await recordedToday('spend'))) {
       const key = 'spend-' + today;
       if (notifySeen()[key] !== today) {
-        if (fireNow('Sorted — nothing recorded today',
-                    'Anything you spent today? A minute now saves guessing later.',
+        if (fireNow('Sorted — spent anything today?',
+                    'A minute now saves guessing later.',
                     'spend', key)) {
           markNotified(key, today);
           sent++;
@@ -729,8 +731,8 @@ async function checkBillNotifications() {
       const g = await goalsTouchedRecently();
       const key = 'goal-' + today;
       if (g.any && !g.recent && notifySeen()[key] !== today) {
-        if (fireNow('Sorted — nothing going in',
-                    `No goal has been topped up in ${goalNudgeCadence().days} days.`,
+        if (fireNow('Sorted — any savings to add?',
+                    'Nothing has gone in for a while.',
                     'savings', key)) {
           markNotified(key, today);
           sent++;

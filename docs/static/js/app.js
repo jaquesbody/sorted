@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.44.0';
+const APP_VERSION = '2.45.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -688,6 +688,17 @@ async function renderDashboard(container) {
   const { items: dueShown, overdueElsewhere } = billsForMonth(dueItems, dashViewedDate);
   const dueTotal = dueShown.reduce((sum, i) => sum + i.amount, 0);
   const overdueCount = dueShown.filter(i => isOverdue(i.dueDate)).length;
+
+  // A month gone past has no outstanding bills left, so `dueTotal` is £0.00 for
+  // every one of them — which reads as "there were no bills in January" when the
+  // truth is "they have all been paid". The Total Money card is a picture of
+  // what a month did, so a past month counts its bills either way. The Bills
+  // card beside it answers the other question — what is still owed — and says so
+  // in its own sub-line, so the two are meant to differ in a past month.
+  const dueForTotal = isBeforeThisMonth(dashViewedDate)
+    ? dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate))
+        .reduce((sum, i) => sum + i.amount, 0)
+    : dueTotal;
   
   const savingsCurrent = savingsItems.reduce((sum, i) => sum + i.current, 0);
   const savingsTarget = savingsItems.reduce((sum, i) => sum + i.target, 0);
@@ -710,7 +721,7 @@ async function renderDashboard(container) {
               title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
 
-    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueTotal, savingsCurrent, savingsTarget)}
+    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, savingsCurrent, savingsTarget)}
 
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
@@ -793,10 +804,17 @@ function groupByCategory(items, amountKey) {
 // what it held, and dragging the current overdue pile into it makes the
 // history unreadable. Shared by the Bills page and the dashboard card so
 // the two never disagree.
-function billsForMonth(dueItems, date) {
+// Whether a month is strictly before the one we are in. A month that has gone
+// past has had its bills paid, so a figure that means "still to pay" is £0.00
+// for it — which is true of the question and misleading as an answer.
+function isBeforeThisMonth(date) {
   const now = new Date();
-  const lookingBack = date.getFullYear() < now.getFullYear()
+  return date.getFullYear() < now.getFullYear()
     || (date.getFullYear() === now.getFullYear() && date.getMonth() < now.getMonth());
+}
+
+function billsForMonth(dueItems, date) {
+  const lookingBack = isBeforeThisMonth(date);
   // A recurring bill's next occurrences, so stepping forward through the
   // months shows what they hold rather than an empty page. Kept out of
   // `inMonth` so the Total Due card still counts only what is actually stored
@@ -1708,7 +1726,7 @@ function renderIncomeRow(item) {
           <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
         </div>
         <div class="row-actions">
-          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${incomeRepeatLabel(item)}</button>
+          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}')">${incomeRepeatLabel(item)}</button>
           ${personDot(personById(item.personId))}
         </div>
       </div>
@@ -2327,7 +2345,7 @@ async function renderReports(container) {
            made in this dialog, so the dialog cannot show it. The sentence says
            so once, here, rather than leaving someone to wonder which period the
            file they are about to write will contain. -->
-      <p class="setting-hint" style="text-align: center; margin-top: 8px;">This will create a report for the time period chosen (All time, This month or This year)</p>
+      <p class="setting-hint" style="margin-top: 8px;">This will create a report for the time period chosen (All time, This month or This year)</p>
     </div>
   `;
 
@@ -3917,39 +3935,21 @@ async function removeIncome(id) {
 // than as a confirmation: the button grew from 89px to 142px and slid sideways
 // under the thumb; a full re-render four seconds later replaced every row on
 // the page; and the "you have tapped this once" flag lived on the button
-// element, so anything else that re-rendered silently threw the offer away.
-// The state is here instead, the button reserves the width of its longest
-// label, and the timer only touches this one button.
-let incomeRepeatPending = null;
-let incomeRepeatTimer = null;
-
+// The frequency button on an income row. It now says what the row is — Monthly
+// or One-off — and changes it on the tap. It used to need a second tap to
+// confirm, because the first tap swapped the label to "Stop repeating" and a
+// row could be flipped by a mis-tap that was never intended; the state is
+// trivially undone and a control that changes what it says before it does
+// anything read as broken.
 function incomeRepeatLabel(item) {
-  const recurring = !!item.frequency;
-  if (incomeRepeatPending === item.id) return recurring ? 'Stop repeating' : 'Repeat monthly';
-  return recurring ? 'Monthly' : 'One-off';
+  return item.frequency ? 'Monthly' : 'One-off';
 }
 
-async function toggleIncomeRecurring(id, btn) {
+async function toggleIncomeRecurring(id) {
   const item = await getItem('income', id);
   if (!item) return;
-  clearTimeout(incomeRepeatTimer);
-  if (incomeRepeatPending === id) {
-    incomeRepeatPending = null;
-    await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
-    renderPage();
-    return;
-  }
-  incomeRepeatPending = id;
-  btn.textContent = incomeRepeatLabel(item);
-  incomeRepeatTimer = setTimeout(() => {
-    if (incomeRepeatPending !== id) return;
-    incomeRepeatPending = null;
-    const row = btn.closest('.item-row');
-    const again = row && row.querySelector('.btn-frequency');
-    // Only if it's still on screen: the row may have been re-rendered or the
-    // page changed, and writing to a detached node achieves nothing.
-    if (again && document.body.contains(again)) again.textContent = incomeRepeatLabel(item);
-  }, 4000);
+  await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
+  renderPage();
 }
 
 // The categories offered, in the order they're meant to be scanned. Bills get
@@ -4420,6 +4420,15 @@ async function saveItem(type, editId = null) {
 
   if (!title) {
     showFormError('Please enter a title', 'form-title');
+    return;
+  }
+
+  // 'Not set' is a real answer, but it is the one category that quietly breaks
+  // every breakdown downstream — a receipt read leaves the field empty now that
+  // the reader suggests one, so the state is common rather than a corner case.
+  // Spend and bills only: a savings goal's category is a label, not a bucket.
+  if ((type === 'spend' || type === 'due') && !category) {
+    showFormError('Pick a category', 'form-category');
     return;
   }
 
