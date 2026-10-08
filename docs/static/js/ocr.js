@@ -315,30 +315,56 @@ function runOCRWithTimeout(imageFile, onProgress, stallMs = OCR_STALL_MS) {
   return Promise.race([work, stall]);
 }
 
+// OCR does not read capitals reliably, and the words that decide which figure
+// is the one being asked about are the words it mangles most: measured on a
+// degraded receipt, TOTAL came back T0TAL and TOTA1 and VISA as V1SA, which lost
+// the one number the receipt existed to state. So the keywords are matched
+// through a character class per letter rather than as literals — 0 for O, 1 for
+// I or L, 5 for S, 8 for B, 6 for G, 2 for Z, 4 for A — which costs nothing to
+// build and turns a misspelling into a hit.
+const OCR_CONFUSION = { A: '4', B: '8', G: '6', I: '1', L: '1', O: '0', S: '5', Z: '2' };
+
+function fuzzyBody(word) {
+  return word
+    .replace(/[a-z]/gi, (ch) => {
+      const alt = OCR_CONFUSION[ch.toUpperCase()];
+      return alt ? `[${ch}${alt}]` : ch;
+    })
+    .replace(/\s+/g, '\\s+');
+}
+
+const fuzzyWord = (word) => new RegExp(`\\b${fuzzyBody(word)}\\b`, 'i');
+
 // Words that mark the figure the receipt is asking you for, strongest first.
 // Ordered rather than tested as a set because "SUBTOTAL" contains "total" and a
 // discount, a service charge or a deposit between the two makes them different
 // numbers — on a receipt with a 10% off coupon the subtotal is the wrong answer
 // and it was winning because the old test was just /total/i.
-const TOTAL_WEIGHTS = [
-  [/\bgrand\s*total\b/i, 100],
-  [/\btotal\s*due\b/i, 95],
-  [/\bamount\s*due\b/i, 92],
-  [/\bto\s*pay\b/i, 90],
-  [/\bnet\s*due\b/i, 88],
-  [/\bbalance\s*due\b/i, 86],
-  [/\bbalance\b/i, 70],
-  [/\bamount\b/i, 68],
-  [/\btotal\b/i, 66],
-  [/\bsubtotal\b/i, 30],
+const TOTAL_WORDS = [
+  ['grand total', 100],
+  ['total due', 95],
+  ['amount due', 92],
+  ['to pay', 90],
+  ['net due', 88],
+  ['balance due', 86],
+  ['balance', 70],
+  ['amount', 68],
+  ['total', 66],
+  ['subtotal', 30],
 ];
+const TOTAL_WEIGHTS = TOTAL_WORDS.map(([word, weight]) => [fuzzyWord(word), weight]);
 
 // Words about how you paid rather than what you owed. The old fallback took the
 // largest number anywhere on the page, so any receipt with a CASH line returned
 // the cash you handed over: measured, a Sainsbury's receipt for £8.60 read back
 // as £10.00 because CASH 10.00 was the biggest figure on it.
-const TENDER_WORDS =
-  /\b(cash|change|tendered|amount\s*received|received|given|visa|mastercard|maestro|amex|debit\s*card|credit\s*card|card\s*payment|paid\s*by|coins?|notes?)\b/i;
+const TENDER_LIST = [
+  'cash', 'change', 'tendered', 'amount received', 'received', 'given',
+  'visa', 'mastercard', 'maestro', 'amex', 'debit card', 'credit card',
+  'card payment', 'paid by', 'coins', 'notes',
+];
+const TENDER_WORDS = new RegExp(
+  `\\b(${TENDER_LIST.map(fuzzyBody).join('|')})\\b`, 'i');
 
 // A money figure, preferring one with two decimal places. Also catches the
 // thousands separator a till prints, and pence-only totals.
@@ -404,12 +430,55 @@ function guessAmountFromText(text) {
   return tendered.length > 0 ? Math.min(...tendered) : 0;
 }
 
+// Receipt furniture: the things a receipt says before it says who it is from.
+// An address, a till number, a VAT number and a phone number all precede the
+// name, and the first line of text is the one that reads worst — a logo is set
+// in a typeface the engine has no chance on, and the plain-text name of the
+// same business is usually printed a few lines below it. Measured: a degraded
+// supermarket receipt read its logo as "i : —_" while its "TESCO STORES LTD"
+// three lines down came back perfectly.
+const TITLE_FURNITURE =
+  /\b(store|till|tel|phone|fax|vat|address|branch|receipt|invoice|date|time|welcome|thank|you|visit|again|please|order|table|cashier|operator|card|visa|mastercard|debit|credit|cash|change|total|subtotal|amount|balance|www|http|no\s*\d|tel\s*\d)\b/i;
+
+// A line that names the business itself rather than the shop it was printed in.
+// This is what the logo line is normally a mangled version of.
+const TITLE_COMPANY =
+  /\b(ltd|limited|plc|llp|inc|llc|corp|group|stores|supermarket|supermarkets|trading|company|retail|shop|cafe|restaurant|hotel|inn|pharmacy|garage|centre|center|services|solutions|kitchens|bakers|butchers|deli)\b/i;
+
+function titleScore(line, index, total) {
+  const t = line.trim();
+  // Not a name at all: no run of letters long enough to be a word.
+  if (!/[a-z]{3,}/i.test(t)) return -1000;
+  if (TITLE_FURNITURE.test(t)) return -1000;
+  if (/^\d/.test(t)) return -1000;          // "12 HIGH STREET", "4471"
+  if (/\b\d{5,6}\b/.test(t)) return -1000;   // a postcode or an account number
+  if (/\d/.test(t)) return -1000;            // digits anywhere: not the name
+
+  let score = 100 - index * 2;               // earlier is better
+  // A shop's name is never the last thing printed. The tail of a receipt is
+  // "PLEASE KEEP YOUR RECEIPT" and "THANK YOU", and on a poor photo the second
+  // of those reads as "THANE TOU" — no keyword list survives that, but the
+  // position is a fact.
+  if (index >= total - 2) score -= 40;
+  if (TITLE_COMPANY.test(t)) score += 60;    // "TESCO STORES LTD" beats "TESCO"
+  return score;
+}
+
 function guessTitleFromText(text) {
-  const firstLine = text
+  const lines = text
     .split('\n')
     .map((l) => l.trim())
-    .find((l) => l.length > 2);
-  return firstLine ? firstLine.slice(0, 40) : 'Receipt';
+    .filter((l) => l.length > 2);
+  if (lines.length === 0) return 'Receipt';
+
+  // Only the top of the receipt is in play: past a dozen lines this is the
+  // middle of the item list, and the best number on it is a price.
+  let best = { score: -Infinity, line: lines[0] };
+  lines.slice(0, 12).forEach((line, i) => {
+    const score = titleScore(line, i, lines.length);
+    if (score > best.score) best = { score, line };
+  });
+  return best.line.slice(0, 40) || 'Receipt';
 }
 
 // Best-effort receipt date extraction — same naive philosophy as the amount
@@ -448,23 +517,63 @@ function guessDateFromText(text) {
     return `${y}-${pad(m)}-${pad(d)}`;
   };
 
+  // The substitutions OCR actually makes on a date. A poor photo read
+  // "25/10/2026 14:02" as "25/16/2826 14:82" — a month of 16 and a year of
+  // 2826, so `make` rejected both and the date was lost entirely, even though
+  // the digits were there to be had. Swapping one or two of them back is
+  // enough, and it is only ever tried when the candidate as read is
+  // impossible, so a date that already reads correctly is never touched.
+  const DIGIT_FIX = { '0': '8', '8': '0', '6': '0', '1': '7', '7': '1', '5': '6', '2': '7' };
+  const repaired = (match) => {
+    const swappable = [];
+    for (let i = 0; i < match.length; i++) if (DIGIT_FIX[match[i]]) swappable.push(i);
+    const swap = (s, i) => s.slice(0, i) + DIGIT_FIX[s[i]] + s.slice(i + 1);
+    const out = swappable.map((i) => swap(match, i));
+    for (let a = 0; a < swappable.length; a++) {
+      for (let b = a + 1; b < swappable.length; b++) out.push(swap(swap(match, swappable[a]), swappable[b]));
+    }
+    return out;
+  };
+
+  // Try a candidate as read, then each repaired version, and take the first
+  // that is a real date.
+  const tryDate = (partsFn, raw) => {
+    const r = partsFn(raw);
+    if (r) return r;
+    for (const fixed of repaired(raw)) {
+      const f = partsFn(fixed);
+      if (f) return f;
+    }
+    return null;
+  };
+
   let m;
   // Year-first (2026-09-25 or 2026/09/25) — unambiguous, check before the
   // day-first patterns so "2026/09/25" isn't misread as day 26 month 09.
   m = text.match(/\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b/);
-  if (m) { const r = make(m[1], m[2], m[3]); if (r) return r; }
+  if (m) {
+    const r = tryDate((s) => {
+      const p = s.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+      return p ? make(p[1], p[2], p[3]) : null;
+    }, m[0]);
+    if (r) return r;
+  }
 
   // Numeric day/month order: assume UK (this is a £ app), flip only when the
   // other reading is forced (09/25 → month 09 day 25).
   const numRe = /\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})\b/g;
   while ((m = numRe.exec(text)) !== null) {
-    let day = m[1];
-    let month = m[2];
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    if (a > 12 && b > 12) continue;        // neither can be a month
-    if (b > 12) { day = m[2]; month = m[1]; } // only the US reading fits
-    const r = make(m[3], month, day);
+    const r = tryDate((s) => {
+      const p = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+      if (!p) return null;
+      let day = p[1];
+      let month = p[2];
+      const a = Number(p[1]);
+      const b = Number(p[2]);
+      if (a > 12 && b > 12) return null;         // neither can be a month
+      if (b > 12) { day = p[2]; month = p[1]; }  // only the US reading fits
+      return make(p[3], month, day);
+    }, m[0]);
     if (r) return r;
   }
 
