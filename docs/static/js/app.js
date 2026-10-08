@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.37.0';
+const APP_VERSION = '2.38.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -4628,7 +4628,7 @@ async function markPaid(id) {
 
 // Cap plugins are registered lazily on first use — registerPlugin() warns
 // if called twice for the same name.
-let capExport = null;
+let capSave = null;
 
 // Three formats, because one file could not do all three jobs and the app was
 // shipping only the one that does none of them well. A raw JSON dump restores
@@ -5099,29 +5099,36 @@ async function buildExport(kind) {
   return { text: JSON.stringify(data, null, 2), mime: EXPORT_KINDS.json.mime };
 }
 
-// One file, either handed to the system share sheet or dropped as a download.
+// One file, saved where the person chooses to put it.
+//
 // The Android path exists because a WebView cannot act on a blob: URL — the
-// click it needs to follow is silently ignored — so the file is written into
-// the app cache and handed over through the FileProvider instead.
+// click it needs to follow is silently ignored — so the bytes have to leave
+// through native code. They go through Android's own save screen
+// (ACTION_CREATE_DOCUMENT): no permission, no share sheet full of apps, and the
+// file lands under a name and in a folder they have picked themselves.
 //
 // `base64` marks the payload as already-encoded bytes. A PDF is not text, and
-// writing it as text would corrupt every byte above 0x7F the moment it was
-// coerced into a string; the Filesystem plugin decodes it back on the way to
-// disk. The browser path does the same decode by hand, because a Blob built
-// from a string is UTF-8 and a PDF is not.
+// handing it over as text would corrupt every byte above 0x7F the moment it was
+// coerced into a string, so the plugin decodes it on the way to disk. The
+// browser path does the same decode by hand, because a Blob built from a
+// string is UTF-8 and a PDF is not.
+//
+// Resolves false when the save screen was dismissed — that is a choice, not a
+// failure, and the caller must not go claiming a file exists because of it.
 async function deliverExport(name, text, mime, base64) {
   if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-    if (!capExport) {
-      capExport = {
-        fs: window.Capacitor.registerPlugin('Filesystem'),
-        share: window.Capacitor.registerPlugin('Share')
-      };
-    }
-    const write = { path: name, data: text, directory: 'CACHE' };
-    if (base64) write.encoding = 'base64';
-    const { uri } = await capExport.fs.writeFile(write);
-    await capExport.share.share({ title: 'Sorted export', dialogTitle: 'Share export', files: [uri] });
-    return;
+    if (!capSave) capSave = window.Capacitor.registerPlugin('SaveFile');
+    // Encoding travels with the payload because it is what tells the plugin
+    // text from bytes. The previous Filesystem route read a *missing* value as
+    // "this is base64" and decoded it, which is why a plain CSV or backup died
+    // on the way to disk with "the 'writeFile' input parameters aren't valid".
+    const res = await capSave.save({
+      name: name,
+      mime: mime,
+      data: text,
+      encoding: base64 ? 'base64' : 'utf8'
+    });
+    return !(res && res.cancelled);
   }
   const bytes = base64 ? base64ToBytes(text) : text;
   const blob = new Blob([bytes], { type: mime });
@@ -5131,6 +5138,7 @@ async function deliverExport(name, text, mime, base64) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+  return true;
 }
 
 function base64ToBytes(b64) {
@@ -5145,9 +5153,9 @@ async function exportData(kind = 'json') {
   const name = `sorted-${spec.suffix}${localISO()}.${spec.ext}`;
   try {
     const { text, mime, base64 } = await buildExport(kind);
-    await deliverExport(name, text, mime, base64);
-    if (!(window.Capacitor && window.Capacitor.isNativePlatform())) showToast('Saved ' + name);
-    else showToast('Ready to share');
+    const saved = await deliverExport(name, text, mime, base64);
+    if (!saved) return; // they backed out of the save screen — nothing to report
+    showToast('Saved ' + name);
   } catch (err) {
     const msg = String((err && err.message) || err);
     if (/cancel/i.test(msg)) return; // backing out of the share sheet isn't an error
@@ -5204,9 +5212,9 @@ async function runSaveReport(kind) {
     if (kind === 'txt') text = reportText(rep);
     else if (kind === 'pdf') { text = pdfBase64(pdfBytes(reportPdf(rep))); base64 = true; }
     else text = reportCsv(rep);
-    await deliverExport(name, text, spec.mime, base64);
-    if (!(window.Capacitor && window.Capacitor.isNativePlatform())) showToast('Saved ' + name);
-    else showToast('Ready to share');
+    const saved = await deliverExport(name, text, spec.mime, base64);
+    if (!saved) return; // they backed out of the save screen — nothing to report
+    showToast('Saved ' + name);
   } catch (err) {
     const msg = String((err && err.message) || err);
     if (/cancel/i.test(msg)) return;

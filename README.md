@@ -39,7 +39,7 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Setting it up is **one address and one button**: pick where in the dropdown, paste the address, press **Sync now**. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
 - Underneath sits **a numbered setup guide for whichever transport is selected** — where to get the address from, in order, including the command to run. Two of the four exist and are described as they work: **Home server** over your Wi-Fi, and **Tailscale** (works, and from outside the house, over the same file). **Syncthing** and **Cloud** are in the dropdown with their picker disabled until they exist, and their steps describe what the implementation will take rather than showing nothing
 - To run the other end, on any machine with Node: `node tools/sync-host.mjs`. It serves one file over your Wi-Fi and nothing else — no database, no accounts, no history — and prints the address to paste into Settings
-- Export offers three formats rather than one, because they do three different jobs: a **`.csv`** of every dated movement for Excel, Numbers or Google Sheets, a readable **`.txt`** statement grouped by month, and a **`.pdf`** of the same rows typeset. The **`.json` backup** — the only one Import can read back — is its own **Back up your data** button on the Data Management card, because a backup is a different question from a format for reading. Everything is handed to Android's share sheet — Drive, email, a cable — and is an ordinary download in a browser. The PDF is written by the app itself: no print dialog, no library, and no network
+- Export offers three formats rather than one, because they do three different jobs: a **`.csv`** of every dated movement for Excel, Numbers or Google Sheets, a readable **`.txt`** statement grouped by month, and a **`.pdf`** of the same rows typeset. The **`.json` backup** — the only one Import can read back — is its own **Back up your data** button on the Data Management card, because a backup is a different question from a format for reading. Everything is saved through Android's own save screen, where you pick the folder and the file name, and is an ordinary download in a browser. The PDF is written by the app itself: no print dialog, no library, and no network
 - Reminders, each off until you ask for it, saying exactly this:
   - **"Sorted — bill due"** — *"Rent is due Thursday"* (or *"… is overdue"*)
   - **"Sorted — nothing recorded today"** — *"Anything you spent today? A minute now saves guessing later."*
@@ -88,7 +88,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.37.0-debug.apk`](sorted-v2-2.37.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.38.0-debug.apk`](sorted-v2-2.38.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
@@ -105,7 +105,7 @@ To rebuild it yourself (needs JDK 21 and the Android SDK):
 
 The signing key is committed at `android/debug.keystore` and pinned in `build.gradle`, so any machine can build an APK that installs as an update over an existing one. Android rejects an update signed with a different key, so if you ever change that file the next install will be refused and the only fix would be an uninstall — which deletes the data. Its fingerprint is recorded in `build.gradle`; if a build ever starts failing to install, check that the APK's certificate still matches the keystore's.
 
-Note: importing JSON works on every platform and accepts only a Sorted backup — a CSV cannot be read back, and guessing at arbitrary column layouts is how an import quietly corrupts a dataset. Export offers the three formats and uses the native save dialog on desktop, opens the system share sheet on Android, and downloads a file in the browser.
+Note: importing JSON works on every platform and accepts only a Sorted backup — a CSV cannot be read back, and guessing at arbitrary column layouts is how an import quietly corrupts a dataset. Export offers the three formats and uses the native save dialog on desktop and on Android, and downloads a file in the browser.
 
 ## Tech Stack
 
