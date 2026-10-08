@@ -157,6 +157,11 @@ try {
 <script defer src="static/js/sync.js"></script>
 <script defer src="static/js/ocr.js"></script>
 <script defer src="static/js/pdf-to-image.js"></script>
+<!-- The PDF writer is separate from the PDF reader: pdf-to-image.js flattens a
+     receipt so OCR can read it, pdfwrite.js puts a report or an export out of
+     the app. Neither depends on the other, and neither is on the critical path
+     — both are deferred and only touched when their own control is tapped. -->
+<script defer src="static/js/pdfwrite.js"></script>
 <script defer src="static/js/app.js"></script>
 </body>
 </html>

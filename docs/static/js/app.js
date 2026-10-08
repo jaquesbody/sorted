@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.36.0';
+const APP_VERSION = '2.37.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1028,7 +1028,7 @@ function syncSettingsHtml() {
   const active = SYNC_TRANSPORTS[s.transport];
   const options = Object.keys(SYNC_TRANSPORTS).map((key) => {
     const t = SYNC_TRANSPORTS[key];
-    return `<option value="${key}"${key === s.transport ? ' selected' : ''}>${escapeHTML(t.label)}${t.available ? '' : ' (not yet)'}</option>`;
+    return `<option value="${key}"${key === s.transport ? ' selected' : ''}>${escapeHTML(t.label)}</option>`;
   }).join('');
 
   const hasBackup = !!syncBackup();
@@ -1057,20 +1057,24 @@ function syncSettingsHtml() {
                 onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
       </div>
     </div>
-    <div class="setting-label" style="margin-top: 14px;">Address</div>
-    <input class="form-input" id="sync-url" type="url" inputmode="url"
-           placeholder="${escapeHTML(active ? active.urlHint : '')}"
-           value="${escapeHTML(s.url)}"
-           style="width: 100%; margin-top: 6px; text-align: left;"
-           ${active && active.available ? '' : 'disabled'}
-           onchange="setSyncSettings({url: this.value.trim()})">
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label">Address</div>
+      </div>
+      <div class="setting-control setting-control--wide">
+        <input class="form-input" id="sync-url" type="url" inputmode="url"
+               placeholder="${escapeHTML(active ? active.urlHint : '')}"
+               value="${escapeHTML(s.url)}"
+               style="text-align: left;"
+               ${active && active.available ? '' : 'disabled'}
+               onchange="setSyncSettings({url: this.value.trim()})">
+      </div>
+    </div>
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
     <div class="setup-steps">
       <div class="setup-steps-head">Setup</div>
-      ${active && !active.available
-        ? '<div class="setup-steps-note">Not built yet \u2014 these are the steps it will take.</div>' : ''}
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[s.transport] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
@@ -2146,7 +2150,12 @@ function categoryMovement(row) {
   if (row.delta === 0) return 'no change';
   const dir = row.delta > 0 ? 'up' : 'down';
   const money = currency(Math.abs(row.delta));
-  if (row.before === 0) return `${dir} ${money} · new`;
+  // A bracket, like every other row on the card, because a lone "· new" read as
+  // a fragment of a sentence rather than the same kind of note. The word stays:
+  // with nothing behind it last month there is no percentage to calculate — the
+  // ratio is undefined, not small — and inventing a denominator would put a
+  // number on the card that no part of the data supports.
+  if (row.before === 0) return `${dir} ${money} (new)`;
   const pct = Math.round((Math.abs(row.delta) / row.before) * 100);
   return `${dir} ${money} (${row.delta > 0 ? '+' : '-'}${pct}%)`;
 }
@@ -2163,7 +2172,7 @@ function renderPatternsCard(shift) {
     </div>`).join('');
 
   return `
-    <div class="pattern-sub">Days 1-${shift.days} of this month and last</div>
+    <div class="pattern-sub">days 1-${shift.days} of this month and last</div>
     ${rows}`;
 }
 
@@ -2309,6 +2318,16 @@ async function renderReports(container) {
             title="Go to your goals">Savings by Goal</h2>`, totalSavings, 'success')}
         ${renderSavingsBreakdown(savingsItems)}
       </div>
+    </div>
+
+    <div class="save-report" style="margin-top: 20px; margin-bottom: 6px;">
+      <button class="btn btn-primary" style="width: 100%;"
+              onclick="openSaveReportModal()">Save Report</button>
+      <!-- The period is a choice made three chips up the page and not a choice
+           made in this dialog, so the dialog cannot show it. The sentence says
+           so once, here, rather than leaving someone to wonder which period the
+           file they are about to write will contain. -->
+      <p class="setting-hint" style="text-align: center; margin-top: 8px;">This will create a report for the time period chosen (All time, This month or This year)</p>
     </div>
   `;
 
@@ -3259,14 +3278,13 @@ function renderSettings(container) {
 
       <div class="report-card">
         <h2 class="report-title">Data Management</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
         <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
-        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
-        <!-- Say what the file has to be, at the button that reads it rather
-             than in the export dialog the user has already closed. "Import" on
-             its own invites every file on the phone, and the picker only
-             offers .json — so the format belongs on this card. -->
-        <p class="setting-hint">Reads a Sorted backup (.json) file</p>
+        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%; margin-bottom: 10px;">Import your back up file (.json)</button>
+        <!-- Last, because it is the button that does one thing with no menu in
+             front of it: the .json backup, written straight out. It used to be
+             one of three choices inside Export, where it sat behind the same
+             popup as two formats that are not backups at all. -->
+        <button class="btn btn-ghost" onclick="exportData('json')" style="width: 100%;">Back up your data</button>
       </div>
 
       <div class="report-card">
@@ -3297,8 +3315,7 @@ function renderSettings(container) {
       <div class="report-card report-card--danger">
         <h2 class="report-title">Danger zone</h2>
         <p style="color: var(--text-secondary); margin-bottom: 15px;">
-          Delete everything and start from empty. There's no undo and no backup
-          of its own — export first if you might want any of it.
+          Delete everything, there's no undo. Export and back up your data first.
         </p>
         <button class="btn btn-danger" onclick="confirmRemoveAllData(this)" style="width: 100%;">Delete all data</button>
       </div>
@@ -4626,7 +4643,8 @@ let capExport = null;
 const EXPORT_KINDS = {
   json: { ext: 'json', mime: 'application/json', suffix: 'backup-' },
   csv: { ext: 'csv', mime: 'text/csv', suffix: '' },
-  txt: { ext: 'txt', mime: 'text/plain', suffix: '' }
+  txt: { ext: 'txt', mime: 'text/plain', suffix: '' },
+  pdf: { ext: 'pdf', mime: 'application/pdf', suffix: '' }
 };
 
 // The stores worth listing as rows, and what each is called once it is a line.
@@ -4710,10 +4728,374 @@ function exportText(data) {
   return out.join('\n') + '\n';
 }
 
+/* Save Report
+   ===========
+   The Reports page is seven cards and a period chip, and until now the only way
+   to keep any of it was a screenshot — which cannot be summed, sorted or read
+   by a spreadsheet.
+
+   All three formats come out of one structure, built below rather than scraped
+   from the DOM, for two reasons. A rendered card is HTML and two of the three
+   formats are not. And a page that has been scrolled out of view, or a chart
+   that has not been drawn yet, must not be able to change what a saved report
+   says: the figures are read from the stores the page itself reads them from.
+
+   Rows are label / detail / amount / text / pct. `text` is a right-hand cell
+   that is not a number — Patterns shows "up £12 (+18%)", which is a sentence
+   rather than a figure — and `pct` is the share a bar would be drawn from, set
+   only on the four cards that draw bars on screen. */
+
+const REPORT_PERIODS = { all: 'All time', month: 'This month', year: 'This year' };
+
+const REPORT_KINDS = {
+  csv: { ext: 'csv', mime: 'text/csv' },
+  txt: { ext: 'txt', mime: 'text/plain' },
+  pdf: { ext: 'pdf', mime: 'application/pdf' }
+};
+
+function reportSection(title, opts) {
+  const o = opts || {};
+  return {
+    title,
+    note: o.note || '',
+    total: o.total === undefined ? null : o.total,
+    rows: o.rows || [],
+    chart: o.chart || null
+  };
+}
+
+async function buildReport() {
+  const [spendItems, dueItems, savingsItems] = await Promise.all([
+    getAll('spend'), getAll('due'), getAll('savings')
+  ]);
+  const balances = await accountBalances();
+  // The forecast already on screen, so a report cannot disagree with the chart
+  // it is a report of — it carries whatever range and step-back are selected.
+  const forecast = lastForecast || await buildForecast();
+
+  const inRange = (dateStr) => reportRange === 'all' ? true
+    : reportRange === 'month' ? isThisMonth(dateStr)
+    : isThisYear(dateStr);
+  const rangedSpend = spendItems.filter(i => inRange(i.date));
+  const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
+  const shift = categoryShift(spendItems, dueItems);
+
+  const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
+  const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
+  const totalSavings = savingsItems.reduce((sum, i) => sum + i.current, 0);
+
+  const series = forecast.series || [];
+  const last = series.length ? series[series.length - 1] : null;
+  const fmtDay = (d) => (d && d.toLocaleDateString)
+    ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    : String(d || '');
+
+  const forecastRows = [];
+  const span = forecast.days || [];
+  if (span.length) {
+    forecastRows.push({
+      label: 'Window',
+      detail: `${fmtDay(span[0])} \u2013 ${fmtDay(span[span.length - 1])}`
+    });
+  }
+  if (last) {
+    forecastRows.push({ label: 'Total money', detail: last.label, amount: last.balance });
+    forecastRows.push({ label: 'Total est costs', detail: last.label, amount: last.costs });
+    forecastRows.push({ label: 'Spent', detail: last.label, amount: last.spend });
+    forecastRows.push({ label: 'Bills', detail: last.label, amount: last.bills });
+  }
+  forecastRows.push({
+    label: 'Monthly spending',
+    detail: forecast.overridden ? 'set by you' : `${FORECAST_SPEND_MONTHS} month average`,
+    amount: forecast.spendEstimate
+  });
+  if (forecast.low) {
+    forecastRows.push({ label: 'Lowest balance in window', detail: forecast.low.label, amount: forecast.low.balance });
+  }
+  if (forecast.short) {
+    forecastRows.push({ label: 'Shortfall', detail: forecast.short.label, amount: forecast.short.balance });
+  }
+
+  const catRows = (totals, grand) => Object.entries(totals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, amt]) => ({ label: name, amount: amt, pct: grand > 0 ? amt / grand : 0 }));
+
+  // Who Spent What, worked out the same way the card does: two stores, one
+  // bucket each, sorted by what the two add to. Reading it off the screen would
+  // mean re-deriving it from a stacked bar.
+  const personBuckets = new Map();
+  const bucketOf = (id) => {
+    if (!personBuckets.has(id)) personBuckets.set(id, { spend: 0, due: 0 });
+    return personBuckets.get(id);
+  };
+  rangedSpend.forEach(i => { bucketOf(i.personId || '').spend += i.amount; });
+  rangedDue.forEach(i => { bucketOf(i.personId || '').due += i.amount; });
+  const people = [...personBuckets.entries()]
+    .map(([id, t]) => ({ id, ...t, total: t.spend + t.due }))
+    .filter(t => t.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const peopleTotal = people.reduce((n, r) => n + r.total, 0);
+  const personRows = people.map((r) => {
+    const p = personById(r.id);
+    return {
+      label: p ? p.name : 'Anyone',
+      detail: `Spent ${currency(r.spend)} \u00b7 Bills ${currency(r.due)}`,
+      amount: r.total,
+      pct: peopleTotal > 0 ? r.total / peopleTotal : 0
+    };
+  });
+
+  const patternRows = (shift.enough ? shift.rows : []).map(r => ({
+    label: r.cat,
+    detail: categoryMovement(r),
+    amount: r.delta,
+    text: categoryMovement(r)
+  }));
+
+  const goalRows = savingsItems.map(g => ({
+    label: g.title,
+    detail: `${currency(g.current)} of ${currency(g.target)}`,
+    amount: g.current,
+    pct: g.target > 0 ? Math.min(1, g.current / g.target) : 0
+  }));
+
+  return {
+    period: REPORT_PERIODS[reportRange] || REPORT_PERIODS.all,
+    generated: localISO(),
+    sections: [
+      reportSection('Forecast', { rows: forecastRows, chart: series }),
+      reportSection('Spending by Category', {
+        total: totalSpend, rows: catRows(groupByCategory(rangedSpend, 'amount'), totalSpend)
+      }),
+      reportSection('Bills by Category', {
+        total: totalDue, rows: catRows(groupByCategory(rangedDue, 'amount'), totalDue)
+      }),
+      reportSection('Who Spent What', { total: peopleTotal, rows: personRows }),
+      reportSection('Where Your Money Is', {
+        total: balances.reduce((n, b) => n + b.balance, 0),
+        rows: balances.map(b => ({ label: b.name, amount: b.balance }))
+      }),
+      reportSection('Patterns', {
+        note: shift.enough
+          ? `days 1-${shift.days} of this month and last \u00b7 `
+            + `${currency(shift.thisMonth)} this month, ${currency(shift.lastMonth)} last`
+          : 'Nothing recorded this month yet.',
+        rows: patternRows
+      }),
+      reportSection('Savings by Goal', { total: totalSavings, rows: goalRows })
+    ]
+  };
+}
+
+// The left-hand cell: the label, qualified by its detail where there is one.
+// Patterns overrides `text` instead, so its movement sentence is not printed
+// twice — once in brackets and once at the right.
+function reportLeft(row) {
+  return row.detail && !row.text ? `${row.label} (${row.detail})` : row.label;
+}
+
+function reportRight(row) {
+  return row.text != null ? row.text
+    : (row.amount == null ? '' : currency(row.amount));
+}
+
+function reportCsv(rep) {
+  const cell = (v) => {
+    const text = String(v == null ? '' : v);
+    return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+  };
+  const line = (a, b, c, d) => [a, b, c, d].map(cell).join(',');
+  const out = [line('Card', 'Item', 'Detail', 'Amount')];
+  for (const sec of rep.sections) {
+    out.push(line(sec.title, '', '', sec.total == null ? '' : Number(sec.total).toFixed(2)));
+    for (const r of sec.rows) {
+      out.push(line(sec.title, r.label, r.detail || '',
+        r.amount == null ? '' : Number(r.amount).toFixed(2)));
+    }
+  }
+  // BOM, for the same reason exportCsv carries one: Excel on Windows otherwise
+  // reads the first column as mojibake.
+  return '\ufeff' + out.join('\n') + '\n';
+}
+
+function reportText(rep) {
+  const out = ['Sorted report', `${rep.period}  \u00b7  exported ${rep.generated}`, ''];
+  const L = 38;
+  const A = 16;
+  for (const sec of rep.sections) {
+    out.push(sec.title);
+    if (sec.note) out.push('  ' + sec.note);
+    for (const r of sec.rows) {
+      const right = reportRight(r);
+      out.push('  ' + reportLeft(r).padEnd(L, ' ') + (right ? right.padStart(A) : ''));
+    }
+    if (sec.total != null) {
+      out.push('  ' + 'Total'.padEnd(L, ' ') + currency(sec.total).padStart(A));
+    }
+    out.push('');
+  }
+  return out.join('\n').replace(/\n+$/, '\n');
+}
+
+// The card totals sit above their rows in the PDF as in the app — a heading
+// with its figure on the same line — because a total under a breakdown reads as
+// a separate thing to check rather than as the number the heading was quoting.
+function reportPdf(rep) {
+  const doc = PdfDoc();
+  const ink = [0.13, 0.13, 0.16];
+  const sub = [0.44, 0.44, 0.5];
+  const hair = [0.83, 0.83, 0.87];
+  const rule = [0.6, 0.6, 0.66];
+  const barMax = doc.w - doc.ml - doc.mr;
+
+  pdfText(doc, 'Sorted report', { size: 21, bold: true, color: ink, lead: 26 });
+  pdfText(doc, rep.period, { size: 12, color: [0.24, 0.55, 0.99], lead: 18 });
+  pdfText(doc, 'Exported ' + rep.generated, { size: 9, color: sub, lead: 15 });
+  pdfSpace(doc, 5);
+  pdfRule(doc, { color: rule, width: 1 });
+  pdfSpace(doc, 16);
+
+  const rowLead = 15;
+
+  for (const sec of rep.sections) {
+    // A heading is never the last thing on a page: pdfNeed opens a new one only
+    // when something would actually be drawn, so the check covers the heading,
+    // its note, the rule and the first row beneath — not just the heading.
+    pdfNeed(doc, 70);
+    pdfText(doc, sec.title, { size: 13, bold: true, color: ink, lead: 18 });
+
+    if (sec.total != null) {
+      // Drawn on the heading's own line, which means putting the cursor back
+      // where the heading started and then forward again by the same amount.
+      const y0 = doc.y - 18;
+      doc.y = y0;
+      pdfText(doc, currency(sec.total),
+        { size: 13, bold: true, right: doc.w - doc.mr, color: ink, lead: 18 });
+      doc.y = y0 + 18;
+    }
+    if (sec.note) pdfText(doc, sec.note, { size: 8.5, color: sub, lead: 13 });
+    pdfRule(doc, { color: hair, width: 0.6 });
+    pdfSpace(doc, 8);
+
+    if (sec.chart) pdfChart(doc, sec.chart, { height: 150 });
+
+    let drawn = 0;
+    for (const r of sec.rows) {
+      const right = reportRight(r);
+      const amtW = right ? pdfWidthOf(right, 9.5, false) : 0;
+      const barH = r.pct != null ? 4 : 0;
+      const gapH = r.pct != null ? 3 : 0;
+      pdfNeed(doc, rowLead + barH + gapH);
+      const y0 = doc.y;
+      pdfText(doc, reportLeft(r), {
+        size: 9.5, color: ink, lead: rowLead,
+        maxWidth: barMax - amtW - 14
+      });
+      doc.y = y0;
+      if (right) pdfText(doc, right, { size: 9.5, color: ink, right: doc.w - doc.mr, lead: rowLead });
+      doc.y = y0 + rowLead;
+      if (barH) {
+        pdfBar(doc, doc.ml, doc.y, Math.max(1.5, barMax * Math.min(1, r.pct)), barH,
+          sec.title === 'Bills by Category' ? [0.94, 0.27, 0.27]
+            : sec.title === 'Savings by Goal' ? [0.13, 0.77, 0.37]
+              : [0.24, 0.55, 0.99]);
+        doc.y += barH + gapH;
+      }
+      drawn++;
+    }
+
+    if (drawn === 0 && !sec.note) {
+      pdfText(doc, 'No data yet', { size: 9.5, color: sub, lead: 15 });
+    }
+    pdfSpace(doc, 18);
+  }
+  return doc;
+}
+
+// The same rows as the CSV and text exports, typeset. One month per block with
+// its own totals, because that is how the text export already reads and a PDF
+// that disagreed with it about grouping would look like a different dataset.
+function dataPdf(data) {
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+  const rows = exportMovementRows(data);
+  const doc = PdfDoc();
+  const ink = [0.13, 0.13, 0.16];
+  const sub = [0.44, 0.44, 0.5];
+  const hair = [0.83, 0.83, 0.87];
+  const rule = [0.6, 0.6, 0.66];
+
+  pdfText(doc, 'Sorted', { size: 21, bold: true, color: ink, lead: 26 });
+  pdfText(doc, 'Exported ' + localISO(), { size: 9, color: sub, lead: 15 });
+  pdfSpace(doc, 5);
+  pdfRule(doc, { color: rule, width: 1 });
+  pdfSpace(doc, 16);
+
+  // Column edges, held fixed so the dates and the figures line up down the
+  // page instead of depending on the longest title in each month.
+  const xKind = doc.ml + 40;
+  const xTitle = doc.ml + 92;
+  const xAmount = doc.w - doc.mr;
+  const titleMax = xAmount - 74 - xTitle;
+
+  let month = '';
+  const totals = {};
+  const flush = () => {
+    const parts = Object.keys(totals)
+      .filter((k) => totals[k] !== 0)
+      .map((k) => `${k} ${currency(totals[k])}`);
+    if (!parts.length) return;
+    pdfRule(doc, { color: hair, width: 0.6 });
+    pdfSpace(doc, 3);
+    pdfText(doc, parts.join('   '), { size: 8.5, bold: true, color: sub, lead: 14 });
+    pdfSpace(doc, 14);
+  };
+
+  for (const r of rows) {
+    const key = r.date
+      ? `${MONTHS[Number(r.date.slice(5, 7)) - 1]} ${r.date.slice(0, 4)}`
+      : 'Undated';
+    if (key !== month) {
+      flush();
+      month = key;
+      for (const k of Object.keys(totals)) delete totals[k];
+      pdfNeed(doc, 46);
+      pdfText(doc, key, { size: 12, bold: true, color: ink, lead: 18 });
+      pdfSpace(doc, 6);
+    }
+    const when = r.date
+      ? `${r.date.slice(8, 10)} ${MONTHS[Number(r.date.slice(5, 7)) - 1].slice(0, 3)}`
+      : '--';
+    const who = r.person ? ` (${r.person})` : '';
+    const paid = r.paid === 'no' ? ' [due]' : '';
+    pdfNeed(doc, 14);
+    const y0 = doc.y;
+    pdfText(doc, when, { size: 9, color: sub, x: doc.ml, lead: 14 });
+    doc.y = y0;
+    pdfText(doc, r.kind, { size: 9, color: ink, x: xKind, lead: 14 });
+    doc.y = y0;
+    pdfText(doc, r.title + who + paid, { size: 9, color: ink, x: xTitle, lead: 14, maxWidth: titleMax });
+    doc.y = y0;
+    pdfText(doc, currency(r.amount), { size: 9, color: ink, right: xAmount, lead: 14 });
+    doc.y = y0 + 14;
+    totals[r.kind] = (totals[r.kind] || 0) + r.amount;
+  }
+  flush();
+  if (rows.length === 0) pdfText(doc, 'Nothing recorded yet.', { size: 9.5, color: sub, lead: 15 });
+  return doc;
+}
+
 async function buildExport(kind) {
   const data = await getAllData();
   if (kind === 'csv') return { text: exportCsv(data), mime: EXPORT_KINDS.csv.mime };
   if (kind === 'txt') return { text: exportText(data), mime: EXPORT_KINDS.txt.mime };
+  if (kind === 'pdf') {
+    return {
+      text: pdfBase64(pdfBytes(dataPdf(data))),
+      mime: EXPORT_KINDS.pdf.mime,
+      base64: true
+    };
+  }
   return { text: JSON.stringify(data, null, 2), mime: EXPORT_KINDS.json.mime };
 }
 
@@ -4721,7 +5103,13 @@ async function buildExport(kind) {
 // The Android path exists because a WebView cannot act on a blob: URL — the
 // click it needs to follow is silently ignored — so the file is written into
 // the app cache and handed over through the FileProvider instead.
-async function deliverExport(name, text, mime) {
+//
+// `base64` marks the payload as already-encoded bytes. A PDF is not text, and
+// writing it as text would corrupt every byte above 0x7F the moment it was
+// coerced into a string; the Filesystem plugin decodes it back on the way to
+// disk. The browser path does the same decode by hand, because a Blob built
+// from a string is UTF-8 and a PDF is not.
+async function deliverExport(name, text, mime, base64) {
   if (window.Capacitor && window.Capacitor.isNativePlatform()) {
     if (!capExport) {
       capExport = {
@@ -4729,11 +5117,14 @@ async function deliverExport(name, text, mime) {
         share: window.Capacitor.registerPlugin('Share')
       };
     }
-    const { uri } = await capExport.fs.writeFile({ path: name, data: text, directory: 'CACHE' });
+    const write = { path: name, data: text, directory: 'CACHE' };
+    if (base64) write.encoding = 'base64';
+    const { uri } = await capExport.fs.writeFile(write);
     await capExport.share.share({ title: 'Sorted export', dialogTitle: 'Share export', files: [uri] });
     return;
   }
-  const blob = new Blob([text], { type: mime });
+  const bytes = base64 ? base64ToBytes(text) : text;
+  const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -4742,12 +5133,19 @@ async function deliverExport(name, text, mime) {
   URL.revokeObjectURL(url);
 }
 
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
 async function exportData(kind = 'json') {
   const spec = EXPORT_KINDS[kind] || EXPORT_KINDS.json;
   const name = `sorted-${spec.suffix}${localISO()}.${spec.ext}`;
   try {
-    const { text, mime } = await buildExport(kind);
-    await deliverExport(name, text, mime);
+    const { text, mime, base64 } = await buildExport(kind);
+    await deliverExport(name, text, mime, base64);
     if (!(window.Capacitor && window.Capacitor.isNativePlatform())) showToast('Saved ' + name);
     else showToast('Ready to share');
   } catch (err) {
@@ -4762,16 +5160,59 @@ async function exportData(kind = 'json') {
 // formats answer three different questions and nobody should have to guess
 // which one they were going to get.
 function openExportModal() {
+  // No explanation line here, and no .json button: the backup is its own
+  // control on the card now, and the one thing worth saying about these three
+  // formats is said on the Save Report caption rather than repeated.
   openModal('Export data', `
-    <p class="form-label">Only the backup file (.json) can be imported back.</p>
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;"
-            onclick="runExport('json')">Backup file (.json)</button>
-    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
             onclick="runExport('csv')">Spreadsheet (.csv)</button>
     <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
             onclick="runExport('txt')">Plain text (.txt)</button>
     <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('pdf')">PDF (.pdf)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
             onclick="closeModal()">Cancel</button>`);
+}
+
+// Save Report's own menu. Separate from the Export menu because they are
+// different questions with different answers: Export is everything stored, Save
+// Report is this page for the period selected above it.
+function openSaveReportModal() {
+  openModal('Save report', `
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;"
+            onclick="runSaveReport('csv')">Spreadsheet (.csv)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runSaveReport('txt')">Plain text (.txt)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runSaveReport('pdf')">PDF (.pdf)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="closeModal()">Cancel</button>`);
+}
+
+async function runSaveReport(kind) {
+  closeModal();
+  const spec = REPORT_KINDS[kind] || REPORT_KINDS.csv;
+  const period = REPORT_PERIODS[reportRange] || REPORT_PERIODS.all;
+  // The period is in the name because a file called "report.pdf" is only useful
+  // once, and the third one alongside it is otherwise impossible to tell apart.
+  const name = `sorted-report-${period.toLowerCase().replace(/\s+/g, '-')}-`
+    + `${localISO()}.${spec.ext}`;
+  try {
+    const rep = await buildReport();
+    let text;
+    let base64 = false;
+    if (kind === 'txt') text = reportText(rep);
+    else if (kind === 'pdf') { text = pdfBase64(pdfBytes(reportPdf(rep))); base64 = true; }
+    else text = reportCsv(rep);
+    await deliverExport(name, text, spec.mime, base64);
+    if (!(window.Capacitor && window.Capacitor.isNativePlatform())) showToast('Saved ' + name);
+    else showToast('Ready to share');
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    if (/cancel/i.test(msg)) return;
+    console.error('Save report failed:', err);
+    showToast(`Save failed: ${msg}`);
+  }
 }
 
 async function runExport(kind) {

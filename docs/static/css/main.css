@@ -639,12 +639,6 @@ body {
   margin-bottom: 8px;
 }
 
-.setup-steps-note {
-  font-size: 0.8rem;
-  color: var(--danger);
-  margin-bottom: 8px;
-}
-
 .setup-steps-list {
   margin: 0;
   padding-left: 20px;
@@ -1586,7 +1580,6 @@ body {
 
 .pattern-sub {
   font-size: 0.72rem;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
   margin: 4px 0 10px;

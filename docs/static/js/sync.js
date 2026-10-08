@@ -68,7 +68,7 @@ const SYNC_TRANSPORTS = {
   // and writes the same one file inside it. Listed because it was asked for,
   // still marked not built until the read side is written and tested.
   syncthing: {
-    label: 'Syncthing folder',
+    label: 'Syncthing',
     available: false,
     blurb: 'A folder you already sync, no server to keep running',
     needsUrl: true,
