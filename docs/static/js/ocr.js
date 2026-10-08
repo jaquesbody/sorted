@@ -96,7 +96,6 @@ async function preprocessForOCR(file, onTick) {
    -------------------------------------------------------------------------- */
 
 const OCR_LANG = 'eng';
-const OCR_LANG_URL = 'static/vendor/tesseract/lang/eng.traineddata.gz';
 
 // The traineddata is about 3MB and never changes, and the worker is expensive
 // to build — engine load, language decode — so both are kept after the first
@@ -115,17 +114,45 @@ function dropOcrWorker() {
   if (w) Promise.resolve(w.terminate()).catch(() => {});
 }
 
+// Where the traineddata lives. It has to be asked for by more than one name,
+// because the build changes it: aapt2 gunzips any asset whose filename ends in
+// .gz and strips the extension, so the web build carries eng.traineddata.gz
+// and the APK carries eng.traineddata, decompressed. The worker applies either
+// — it gunzips by magic number when it needs to — so the bytes only have to
+// arrive, and every name the app ships under is tried.
+const OCR_LANG_URLS = [
+  'static/vendor/tesseract/lang/eng.traineddata.gz',
+  'static/vendor/tesseract/lang/eng.traineddata',
+];
+
 async function loadOcrLangData(onProgress) {
   if (ocrLangData) return ocrLangData;
   if (onProgress) onProgress('Loading the reader…');
-  const res = await fetch(OCR_LANG_URL);
-  if (!res.ok) throw new Error(`could not load ${OCR_LANG_URL} (HTTP ${res.status})`);
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  // A truncated or empty file would otherwise reach the engine as a language
-  // it cannot read, and the failure would surface as a blank page of nowhere.
-  if (bytes.length < 1024) throw new Error(`could not load ${OCR_LANG_URL} (too small: ${bytes.length})`);
-  ocrLangData = bytes;
-  return bytes;
+  const failed = [];
+  for (const url of OCR_LANG_URLS) {
+    let bytes = null;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        // A 404 here is not a broken phone: it is a name the build renamed.
+        failed.push(`${url} (HTTP ${res.status})`);
+        continue;
+      }
+      bytes = new Uint8Array(await res.arrayBuffer());
+    } catch (err) {
+      failed.push(`${url} (${(err && err.name) || err})`);
+      continue;
+    }
+    // A truncated or empty file would otherwise reach the engine as a language
+    // it cannot read, and the failure would surface nowhere.
+    if (bytes.length < 1024) {
+      failed.push(`${url} (too small: ${bytes.length})`);
+      continue;
+    }
+    ocrLangData = bytes;
+    return bytes;
+  }
+  throw new Error(`could not load the reader's language from ${failed.join(' or ')}`);
 }
 
 async function getOcrWorker(onProgress) {

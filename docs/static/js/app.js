@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.41.0';
+const APP_VERSION = '2.42.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -4298,7 +4298,7 @@ function setOcrStatus(text) {
 // had been reached and a photo that could not be opened both came out as the
 // same sentence about the file — which read as a verdict on the receipt.
 function ocrFailureText(err) {
-  const message = String((err && err.message) || err || '');
+  const message = err && err.message ? String(err.message) : '';
   if (err && err.code === 'ocr-stall') {
     // Where it stopped is the whole answer: "Preparing the photo" and
     // "recognizing text 60%" are different faults, and the previous wording
@@ -4308,6 +4308,11 @@ function ocrFailureText(err) {
   }
   if (/could not read that image/i.test(message)) return 'That photo could not be opened — try a JPEG.';
   if (/could not render that PDF/i.test(message)) return 'That PDF could not be opened — enter the details manually.';
+  // Anything else now says what it was. The single sentence used to cover every
+  // cause and name none of them, which is why a missing file, a script that
+  // would not load and a dead worker all read as a verdict on the receipt — and
+  // a renaming build looked exactly like an unreadable photo.
+  if (message) return `Reading failed — ${message}`;
   return 'Could not read that file — enter the details manually.';
 }
 
