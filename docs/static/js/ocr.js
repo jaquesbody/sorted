@@ -77,27 +77,98 @@ async function preprocessForOCR(file, onTick) {
   }
 }
 
-async function runOCR(imageFile, onProgress, onWorker) {
-  // Every stage announces itself, and not only for the person watching. The
-  // deadline below can only tell "working" from "stuck" by being told
-  // something, and the spans between Tesseract's own reports — loading the
-  // script, decoding the photo, scaling it, re-encoding it, and the gap
-  // between `recognize` being called and its first percentage — are stretches
-  // in which the engine says nothing at all. Measured on a desktop they total
-  // about 1.7s; on a handset the same spans are the longest quiet period in
-  // the whole pipeline, and a deadline that only listened to Tesseract fired
-  // in the middle of a read that was still going.
-  if (onProgress) onProgress('Starting the reader…');
+/* -----------------------------------------------------------------------------
+   The engine, and where its language comes from.
+
+   Tesseract's worker loads the *engine* with importScripts() but the *language*
+   traineddata with fetch(), from inside a worker created from a blob URL. On
+   Android that second request never reaches this app's asset server: the core
+   loads and the language load then sits at 0% forever, which is what a
+   handset was reporting as "Reading stopped at loading language traineddata
+   0%". importScripts is served by the WebView's asset loader and worker fetch
+   is not, and the two are not interchangeable.
+
+   So the bytes are fetched on the main thread — where this app's own assets
+   are served and always have been — and handed to the worker with the job, as
+   `{ code, data }`. The worker then applies them without fetching anything.
+   Verified with every https:// URL blocked in the browser: no network request
+   is made at all.
+   -------------------------------------------------------------------------- */
+
+const OCR_LANG = 'eng';
+const OCR_LANG_URL = 'static/vendor/tesseract/lang/eng.traineddata.gz';
+
+// The traineddata is about 3MB and never changes, and the worker is expensive
+// to build — engine load, language decode — so both are kept after the first
+// read. Both are dropped on any failure and whenever the app is backgrounded,
+// which matters more than it sounds: Android tears the worker down when it
+// suspends the WebView, and the photo picker and the camera both suspend it,
+// so a receipt is chosen by leaving the app and coming back. Holding on to a
+// worker that no longer exists would have the next receipt wait on it.
+let ocrLangData = null;
+let ocrWorker = null;
+
+function dropOcrWorker() {
+  const w = ocrWorker;
+  ocrWorker = null;
+  // terminate() can reject if the worker already died — nothing to do.
+  if (w) Promise.resolve(w.terminate()).catch(() => {});
+}
+
+async function loadOcrLangData(onProgress) {
+  if (ocrLangData) return ocrLangData;
+  if (onProgress) onProgress('Loading the reader…');
+  const res = await fetch(OCR_LANG_URL);
+  if (!res.ok) throw new Error(`could not load ${OCR_LANG_URL} (HTTP ${res.status})`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  // A truncated or empty file would otherwise reach the engine as a language
+  // it cannot read, and the failure would surface as a blank page of nowhere.
+  if (bytes.length < 1024) throw new Error(`could not load ${OCR_LANG_URL} (too small: ${bytes.length})`);
+  ocrLangData = bytes;
+  return bytes;
+}
+
+async function getOcrWorker(onProgress) {
+  if (ocrWorker) return ocrWorker;
+  const data = await loadOcrLangData(onProgress);
   // Fetched on demand — see loadScriptOnce() in utils.js.
   await loadScriptOnce('static/vendor/tesseract/tesseract.min.js');
-  const worker = await Tesseract.createWorker('eng', 1, {
+  if (onProgress) onProgress('Starting the reader…');
+  // No language at creation: createWorker('eng', …) would make the worker fetch
+  // it, and that is the request that never arrives on a handset. Nothing is
+  // asked for until there are bytes in hand to give.
+  const worker = await Tesseract.createWorker([], undefined, {
     workerPath: 'static/vendor/tesseract/worker.min.js',
     corePath: 'static/vendor/tesseract/core/tesseract-core-lstm.wasm.js',
-    langPath: 'static/vendor/tesseract/lang/',
+    cacheMethod: 'none',
     logger: (m) => {
       if (onProgress) onProgress(`${m.status}${m.progress !== undefined ? ' ' + Math.round(m.progress * 100) + '%' : ''}`);
     },
   });
+  await worker.load([{ code: OCR_LANG, data: data }]);
+  await worker.reinitialize(OCR_LANG, 1, undefined);
+  ocrWorker = worker;
+  return worker;
+}
+
+async function runOCR(imageFile, onProgress, onWorker) {
+  // Every stage announces itself, and not only for the person watching. The
+  // deadline below can only tell "working" from "stuck" by being told
+  // something, and the spans between Tesseract's own reports — loading the
+  // script, fetching the language, decoding the photo, scaling it, re-encoding
+  // it, and the gap between `recognize` being called and its first percentage
+  // — are stretches in which the engine says nothing at all. Measured on a
+  // desktop they total about 1.7s; on a handset the same spans are the longest
+  // quiet periods in the whole pipeline, and a deadline that only listened to
+  // Tesseract fired in the middle of a read that was still going.
+  let worker;
+  try {
+    worker = await getOcrWorker(onProgress);
+  } catch (err) {
+    // A half-built worker is not a worker. Next receipt starts clean.
+    dropOcrWorker();
+    throw err;
+  }
   if (onWorker) onWorker(worker);
 
   // PSM 6, "assume a single uniform block of text", which is what a receipt is:
@@ -114,9 +185,30 @@ async function runOCR(imageFile, onProgress, onWorker) {
   // image going across to the worker and the page being set up — nothing is
   // reported again until Tesseract has text of its own to report on.
   if (onProgress) onProgress('Reading receipt…');
-  const { data: { text } } = await worker.recognize(prepared);
-  await worker.terminate();
+  let text;
+  try {
+    const out = await worker.recognize(prepared);
+    text = out.data.text;
+  } catch (err) {
+    // Not kept for next time. Whatever just went wrong, this worker is now
+    // suspect, and holding on to it would have the next receipt repeat it.
+    dropOcrWorker();
+    throw err;
+  }
+  // Left alive on purpose: the next receipt should not pay for it again.
   return text;
+}
+
+// Android suspends the WebView when the app is backgrounded, which kills the
+// worker, and the picker and the camera both background the app — a receipt is
+// chosen by leaving Sorted and coming back. So the worker is dropped on the way
+// out and rebuilt when it is next needed, rather than held as a reference to
+// something that has already gone.
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') dropOcrWorker();
+  });
+  window.addEventListener('pagehide', dropOcrWorker);
 }
 
 // Recognition is slow because a phone is not a desk, not because the photo is
@@ -160,6 +252,10 @@ function runOCRWithTimeout(imageFile, onProgress, stallMs = OCR_STALL_MS) {
   const killWorker = () => {
     const w = worker;
     worker = null;
+    // If that is the shared worker, the shared reference goes with it: leaving
+    // it behind would have the next receipt wait on something we have already
+    // given up on.
+    if (ocrWorker === w) ocrWorker = null;
     // terminate() can reject if the worker already died — nothing to do.
     if (w) Promise.resolve(w.terminate()).catch(() => {});
   };
