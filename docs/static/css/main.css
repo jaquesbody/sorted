@@ -2874,3 +2874,14 @@ body.is-native .bottom-nav {
   border-left: none;
   box-shadow: inset 0 2px 0 var(--accent);
 }
+
+/* The figure beside a Reports card's heading that is a sentence rather than a
+   money total — "3 months and 12 days of money remaining" beside "Forecast".
+   The card heading line is where it belongs, so it is read with the title and
+   not under it in a paragraph of its own. */
+.report-head-note {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+  text-align: right;
+}

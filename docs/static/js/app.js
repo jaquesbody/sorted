@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.53.0';
+const APP_VERSION = '2.54.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2741,7 +2741,10 @@ async function renderReports(container) {
     
     <div class="reports-grid">
       <div class="report-card">
-        <h2 class="report-title">Forecast</h2>
+        <div class="report-head">
+          <h2 class="report-title">Forecast</h2>
+          <span class="report-head-note">${escapeHTML(runOutText(forecast.runsOut))}</span>
+        </div>
         ${renderForecastCard(forecast)}
       </div>
 
@@ -3353,33 +3356,29 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const low = ahead.length ? ahead.reduce((a, b) => (b.balance < a.balance ? b : a)) : null;
   const short = low && low.balance < 0 ? low : null;
 
-  // When the money runs out, read off the same balance line. It is computed
-  // over the whole twelve months whatever window is on screen, because the
-  // window is a way of looking at the forecast, not a fact about it: answer
-  // "how long have I got" from a one-month window and the figure changes every
-  // time you lengthen the graph, which is a different question answered each
-  // time rather than a stable one. A month is thirty days, which is what "X
-  // months (X days)" asks for rather than a calendar count.
+  // When the money gets tight: the first projected day on which Total money
+  // falls to the level of Total est costs — the day the green line on the
+  // chart crosses the red one. That is a date you can point at, which is what
+  // was asked for, and it is not the day the money runs out: the balance
+  // reaches nought after this, and a figure that agrees with the graph is
+  // worth more than one that agrees with an accounting definition.
+  //
+  // Computed over the whole twelve months whatever window is on screen, since
+  // the window is a way of looking rather than a fact, and a figure that
+  // changes when you lengthen the graph is a different question answered each
+  // time. A month is thirty days, which is what "X months (X days)" asks for.
   const fixedSeries = rangeMonths >= 12 ? series : (await buildForecast(12, 0)).series;
   const runsOut = (() => {
     const fixedAhead = fixedSeries.filter((p) => !p.actual);
     if (!fixedAhead.length) return null;
-    const spill = (dayCount) => ({
-      runsOut: true,
-      months: Math.floor(dayCount / 30),
-      days: dayCount % 30,
-    });
-    const cross = fixedAhead.find((p) => p.balance <= 0);
+    const cross = fixedAhead.find((p) => p.balance <= p.costs);
     if (cross) {
-      return spill(Math.max(0, Math.round((cross.d - today) / 86400000)));
+      const dayCount = Math.max(0, Math.round((cross.d - today) / 86400000));
+      return { runsOut: true, months: Math.floor(dayCount / 30), days: dayCount % 30 };
     }
-    // Still in the black at twelve months. The window's own average daily drain
-    // is carried on, rather than answering "more than twelve months", which is
-    // a true thing that tells you nothing.
-    const drain = (fixedAhead[0].balance - fixedAhead[fixedAhead.length - 1].balance)
-      / fixedAhead.length;
-    if (!(drain > 0)) return { runsOut: false, months: Infinity, days: 0 };
-    return spill(Math.ceil(fixedAhead[0].balance / drain));
+    // Still clear of the cost line after a year: the money does not get tight
+    // inside this forecast, which is worth saying plainly.
+    return { runsOut: false, months: Infinity, days: 0 };
   })();
 
   return {
@@ -3420,8 +3419,6 @@ function renderForecastCard(data) {
   const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   return `
-    ${runsOutLine(runsOut)}
-
     <div class="forecast-nav">
       <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(1)"
               aria-label="Back one month"${startOffset >= 12 ? ' disabled' : ''}>&larr;</button>
@@ -3455,24 +3452,19 @@ function renderForecastCard(data) {
   `;
 }
 
-// The sentence about when the money runs out. A forecast window that ends still
-// in the black is not an answer, so its own daily drain is carried on past the
-// end; only money that isn't going anywhere reads as "doesn't run out".
-function runsOutLine(runsOut) {
+// The figure beside the Forecast heading: how long until money gets tight. One
+// short line, because it sits beside a title and not in a paragraph. The
+// sentence it replaced said the same thing in thirty-odd words on a line of
+// its own, and the value refused to change when the graph did.
+function runOutText(runsOut) {
   if (!runsOut) return '';
-  const lead = 'Based on your current income and estimated spending you have';
-  let tail;
-  if (!runsOut.runsOut) {
-    tail = 'more money than this forecast can run out';
-  } else {
-    const months = Number(runsOut.months) || 0;
-    const days = Number(runsOut.days) || 0;
-    const parts = [];
-    if (months > 0) parts.push(`${months} month${months === 1 ? '' : 's'}`);
-    if (days > 0 || months === 0) parts.push(`${days} day${days === 1 ? '' : 's'}`);
-    tail = `${parts.length > 1 ? parts.join(' and ') : parts[0]} of money remaining`;
-  }
-  return `<p class="setting-hint" style="margin: 0 0 14px;">${lead} ${tail}.</p>`;
+  if (!runsOut.runsOut) return 'More than 12 months of money remaining';
+  const months = Number(runsOut.months) || 0;
+  const days = Number(runsOut.days) || 0;
+  const parts = [];
+  if (months > 0) parts.push(`${months} month${months === 1 ? '' : 's'}`);
+  if (days > 0 || months === 0) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+  return `${parts.length > 1 ? parts.join(' and ') : parts[0]} of money remaining`;
 }
 
 function round2(n) {
