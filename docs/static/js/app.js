@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.52.0';
+const APP_VERSION = '2.53.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -292,7 +292,7 @@ function accountTypeLabel(type) {
   return found ? found[1] : 'Bank account';
 }
 
-async function addAccount(name, type, opening, cardLast4) {
+async function addAccount(name, type, opening, cardLast4, personId) {
   const clean = String(name || '').trim().slice(0, 40);
   if (!clean) return null;
   const accounts = await getAll('accounts');
@@ -304,7 +304,9 @@ async function addAccount(name, type, opening, cardLast4) {
     opening: Number.isFinite(Number(opening)) ? Number(opening) : 0,
     adjustment: 0,
     cardLast4: String(cardLast4 || '').replace(/\D/g, '').slice(0, 4) || null,
-    personId: null
+    // An account can belong to somebody, which is what lets an income paid
+    // into it be that person's without being asked twice.
+    personId: personId || null
   });
 }
 
@@ -890,6 +892,28 @@ async function renderDashboard(container) {
 
   // Draw simple bar chart
   drawTrendChart([...spendItems, ...paidBills], dashViewedDate);
+}
+
+// A bill payment written into Spend. Until 2.8.3, paying a bill wrote its
+// payment into Spend rather than marking one in Bills, so every bill settled
+// before then is a spend row carrying `paid: true` and a `dueDate` — the two
+// fields are what make it a bill rather than an expense. `paidBillsForMonth`
+// has always read that convention, and the Bills page shows them in its Paid
+// section; nothing else did, so the same rent was counted once as a bill and
+// once as spending.
+function isSettledBillPayment(row) {
+  return !!row && row.paid === true && !!row.dueDate;
+}
+
+// Every bill a store holds, as history rather than as a status: the Bills
+// store paid or not, plus the payments older bills left in Spend.
+function billHistory(dueItems, spendItems) {
+  return dueItems.concat(spendItems.filter(isSettledBillPayment));
+}
+
+// Spending, which is what is left once the bills are taken out of it.
+function spendingHistory(spendItems) {
+  return spendItems.filter((i) => !isSettledBillPayment(i));
 }
 
 function groupByCategory(items, amountKey) {
@@ -2253,12 +2277,20 @@ async function openAccountActivity(id) {
 function openAccountSetup(id) {
   const account = id ? accountById(id) : null;
   const isCash = account ? account.type === CASH_TYPE : false;
+  const people = [...peopleCache.values()];
 
   openModal(account ? `Edit ${escapeHTML(account.name)}` : 'Add an account', `
     <div class="form-group">
       <label class="form-label" for="account-name">Name</label>
       <input type="text" class="form-input" id="account-name" maxlength="40"
              placeholder="${isCash ? 'Cash' : 'e.g. Current account'}" value="${escapeHTML(account ? account.name : '')}">
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="account-person">Whose</label>
+      <select class="form-input" id="account-person">
+        <option value="">Anyone</option>
+        ${people.map((p) => `<option value="${p.id}"${account && account.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+      </select>
     </div>
     <div class="form-group">
       <label class="form-label" for="account-cardLast4">Last 4 digits on card</label>
@@ -2317,11 +2349,13 @@ async function saveAccount(id) {
     const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
       .replace(/\D/g, '').slice(0, 4);
     const type = document.getElementById('account-type')?.value || 'bank';
+    const personId = document.getElementById('account-person')?.value || null;
     await updateItem('accounts', {
       ...account,
       name: String(name).trim().slice(0, 40),
       type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
       cardLast4: cardLast4 || null,
+      personId,
       opening: (Number.parseFloat(opening) || 0) + applied,
       adjustment: Number.parseFloat(adjustment) || 0
     });
@@ -2330,7 +2364,8 @@ async function saveAccount(id) {
     const type = document.getElementById('account-type')?.value || 'bank';
     const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
       .replace(/\D/g, '').slice(0, 4);
-    const added = await addAccount(name, type, opening, cardLast4);
+    const personId = document.getElementById('account-person')?.value || null;
+    const added = await addAccount(name, type, opening, cardLast4, personId);
     if (!added) return showFormError('An account with that name already exists', 'account-name');
     showToast('Account added');
   }
@@ -2671,15 +2706,16 @@ async function renderReports(container) {
     if (reportRange === 'year') return isThisYear(dateStr);
     return true;
   };
-  const rangedSpend = spendItems.filter(i => inRange(i.date));
-  // Every bill that has arrived, settled or not. This used to keep only what
-  // was still owed, which read right next to "Spending by Category" counting
-  // everything: with a bill list that is kept up to date — every rent and
-  // electricity settled — the card came out blank and £0.00, and the user was
-  // left looking at an empty breakdown of the biggest thing they spend. A
-  // bill that has not been paid yet still happened, so it counts here either
-  // way; the date cap above is what keeps next month's rent out.
-  const rangedDue = dueItems.filter(i => inRange(i.dueDate));
+  // Spending is what was spent, and never a bill that has been paid for: a
+  // bill settled before 2.8.3 is a spend row, and counting it here put the
+  // same rent in Spending *and* in Bills.
+  const rangedSpend = spendingHistory(spendItems).filter(i => inRange(i.date));
+  // Every bill that has arrived, settled or not — including the payments older
+  // bills left in Spend, which is what "not showing paid bills" was: the
+  // history of paying a bill is not written in the Bills store for anyone who
+  // was paying bills before 2.8.3. The date cap above keeps next month's rent
+  // out; the paid/unpaid state does not enter into it.
+  const rangedDue = billHistory(dueItems, spendItems).filter(i => inRange(i.dueDate));
 
   // Computed from everything stored rather than the range chips: this is its own
   // month-by-month comparison, and scoping it to a filter that already means
@@ -3317,24 +3353,33 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const low = ahead.length ? ahead.reduce((a, b) => (b.balance < a.balance ? b : a)) : null;
   const short = low && low.balance < 0 ? low : null;
 
-  // When the money runs out, read off the same line. The first projected day
-  // at or below nothing, and how far off it is; if the window ends still in the
-  // black, the average daily drain is carried on rather than answered with
-  // "more than twelve months", which is a true thing that tells you nothing.
+  // When the money runs out, read off the same balance line. It is computed
+  // over the whole twelve months whatever window is on screen, because the
+  // window is a way of looking at the forecast, not a fact about it: answer
+  // "how long have I got" from a one-month window and the figure changes every
+  // time you lengthen the graph, which is a different question answered each
+  // time rather than a stable one. A month is thirty days, which is what "X
+  // months (X days)" asks for rather than a calendar count.
+  const fixedSeries = rangeMonths >= 12 ? series : (await buildForecast(12, 0)).series;
   const runsOut = (() => {
-    if (!ahead.length) return null;
+    const fixedAhead = fixedSeries.filter((p) => !p.actual);
+    if (!fixedAhead.length) return null;
     const spill = (dayCount) => ({
       runsOut: true,
       months: Math.floor(dayCount / 30),
       days: dayCount % 30,
     });
-    const cross = ahead.find((p) => p.balance <= 0);
+    const cross = fixedAhead.find((p) => p.balance <= 0);
     if (cross) {
       return spill(Math.max(0, Math.round((cross.d - today) / 86400000)));
     }
-    const drain = (ahead[0].balance - ahead[ahead.length - 1].balance) / ahead.length;
+    // Still in the black at twelve months. The window's own average daily drain
+    // is carried on, rather than answering "more than twelve months", which is
+    // a true thing that tells you nothing.
+    const drain = (fixedAhead[0].balance - fixedAhead[fixedAhead.length - 1].balance)
+      / fixedAhead.length;
     if (!(drain > 0)) return { runsOut: false, months: Infinity, days: 0 };
-    return spill(Math.ceil(ahead[0].balance / drain));
+    return spill(Math.ceil(fixedAhead[0].balance / drain));
   })();
 
   return {
@@ -3375,6 +3420,8 @@ function renderForecastCard(data) {
   const fmt = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   return `
+    ${runsOutLine(runsOut)}
+
     <div class="forecast-nav">
       <button class="btn btn-ghost forecast-step" onclick="stepForecastMonth(1)"
               aria-label="Back one month"${startOffset >= 12 ? ' disabled' : ''}>&larr;</button>
@@ -3392,8 +3439,6 @@ function renderForecastCard(data) {
 
     <canvas id="forecast-chart" class="chart-canvas" style="height: 240px;"></canvas>
     <div class="split-legend">${legend}</div>
-
-    ${runsOutLine(data.runsOut)}
 
     <div class="setting-row" style="margin-top: 14px;">
       <div class="setting-text">
@@ -4873,7 +4918,7 @@ async function confirmDeleteRecurringBill(id) {
       <span class="choice-text">
         <span class="choice-label">This bill and all recurring versions</span>
         <span class="setting-hint">
-          ${paidNote} Nothing is left to project.
+          ${paidNote}
         </span>
       </span>
     </label>
@@ -5165,8 +5210,8 @@ async function buildReport() {
     return true;
   };
 
-  const rangedSpend = spendItems.filter(i => inRange(i.date));
-  const rangedDue = dueItems.filter(i => inRange(i.dueDate));
+  const rangedSpend = spendingHistory(spendItems).filter(i => inRange(i.date));
+  const rangedDue = billHistory(dueItems, spendItems).filter(i => inRange(i.dueDate));
   const shift = categoryShift(spendItems, dueItems);
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);

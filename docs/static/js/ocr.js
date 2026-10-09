@@ -452,7 +452,11 @@ function titleScore(line, index, total) {
   if (TITLE_FURNITURE.test(t)) return -1000;
   if (/^\d/.test(t)) return -1000;          // "12 HIGH STREET", "4471"
   if (/\b\d{5,6}\b/.test(t)) return -1000;   // a postcode or an account number
-  if (/\d/.test(t)) return -1000;            // digits anywhere: not the name
+  const letters = (t.match(/[a-z]/gi) || []).length;
+  const digits = (t.match(/\d/g) || []).length;
+  // A row of digits with separators and almost no letters is a date, a time or a
+  // figure, not a name.
+  if (letters <= 2 && digits >= 2) return -1000;
 
   let score = 100 - index * 2;               // earlier is better
   // A shop's name is never the last thing printed. The tail of a receipt is
@@ -461,6 +465,11 @@ function titleScore(line, index, total) {
   // position is a fact.
   if (index >= total - 2) score -= 40;
   if (TITLE_COMPANY.test(t)) score += 60;    // "TESCO STORES LTD" beats "TESCO"
+  // A digit inside an otherwise good name is an OCR substitution, not a
+  // disqualification: S is read as 3 often enough that rejecting every line
+  // carrying one threw away "TESCO 3TORES LTD" and handed the title to "THAME
+  // TOL", the mangled thank-you. It costs the line standing without ending it.
+  score -= digits * 12;
   return score;
 }
 
