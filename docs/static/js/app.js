@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.51.0';
+const APP_VERSION = '2.52.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2132,7 +2132,6 @@ async function openIncomeSetup(id) {
         <option value="">Anyone</option>
         ${people.map((p) => `<option value="${p.id}"${item && item.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
       </select>
-      <p class="setting-hint" style="margin: 4px 0 0;">Set from the account if that account belongs to someone.</p>
     </div>
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveIncome('${id || ''}')">${item ? 'Save' : 'Add income'}</button>
     ${item ? `<button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveIncome('${item.id}', this)">Delete</button>` : ''}
@@ -2261,7 +2260,6 @@ function openAccountSetup(id) {
       <input type="text" class="form-input" id="account-name" maxlength="40"
              placeholder="${isCash ? 'Cash' : 'e.g. Current account'}" value="${escapeHTML(account ? account.name : '')}">
     </div>
-    ${account ? '' : `
     <div class="form-group">
       <label class="form-label" for="account-cardLast4">Last 4 digits on card</label>
       <input type="text" class="form-input" id="account-cardLast4" maxlength="4"
@@ -2272,9 +2270,9 @@ function openAccountSetup(id) {
     <div class="form-group">
       <label class="form-label" for="account-type">Type</label>
       <select class="form-input" id="account-type">
-        ${ACCOUNT_TYPES.map(([value, label]) => `<option value="${value}"${(account ? account.type : (isCash ? 'cash' : 'bank')) === value ? ' selected' : ''}>${label}</option>`).join('')}
+        ${ACCOUNT_TYPES.map(([value, label]) => `<option value="${value}"${(account ? account.type : (isCash ? 'cash' : 'bank')) === value ? ' selected' : ''}>${escapeHTML(label)}</option>`).join('')}
       </select>
-    </div>`}
+    </div>
     <div class="form-group">
       <label class="form-label" for="account-opening">Balance now</label>
       <input type="number" class="form-input" id="account-opening" step="0.01"
@@ -2318,9 +2316,11 @@ async function saveAccount(id) {
       : 0;
     const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
       .replace(/\D/g, '').slice(0, 4);
+    const type = document.getElementById('account-type')?.value || 'bank';
     await updateItem('accounts', {
       ...account,
       name: String(name).trim().slice(0, 40),
+      type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
       cardLast4: cardLast4 || null,
       opening: (Number.parseFloat(opening) || 0) + applied,
       adjustment: Number.parseFloat(adjustment) || 0
@@ -2431,8 +2431,9 @@ function infoTipButton(id, text) {
   </span>`;
 }
 
-function closeInfoTips() {
+function closeInfoTips(except) {
   document.querySelectorAll('.info-tip-body.is-open').forEach((el) => {
+    if (except && el === except) return;
     el.classList.remove('is-open');
     el.previousElementSibling?.setAttribute('aria-expanded', 'false');
   });
@@ -2444,8 +2445,10 @@ function toggleInfoTip(id, btn) {
   const open = body.classList.toggle('is-open');
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   // One at a time. Two open at once on a phone means they overlap the thing
-  // they are explaining.
-  if (open) closeInfoTips();
+  // they are explaining — but excluding the one just opened, which by then
+  // carries the class this looks for and would otherwise be closed on its way
+  // in, leaving the dot reporting a panel that is not there.
+  if (open) closeInfoTips(body);
 }
 
 // A tip used to need its own dot pressed again to go away, which reads as a
@@ -2669,11 +2672,14 @@ async function renderReports(container) {
     return true;
   };
   const rangedSpend = spendItems.filter(i => inRange(i.date));
-  // What is owed, so a bill already settled is out of it. A paid bill used to
-  // be deleted on payment; it now stays in this store marked paid, which
-  // means without this filter every past month stepped back to would report
-  // rent as still due.
-  const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
+  // Every bill that has arrived, settled or not. This used to keep only what
+  // was still owed, which read right next to "Spending by Category" counting
+  // everything: with a bill list that is kept up to date — every rent and
+  // electricity settled — the card came out blank and £0.00, and the user was
+  // left looking at an empty breakdown of the biggest thing they spend. A
+  // bill that has not been paid yet still happened, so it counts here either
+  // way; the date cap above is what keeps next month's rent out.
+  const rangedDue = dueItems.filter(i => inRange(i.dueDate));
 
   // Computed from everything stored rather than the range chips: this is its own
   // month-by-month comparison, and scoping it to a filter that already means
@@ -3311,6 +3317,26 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const low = ahead.length ? ahead.reduce((a, b) => (b.balance < a.balance ? b : a)) : null;
   const short = low && low.balance < 0 ? low : null;
 
+  // When the money runs out, read off the same line. The first projected day
+  // at or below nothing, and how far off it is; if the window ends still in the
+  // black, the average daily drain is carried on rather than answered with
+  // "more than twelve months", which is a true thing that tells you nothing.
+  const runsOut = (() => {
+    if (!ahead.length) return null;
+    const spill = (dayCount) => ({
+      runsOut: true,
+      months: Math.floor(dayCount / 30),
+      days: dayCount % 30,
+    });
+    const cross = ahead.find((p) => p.balance <= 0);
+    if (cross) {
+      return spill(Math.max(0, Math.round((cross.d - today) / 86400000)));
+    }
+    const drain = (ahead[0].balance - ahead[ahead.length - 1].balance) / ahead.length;
+    if (!(drain > 0)) return { runsOut: false, months: Infinity, days: 0 };
+    return spill(Math.ceil(ahead[0].balance / drain));
+  })();
+
   return {
     series,
     days,
@@ -3321,12 +3347,13 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     average: averageNonRecurringSpend(spendItems),
     overridden: getForecastSpendOverride() !== null,
     low,
-    short
+    short,
+    runsOut
   };
 }
 
 function renderForecastCard(data) {
-  const { series, rangeMonths, startOffset } = data;
+  const { series, rangeMonths, startOffset, runsOut } = data;
 
   const rangeChips = FORECAST_RANGES.map((r) => `
     <option value="${r.value}"${Number(rangeMonths) === r.value ? ' selected' : ''}>${r.label}</option>
@@ -3366,6 +3393,8 @@ function renderForecastCard(data) {
     <canvas id="forecast-chart" class="chart-canvas" style="height: 240px;"></canvas>
     <div class="split-legend">${legend}</div>
 
+    ${runsOutLine(data.runsOut)}
+
     <div class="setting-row" style="margin-top: 14px;">
       <div class="setting-text">
         <div class="setting-label">Monthly spending (${data.overridden ? 'set by you' : `${FORECAST_SPEND_MONTHS} month average`})</div>
@@ -3379,6 +3408,26 @@ function renderForecastCard(data) {
       </div>
     </div>
   `;
+}
+
+// The sentence about when the money runs out. A forecast window that ends still
+// in the black is not an answer, so its own daily drain is carried on past the
+// end; only money that isn't going anywhere reads as "doesn't run out".
+function runsOutLine(runsOut) {
+  if (!runsOut) return '';
+  const lead = 'Based on your current income and estimated spending you have';
+  let tail;
+  if (!runsOut.runsOut) {
+    tail = 'more money than this forecast can run out';
+  } else {
+    const months = Number(runsOut.months) || 0;
+    const days = Number(runsOut.days) || 0;
+    const parts = [];
+    if (months > 0) parts.push(`${months} month${months === 1 ? '' : 's'}`);
+    if (days > 0 || months === 0) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+    tail = `${parts.length > 1 ? parts.join(' and ') : parts[0]} of money remaining`;
+  }
+  return `<p class="setting-hint" style="margin: 0 0 14px;">${lead} ${tail}.</p>`;
 }
 
 function round2(n) {
@@ -4790,7 +4839,13 @@ async function confirmDeleteRecurringBill(id) {
   const future = rows.filter((r) => r.paid !== true).length;
   // Built outside the template: a nested backtick inside an interpolation is a
   // syntax error, and this file has found that out twice already.
-  const paidNote = paid === 0 ? 'nothing paid' : paid + ' paid included';
+  //
+  // The paid months are kept, so the note says how many are kept rather than
+  // how many are going. It used to say "1 paid included" inside a sentence about
+  // what gets removed, which read as a count of the casualties.
+  const paidNote = paid === 0
+    ? 'Nothing has been paid yet, so nothing is kept.'
+    : `Keeps the ${paid} ${paid === 1 ? 'month' : 'months'} already paid, so the history is intact.`;
 
   // The old version wrote its question into the Delete button itself, so the
   // button changed width mid-tap and the question was gone by the time you
@@ -4818,7 +4873,7 @@ async function confirmDeleteRecurringBill(id) {
       <span class="choice-text">
         <span class="choice-label">This bill and all recurring versions</span>
         <span class="setting-hint">
-          Removes this and every month of it, ${paidNote}. Nothing is left to project.
+          ${paidNote} Nothing is left to project.
         </span>
       </span>
     </label>
@@ -4851,8 +4906,16 @@ async function deleteRecurringBill(id, wholeSeries) {
   const rows = (await getAll('due')).filter((r) => sameSeries(r, bill));
 
   if (wholeSeries) {
-    for (const row of rows) await deleteItem('due', row.id);
-    showToast(`Removed ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`);
+    // A paid month is a thing that happened, and it is the only record of it:
+    // the money left an account and the row is what says so. Deleting the
+    // series therefore takes the unpaid occurrences and leaves the settled
+    // ones, so the history of having paid this bill survives its own ending.
+    const live = rows.filter((r) => r.paid !== true);
+    for (const row of live) await deleteItem('due', row.id);
+    const kept = rows.length - live.length;
+    showToast(kept > 0
+      ? `Removed ${live.length} and kept ${kept} paid`
+      : `Removed ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`);
   } else {
     await deleteItem('due', id);
     // Deleting the upcoming occurrence would otherwise end the series silently.
@@ -5103,7 +5166,7 @@ async function buildReport() {
   };
 
   const rangedSpend = spendItems.filter(i => inRange(i.date));
-  const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
+  const rangedDue = dueItems.filter(i => inRange(i.dueDate));
   const shift = categoryShift(spendItems, dueItems);
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
