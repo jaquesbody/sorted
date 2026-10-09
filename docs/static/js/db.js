@@ -400,9 +400,11 @@ function sanitizeItem(storeName, item) {
     const name = str(item.name).slice(0, 40);
     if (!name) return null;
     out.name = name;
-    // Anything that isn't 'cash' is a bank account. An unknown type would
-    // otherwise produce an account that behaves like neither.
-    out.type = str(item.type) === CASH_TYPE ? CASH_TYPE : 'bank';
+    // Cash, business and savings are real types; anything unrecognised falls
+    // back to a plain bank account rather than behaving like neither.
+    out.type = ['cash', 'business', 'savings'].includes(str(item.type))
+      ? str(item.type)
+      : 'bank';
     // Opening and adjustment are the two things a person types; the balance
     // shown is derived from them plus activity, so neither is ever stored as
     // a result. Coerced here so a hand-edited file can't make a balance NaN.

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.50.0';
+const APP_VERSION = '2.51.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -276,16 +276,34 @@ async function accountActivity(accountId) {
 // rather than a bare true, because a caller that just added an account almost
 // always wants to do something with it next — and a boolean that gets passed
 // to deleteItem() as an id fails at the point of use, not here.
-async function addAccount(name, type, opening) {
+// What an account can be. Cash is an account rather than a payment method, so it
+// sits in the same list; business and savings are here because a sole trader's
+// spending is not household spending, and a report about where money sits has
+// to be able to tell them apart.
+const ACCOUNT_TYPES = [
+  ['bank', 'Bank account'],
+  ['business', 'Business account'],
+  ['savings', 'Savings account'],
+  ['cash', 'Cash'],
+];
+
+function accountTypeLabel(type) {
+  const found = ACCOUNT_TYPES.find(([value]) => value === type);
+  return found ? found[1] : 'Bank account';
+}
+
+async function addAccount(name, type, opening, cardLast4) {
   const clean = String(name || '').trim().slice(0, 40);
   if (!clean) return null;
   const accounts = await getAll('accounts');
   if (accounts.some((a) => a.type === type && String(a.name).toLowerCase() === clean.toLowerCase())) return null;
   return addItem('accounts', {
     name: clean,
-    type: type === CASH_TYPE ? CASH_TYPE : 'bank',
+    // Anything the form offers is a real type; only an unknown value falls back.
+    type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
     opening: Number.isFinite(Number(opening)) ? Number(opening) : 0,
     adjustment: 0,
+    cardLast4: String(cardLast4 || '').replace(/\D/g, '').slice(0, 4) || null,
     personId: null
   });
 }
@@ -676,6 +694,19 @@ async function renderPage() {
   }
 }
 
+// Savings, at the Accounts section. The Total Money card's figures are account
+// balances, so that is where its number is explained — and the card used to go
+// nowhere at all.
+function goToAccounts() {
+  navigate('savings');
+  // The section exists as soon as the page is drawn; wait for the render that
+  // navigate() starts before scrolling, or there is nothing to scroll to.
+  setTimeout(() => {
+    const el = document.getElementById('accounts-section');
+    if (el) el.scrollIntoView({ block: 'start' });
+  }, 260);
+}
+
 // Dashboard
 function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt) {
   // The balance for the month on screen, passed in. The card used to work this
@@ -707,8 +738,10 @@ function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt)
     { key: 'left', label: 'Left', value: spare, tone: 'muted' }
   ];
 
+  // Clicking the card goes to where the money is: Savings, at the Accounts
+  // section. It used to go nowhere, which is a card that is only ever read.
   return `
-    <div class="stat-card total-card">
+    <div class="stat-card total-card" role="button" tabindex="0" onclick="goToAccounts()">
       <div class="stat-card-header">
         <span class="stat-card-title">Total money</span>
         <span class="stat-card-sub">${count === 0 ? 'No accounts' : `${count} account${count === 1 ? '' : 's'}`}</span>
@@ -835,7 +868,8 @@ async function renderDashboard(container) {
     </div>
     
     <div class="chart-container">
-      <div class="chart-header">
+      <div class="chart-header chart-header--link" role="button" tabindex="0"
+           onclick="navigate('reports')" title="See the Reports breakdowns">
         <h2 class="chart-title">Monthly Trend</h2>
         <div class="chart-legend">
           <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Recurring</span>
@@ -1080,6 +1114,7 @@ function occurrenceInMonth(startDate, frequency, viewDate) {
 const INCOME_CATEGORIES = [
   ['salary', 'Salary'],
   ['sale', 'Sale'],
+  ['business', 'Business'],
   ['other', 'Other']
 ];
 
@@ -1941,7 +1976,7 @@ async function renderSavings(container) {
       }).join('')}
     </div>
 
-    <div class="section-head">
+    <div class="section-head" id="accounts-section">
       <span class="section-title">Accounts</span>
       <span class="stat-card-sub">${currency(totalBalance)}</span>
     </div>
@@ -1983,7 +2018,7 @@ function renderAccountRow(row) {
       <div class="item-row-main">
         <div class="item-info">
           <div class="item-title">${escapeHTML(row.name)}</div>
-          <div class="item-meta">${row.type === CASH_TYPE ? 'Cash' : 'Bank'}</div>
+          <div class="item-meta">${escapeHTML(accountTypeLabel(row.type))}</div>
           <div class="item-meta item-meta--sub">
             <span class="item-timing">${[
               parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · '),
@@ -2057,14 +2092,14 @@ async function openIncomeSetup(id) {
 
   openModal(item ? 'Edit income' : 'Add income', `
     <div class="form-group">
-      <label class="form-label" for="income-title">What for</label>
+      <label class="form-label" for="income-title">Source of income</label>
       <input type="text" class="form-input" id="income-title" maxlength="100"
              placeholder="e.g., Salary" value="${escapeHTML(item ? item.title : '')}">
     </div>
     <div class="form-group">
       <label class="form-label" for="income-amount">Amount</label>
       <input type="number" class="form-input" id="income-amount" step="0.01" min="0"
-             value="${item ? item.amount : ''}" placeholder="0.00">
+             value="${item ? moneyInput(item.amount) : ''}" placeholder="0.00">
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -2086,9 +2121,9 @@ async function openIncomeSetup(id) {
     </div>
     <div class="form-group">
       <label class="form-label" for="income-account">Into account</label>
-      <select class="form-input" id="income-account">
+      <select class="form-input" id="income-account" onchange="pickPersonForAccount(this)">
         <option value="">Not into an account</option>
-        ${accounts.map((a) => `<option value="${a.id}"${item && item.accountId === a.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
+        ${accounts.map((a) => `<option value="${a.id}" data-person="${a.personId || ''}"${item && item.accountId === a.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
       </select>
     </div>
     <div class="form-group">
@@ -2097,10 +2132,23 @@ async function openIncomeSetup(id) {
         <option value="">Anyone</option>
         ${people.map((p) => `<option value="${p.id}"${item && item.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
       </select>
+      <p class="setting-hint" style="margin: 4px 0 0;">Set from the account if that account belongs to someone.</p>
     </div>
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveIncome('${id || ''}')">${item ? 'Save' : 'Add income'}</button>
     ${item ? `<button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveIncome('${item.id}', this)">Delete</button>` : ''}
   `);
+}
+
+// An account that belongs to somebody makes the income theirs unless it has been
+// answered already: picking "Joint account" and then having to pick Ada again
+// under "Whose" is one question asked twice. An account with nobody attached
+// leaves the field alone.
+function pickPersonForAccount(select) {
+  const opt = select.selectedOptions && select.selectedOptions[0];
+  const personId = opt ? opt.getAttribute('data-person') : '';
+  if (!personId) return;
+  const target = document.getElementById('income-person');
+  if (target) target.value = personId;
 }
 
 async function saveIncome(id) {
@@ -2196,7 +2244,7 @@ async function openAccountActivity(id) {
   openModal(escapeHTML(account.name), `
     <div class="stat-card" style="margin-bottom: 16px;">
       <div class="stat-card-header">
-        <span class="stat-card-title">${account.type === CASH_TYPE ? 'Cash' : 'Bank'}</span>
+        <span class="stat-card-title">${escapeHTML(accountTypeLabel(account.type))}</span>
       </div>
       <div class="stat-card-value">${currency(balance)}</div>
     </div>
@@ -2215,23 +2263,29 @@ function openAccountSetup(id) {
     </div>
     ${account ? '' : `
     <div class="form-group">
+      <label class="form-label" for="account-cardLast4">Last 4 digits on card</label>
+      <input type="text" class="form-input" id="account-cardLast4" maxlength="4"
+             inputmode="numeric" placeholder="e.g. 4242"
+             value="${account ? escapeHTML(account.cardLast4 || '') : ''}">
+      <p class="setting-hint" style="margin: 4px 0 0;">Helps automate receipt reading — a receipt showing these digits is filed against this account.</p>
+    </div>
+    <div class="form-group">
       <label class="form-label" for="account-type">Type</label>
       <select class="form-input" id="account-type">
-        <option value="bank">Bank account</option>
-        <option value="cash"${isCash ? ' selected' : ''}>Cash</option>
+        ${ACCOUNT_TYPES.map(([value, label]) => `<option value="${value}"${(account ? account.type : (isCash ? 'cash' : 'bank')) === value ? ' selected' : ''}>${label}</option>`).join('')}
       </select>
     </div>`}
     <div class="form-group">
       <label class="form-label" for="account-opening">Balance now</label>
       <input type="number" class="form-input" id="account-opening" step="0.01"
-             value="${account ? accountCurrentBalance(account.id) : ''}" placeholder="0.00">
+             value="${account ? moneyInput(accountCurrentBalance(account.id)) : ''}" placeholder="0.00">
       ${account ? '<p class="setting-hint">What this account holds today. Entering a different figure corrects the balance.</p>' : ''}
     </div>
     ${account ? `
     <div class="form-group">
       <label class="form-label" for="account-adjustment">Adjustments</label>
       <input type="number" class="form-input" id="account-adjustment" step="0.01"
-             value="${account.adjustment}" placeholder="0.00">
+             value="${account ? moneyInput(account.adjustment) : ''}" placeholder="0.00">
     </div>` : ''}
     ${account ? `
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveAccount('${account.id}')">Save</button>
@@ -2262,16 +2316,21 @@ async function saveAccount(id) {
       ? (row.spend || 0) + (row.bills || 0) + (row.savings || 0)
         - (row.income || 0) - (row.transferIn || 0) + (row.transferOut || 0)
       : 0;
+    const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
+      .replace(/\D/g, '').slice(0, 4);
     await updateItem('accounts', {
       ...account,
       name: String(name).trim().slice(0, 40),
+      cardLast4: cardLast4 || null,
       opening: (Number.parseFloat(opening) || 0) + applied,
       adjustment: Number.parseFloat(adjustment) || 0
     });
     showToast('Account updated');
   } else {
-    const type = document.getElementById('account-type')?.value === CASH_TYPE ? CASH_TYPE : 'bank';
-    const added = await addAccount(name, type, opening);
+    const type = document.getElementById('account-type')?.value || 'bank';
+    const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
+      .replace(/\D/g, '').slice(0, 4);
+    const added = await addAccount(name, type, opening, cardLast4);
     if (!added) return showFormError('An account with that name already exists', 'account-name');
     showToast('Account added');
   }
@@ -2372,6 +2431,13 @@ function infoTipButton(id, text) {
   </span>`;
 }
 
+function closeInfoTips() {
+  document.querySelectorAll('.info-tip-body.is-open').forEach((el) => {
+    el.classList.remove('is-open');
+    el.previousElementSibling?.setAttribute('aria-expanded', 'false');
+  });
+}
+
 function toggleInfoTip(id, btn) {
   const body = document.getElementById(id);
   if (!body) return;
@@ -2379,15 +2445,16 @@ function toggleInfoTip(id, btn) {
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   // One at a time. Two open at once on a phone means they overlap the thing
   // they are explaining.
-  if (open) {
-    document.querySelectorAll('.info-tip-body.is-open').forEach((el) => {
-      if (el.id !== id) {
-        el.classList.remove('is-open');
-        el.previousElementSibling?.setAttribute('aria-expanded', 'false');
-      }
-    });
-  }
+  if (open) closeInfoTips();
 }
+
+// A tip used to need its own dot pressed again to go away, which reads as a
+// toggle that has stuck. Tapping anywhere else closes it — the panel is a
+// caption, not a mode. An outside tap is anything that is neither the dot nor
+// the panel itself, so a scroll or a selection inside the text still works.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.info-tip-body') && !e.target.closest('.info-tip-btn')) closeInfoTips();
+});
 
 /* -----------------------------------------------------------------------------
    Patterns
@@ -2590,9 +2657,17 @@ async function renderReports(container) {
 
   // Range chips scope spending and bills; savings goals have no dates,
   // so their total stays lifetime.
-  const inRange = (dateStr) => reportRange === 'all' ? true
-    : reportRange === 'month' ? isThisMonth(dateStr)
-    : isThisYear(dateStr);
+  // Every range stops at today. "All time" used to mean every date in the store,
+  // which after the Bills page started materialising future occurrences meant
+  // next month's rent was reported as money already owed. A range that says
+  // "All time" means everything so far.
+  const todayIso = localISO(new Date());
+  const inRange = (dateStr) => {
+    if (String(dateStr || '') > todayIso) return false;
+    if (reportRange === 'month') return isThisMonth(dateStr);
+    if (reportRange === 'year') return isThisYear(dateStr);
+    return true;
+  };
   const rangedSpend = spendItems.filter(i => inRange(i.date));
   // What is owed, so a bill already settled is out of it. A paid bill used to
   // be deleted on payment; it now stays in this store marked paid, which
@@ -3867,7 +3942,7 @@ function peopleSettingsHtml() {
   // across the page from them could not say so.
   return `
     <h2 class="report-title">People</h2>
-    <p style="color: var(--text-secondary); margin-bottom: 12px;">Track who is spending, paying bills and saving</p>
+    <p style="color: var(--text-secondary); margin-bottom: 12px;">Track who is spending, paying bills and saving. Set a pin per person - this will lock the app and automatically assign them to items.</p>
     ${rows}
     <div class="setting-row setting-row--add setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -3905,7 +3980,6 @@ function passcodeBlockHtml() {
                 onclick="togglePasscodeFromSettings(this)"></button>
       </div>
     </div>
-    <p style="color: var(--text-secondary); margin: 0 0 12px;">Set your pin per person. This locks the app and assigns spending, payments and savings to them automatically.</p>
     ${isLockEnabled() ? `
       <div class="setting-block">
         <div class="setting-row setting-row--inline setting-row--tight">
@@ -4038,8 +4112,7 @@ async function removePersonFromSettings(id) {
   const person = personById(id);
   if (!person) return;
   openModal(`Remove ${escapeHTML(person.name)}?`, `
-    <p class="form-label">Their spending, bills and savings stay. They stop being
-    anyone's, and their PIN goes with them.</p>
+    <p class="form-label">This removes their ability to be a filter or tag (spending, bills, savings, accounts, income and reports).</p>
     <div class="form-row" style="gap: 10px; margin-top: 14px;">
       <button class="btn btn-ghost" style="flex: 1;" onclick="closeModal()">Keep</button>
       <button class="btn btn-danger" style="flex: 1;" onclick="confirmRemovePersonFromSettings('${id}')">Remove</button>
@@ -4119,6 +4192,27 @@ function categoryOptionsHtml(extra, list = CATEGORIES) {
   const options = current && !list.includes(current) ? [current, ...list] : list;
   const blank = current ? '' : '<option value="">Not set</option>';
   return blank + options.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+}
+
+// A figure for an <input type="number">. Setting one from a Number drops the
+// zero: `input.value = 10.2` puts "10.2" in the box, so £10.20 read as 10.2 and
+// an amount you had typed yourself came back without its second decimal. The
+// input keeps "10.20" when it is given a string, so that is what it is given.
+// Accounts that carry the last four digits of a card, read fresh. Kept as a
+// function rather than read from the cache because the editor is the thing that
+// sets the number and it has to be current by the time a receipt is read.
+async function getAccountsWithCardLast4() {
+  const accounts = await getAll('accounts');
+  return accounts.filter((a) => a.cardLast4);
+}
+
+function moneyInput(n) {
+  // A blank stays blank. Number('') is 0 and Number(null) is 0, so without this
+  // an empty field would come back as "0.00" and an untouched balance would
+  // read as a deliberate nought.
+  if (n === '' || n === null || n === undefined) return '';
+  const v = Number(n);
+  return Number.isFinite(v) ? v.toFixed(2) : '';
 }
 
 function buildForm(type, editId = null, existingCategory = null) {
@@ -4290,12 +4384,12 @@ function prefillForm(item) {
     if (el && val !== undefined && val !== null) el.value = val;
   };
   setVal('form-title', item.title);
-  setVal('form-amount', item.amount);
+  setVal('form-amount', moneyInput(item.amount));
   setVal('form-date', item.date);
   setVal('form-dueDate', item.dueDate);
   setVal('form-category', item.category);
-  setVal('form-current', item.current);
-  setVal('form-target', item.target);
+  setVal('form-current', moneyInput(item.current));
+  setVal('form-target', moneyInput(item.target));
   // Blank is a real answer here: it means "work it out". Null is what an
   // untouched goal stores, and prefill skips nulls, so the field stays empty
   // and the placeholder keeps explaining itself.
@@ -4471,6 +4565,7 @@ async function ocrPrefill(file) {
   // (starts empty) — whichever the open form owns gets the receipt date.
   const dateEl = document.getElementById('form-date') || document.getElementById('form-dueDate');
   const categoryEl = document.getElementById('form-category');
+  const accountEl = document.getElementById('form-account');
 
   try {
     // Store the image first: even if OCR fails or guesses wrong, the photo is
@@ -4487,14 +4582,21 @@ async function ocrPrefill(file) {
     const amount = guessAmountFromText(text);
     const date = guessDateFromText(text);
     const category = guessCategoryFromText(text, title);
+    // The last four digits on the receipt belong to a card, and a card belongs
+    // to an account — so this is the one field a receipt can answer outright.
+    const cardLast4 = guessCardLast4(text);
     if (titleEl && !titleEl.value && title) titleEl.value = title;
-    if (amountEl && !amountEl.value && amount > 0) amountEl.value = amount;
+    if (amountEl && !amountEl.value && amount > 0) amountEl.value = moneyInput(amount);
     // The date fields ship with defaults (today / empty), so unlike title and
     // amount this one is always overwritten when the receipt shows a date.
     if (dateEl && date) dateEl.value = date;
     // Only ever into an empty category. It is a <select>, so a suggestion that
     // is wrong costs one tap — the same deal as the title and the amount.
     if (categoryEl && !categoryEl.value && category) categoryEl.value = category;
+    if (accountEl && !accountEl.value && cardLast4) {
+      const match = (await getAccountsWithCardLast4()).find((a) => a.cardLast4 === cardLast4);
+      if (match) accountEl.value = match.id;
+    }
     setOcrStatus(date
       ? 'Done — check title, amount and date, then save.'
       : 'Done — check title and amount, then save.');
@@ -4614,6 +4716,23 @@ async function saveItem(type, editId = null) {
       // version) survive an edit.
       const merged = { ...existing, ...fields, id: editId };
       await updateItem(type, merged);
+      // A recurring bill is one bill held in many months. Changing its category
+      // on one row and leaving the rest meant the breakdowns below reported the
+      // same bill under two headings, and each month stepped forward quietly
+      // moved money between them — which is what "changing a category does not
+      // update future or past items" was costing the reports.
+      if (type === 'due' && fields.category !== undefined
+          && fields.category !== existing.category) {
+        const title = String(existing.title || '').trim();
+        if (title) {
+          const chain = await getAll('due');
+          for (const row of chain) {
+            if (row.id === editId || String(row.title || '').trim() !== title) continue;
+            if (row.category === fields.category) continue;
+            await updateItem('due', { ...row, category: fields.category });
+          }
+        }
+      }
       // A goal that rose is money that left an account, and it needs a date:
       // the goal itself keeps one undated running total, so without this the
       // Total Money card cannot walk a balance back through the month it asks
@@ -4971,9 +5090,18 @@ async function buildReport() {
   // it is a report of — it carries whatever range and step-back are selected.
   const forecast = lastForecast || await buildForecast();
 
-  const inRange = (dateStr) => reportRange === 'all' ? true
-    : reportRange === 'month' ? isThisMonth(dateStr)
-    : isThisYear(dateStr);
+  // Every range stops at today. "All time" used to mean every date in the store,
+  // which after the Bills page started materialising future occurrences meant
+  // next month's rent was reported as money already owed. A range that says
+  // "All time" means everything so far.
+  const todayIso = localISO(new Date());
+  const inRange = (dateStr) => {
+    if (String(dateStr || '') > todayIso) return false;
+    if (reportRange === 'month') return isThisMonth(dateStr);
+    if (reportRange === 'year') return isThisYear(dateStr);
+    return true;
+  };
+
   const rangedSpend = spendItems.filter(i => inRange(i.date));
   const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
   const shift = categoryShift(spendItems, dueItems);

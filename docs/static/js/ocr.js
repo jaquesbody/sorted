@@ -533,6 +533,18 @@ const CATEGORY_WORDS = Object.entries(CATEGORY_KEYWORDS).map(([name, words]) => 
   name, new RegExp(`\\b(${words.map(fuzzyBody).join('|')})\\b`, 'i'),
 ]);
 
+// The last four digits on a receipt belong to whoever holds that card, so they
+// are the one thing on a receipt that identifies an *account* rather than a
+// shop. Read as a standalone four-digit group — a card number is longer than
+// that, so the group is matched on its own boundaries rather than inside the
+// longer number — and returned for the caller to match against the accounts.
+function guessCardLast4(text) {
+  const found = String(text || '').match(/\b\d{4}\b/g) || [];
+  // The last group on the page: a receipt prints the card digits in the
+  // payment block, which is at the bottom.
+  return found.length ? found[found.length - 1] : null;
+}
+
 function guessCategoryFromText(text, title) {
   const heading = String(title || '').trim();
   // The shop's name first — the line the engine reads best.

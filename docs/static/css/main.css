@@ -10,6 +10,10 @@
   --bg-card: #222228;
   --text-primary: #f0f0f5;
   --text-secondary: #8b8b96;
+  /* One step further out again, for anything switched off. It was referenced but
+     never defined, so a disabled control inherited its parent's colour and
+     looked identical to an enabled one. */
+  --text-muted: #55555f;
   --accent: #3d8bfd;
   --accent-hover: #2563eb;
   --accent-muted: rgba(61, 139, 253, 0.15);
@@ -50,6 +54,7 @@ html[data-theme="light"] {
   --bg-card: #ffffff;
   --text-primary: #16181d;
   --text-secondary: #5b6070;
+  --text-muted: #a6aab4;
   --accent: #1f6feb;
   --accent-hover: #1859c4;
   --accent-muted: rgba(31, 111, 235, 0.1);
@@ -602,10 +607,12 @@ body {
 }
 
 /* No passcode, no keypad. Greyed rather than hidden, so the control is still
-   where it will be, and still says whose PIN it would be. */
+   where it will be, and still says whose PIN it would be. The difference was a
+   shade before --text-muted existed and the two buttons were the same grey, so
+   the off state is now its own step away rather than a tint. */
 .btn-icon-sq--off {
   color: var(--text-muted);
-  opacity: 0.45;
+  opacity: 0.6;
 }
 
 .report-card .setting-label {
@@ -1908,6 +1915,17 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 15px;
+}
+
+/* The Monthly Trend card's heading takes you to Reports, which reads the same
+   stores and breaks them down. Cursor and hover afford it, same as a card. */
+.chart-header--link {
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.chart-header--link:hover .chart-title {
+  color: var(--accent);
 }
 
 .chart-title {
