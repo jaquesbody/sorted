@@ -68,14 +68,35 @@ window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', ()
   if (getThemePreference() === 'system') applyTheme();
 });
 
-// Passcode
+/* Passcode
+   --------------------------------------------------------------------------
+   There is no app-wide passcode. There is a switch — whether a PIN is needed
+   at all — and each person's own PIN.
+
+   The two-key model was dropped because nobody could tell the keys apart:
+   one locked the app and meant nothing, the other locked it and meant who had
+   walked in, and nothing on screen said which was which. A per-person PIN is
+   also the only kind of key this app can act on, because it is the only one
+   that identifies somebody, which is what spending, payments and savings need
+   attributing to.
+
+   Storage used to hold a salted hash of the code. It now holds a switch, and a
+   record written by an older build is read as "the switch was on" and rewritten
+   without the hash. The code itself is dropped on purpose: nothing asks for it
+   any more, and a key nothing can ask for is a key nobody can use.
+   ------------------------------------------------------------------------ */
 function getPasscodeRecord() {
   try {
     const raw = localStorage.getItem(PASSCODE_KEY);
     if (!raw) return null;
     const rec = JSON.parse(raw);
-    if (!rec || typeof rec.hash !== 'string' || typeof rec.salt !== 'string') return null;
-    return rec;
+    if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return null;
+    if (typeof rec.hash === 'string' && typeof rec.salt === 'string') {
+      const migrated = { on: true };
+      localStorage.setItem(PASSCODE_KEY, JSON.stringify(migrated));
+      return migrated;
+    }
+    return rec.on ? rec : null;
   } catch (err) {
     return null;
   }
@@ -83,6 +104,24 @@ function getPasscodeRecord() {
 
 function isPasscodeSet() {
   return !!getPasscodeRecord();
+}
+
+// Turning it on needs at least one person to have a PIN. With nobody holding a
+// key the app would lock and nothing could open it, and the only way back in
+// would be clearing storage — a lock that costs you your own data is not a lock.
+function setPasscodeEnabled(on) {
+  if (on) {
+    if (!anyPersonPins()) return false;
+    localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: true }));
+  } else {
+    localStorage.removeItem(PASSCODE_KEY);
+    localStorage.removeItem(TIMEOUT_KEY);
+    // Turning the passcode off must never leave the app locked. With the key gone
+    // there is nothing that could open it, and a lock nobody can open is a way to
+    // lose your own data.
+    if (locked) unlockApp();
+  }
+  return true;
 }
 
 function getLockTimeoutMinutes() {
@@ -123,32 +162,16 @@ function randomSalt() {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function setPasscode(passcode) {
-  const clean = normalisePasscode(passcode);
-  if (clean.length < 4) return false;
-  const salt = randomSalt();
-  localStorage.setItem(PASSCODE_KEY, JSON.stringify({ salt, hash: await hashPasscode(clean, salt), length: clean.length }));
-  return true;
-}
-
-function clearPasscode() {
-  localStorage.removeItem(PASSCODE_KEY);
-  localStorage.removeItem(TIMEOUT_KEY);
-  // Turning the passcode off must never strand the app behind a passcode that
-  // no longer exists.
-  if (locked) unlockApp();
-}
-
-async function verifyPasscode(passcode) {
-  const rec = getPasscodeRecord();
-  if (!rec) return true;
-  return (await hashPasscode(normalisePasscode(passcode), rec.salt)) === rec.hash;
-}
-
+// One length, because the keypad draws a fixed number of dots and submits
+// itself — it has to know the length before anything is typed. With no app
+// passcode to set it, the length is whatever the PINs already use, and four
+// until the first one is set.
 function getPasscodeLength() {
-  const rec = getPasscodeRecord();
-  const len = rec && Number(rec.length);
-  return Number.isInteger(len) && len >= 4 && len <= 8 ? len : 4;
+  for (const rec of Object.values(getPersonPinRecords())) {
+    const len = Number(rec.length);
+    if (Number.isInteger(len) && len >= 4 && len <= 8) return len;
+  }
+  return 4;
 }
 
 /* Per-person PINs
@@ -199,33 +222,24 @@ function anyPersonPins() {
   return Object.keys(getPersonPinRecords()).length > 0;
 }
 
-// Every PIN and the app passcode are the same length. The lock screen's keypad
-// shows a fixed number of dots and submits on its own, so it has to know the
-// length before anything is typed — a four-digit PIN could never be entered
-// through a six-digit pad. One length for all of them is the only way to keep
-// that, and the alternative (an explicit unlock key) would make every existing
-// passcode entry slower.
+// Every PIN is the same length. The lock screen's keypad shows a fixed number of
+// dots and submits on its own, so it has to know the length before anything is
+// typed — a four-digit PIN could never be entered through a six-digit pad. One
+// length for all of them is the only way to keep that.
 function getRequiredPinLength() {
-  return isPasscodeSet() ? getPasscodeLength() : 4;
+  return getPasscodeLength();
 }
 
 // A PIN already in use by someone else. Two people sharing a PIN would make
 // the unlock ambiguous and silently attribute one person's spending to the
-// other, which is the one outcome this feature must never produce.
-// Returns the id of the person already using it, the sentinel below for the
-// app passcode, or null when the PIN is free.
-const PIN_TAKEN_BY_APP = 'app-passcode';
-
+// other, which is the one outcome this feature must never produce. Returns the
+// id of the person already using it, or null when the PIN is free.
 async function isPersonPinTaken(pin, exceptPersonId) {
   const clean = normalisePasscode(pin);
   for (const [id, rec] of Object.entries(getPersonPinRecords())) {
     if (id === exceptPersonId) continue;
     if ((await hashPasscode(clean, rec.salt)) === rec.hash) return id;
   }
-  // Also reject the app passcode: sharing it would make "which one did they
-  // type?" unanswerable, and the app passcode is meant to stay a plain lock.
-  const appRec = getPasscodeRecord();
-  if (appRec && (await hashPasscode(clean, appRec.salt)) === appRec.hash) return PIN_TAKEN_BY_APP;
   return null;
 }
 
@@ -254,15 +268,11 @@ function clearAllPersonPins() {
 }
 
 // Which person, if any, this entry belongs to. Deliberately does not fall back
-// to "no passcode set, so let anyone in" the way verifyPasscode() does: the
-// lock screen only appears when there is something to match against, and
-// treating "nothing to check" as success would unlock on any digits at all.
+// to "nothing to check, so let anyone in": the lock screen only appears when
+// there is something to match against, and treating "nothing to check" as
+// success would unlock on any digits at all.
 async function matchAnyPasscode(pin) {
   const clean = normalisePasscode(pin);
-  const appRec = getPasscodeRecord();
-  if (appRec && (await hashPasscode(clean, appRec.salt)) === appRec.hash) {
-    return { ok: true, personId: null };
-  }
   for (const [id, rec] of Object.entries(getPersonPinRecords())) {
     if ((await hashPasscode(clean, rec.salt)) === rec.hash) {
       return { ok: true, personId: id };
@@ -271,13 +281,12 @@ async function matchAnyPasscode(pin) {
   return { ok: false, personId: null };
 }
 
-// The lock screen appears if the app passcode is set, or if anyone has a PIN —
-// a PIN is a way in, so having one means the app can be locked. Without this,
-// setting someone's PIN while the app passcode is off would silently do
-// nothing, which is the worst outcome for a feature whose whole job is to be
-// noticed.
+// The app locks when the switch is on and somebody holds a PIN. Both halves
+// matter: with nobody holding a key the app must not lock, because the only way
+// back in would be clearing storage — and a person removed from the app takes
+// their PIN with them, so "on with no PIN" is a state the app can be put in.
 function isLockEnabled() {
-  return isPasscodeSet() || anyPersonPins();
+  return isPasscodeSet() && anyPersonPins();
 }
 
 // Lock screen

@@ -601,10 +601,11 @@ body {
   flex: 0 0 auto;
 }
 
-/* Settings carries a lot of cards that were each mostly margin. Tightening the
-   row buys back roughly a screenful of scrolling without moving anything. */
-.setting-row--tight {
-  padding: 8px 0;
+/* No passcode, no keypad. Greyed rather than hidden, so the control is still
+   where it will be, and still says whose PIN it would be. */
+.btn-icon-sq--off {
+  color: var(--text-muted);
+  opacity: 0.45;
 }
 
 .report-card .setting-label {
@@ -1620,10 +1621,12 @@ body {
    0.72rem with letter-spacing, when every other note on the page is the
    standard `.setting-hint` — so it read as part of the heading's own styling
    rather than as the caption it is. */
+/* Now on the heading's line beside the title, as every other Reports card's
+   figure is, so it carries no margins of its own — the row's baseline does
+   the aligning. */
 .pattern-sub {
   font-size: 0.8rem;
   color: var(--text-secondary);
-  margin: 4px 0 10px;
 }
 
 /* The line under a row: "Paid 28 Sept 2026", "In 3 days", "3 days overdue".
@@ -2142,6 +2145,20 @@ body {
   gap: 15px;
   padding: 13px 0;
   flex-wrap: wrap;
+}
+
+/* Row-density modifiers. They must sit after .setting-row, or that rule wins on
+   source order at equal specificity and the modifier is silently dead — which is
+   how .setting-row--tight came to be doing nothing at all. */
+.setting-row--tight {
+  padding: 8px 0;
+}
+
+/* The People card lists people, and people are read at a glance rather than one
+   a screen. These rows are the card's whole rhythm, so they are tighter than a
+   settings row rather than the same. */
+.setting-row--people {
+  padding: 5px 0;
 }
 
 /* The label column is not 200px wide. `.setting-text { flex: 1 1 200px }` is

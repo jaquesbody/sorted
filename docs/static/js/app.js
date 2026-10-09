@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.46.0';
+const APP_VERSION = '2.47.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -882,6 +882,57 @@ function isBeforeThisMonth(date) {
     || (date.getFullYear() === now.getFullYear() && date.getMonth() < now.getMonth());
 }
 
+// A future month's bills become real when you look at them.
+//
+// They used to be projections: cards with no id, that could not be tapped,
+// edited or paid, and that Total Due did not count — so a month you were about
+// to pay for read £0.00 and its bills were a gallery you could only look at.
+// That is the fault described as "static cards ... that do not contribute to
+// Total Due", and the fix is one rule rather than two: a recurring bill leaves
+// a real row behind for its next occurrence.
+//
+// `markDuePaid` already wrote that row when the bill before it was settled;
+// this is the same rule, applied when a month is looked at rather than when the
+// previous month is paid. Nothing is invented for a month that has already
+// happened — those bills are stored, and adding to them would rewrite history.
+//
+// One row per bill per month, and only when that month's row is not already
+// there, so paging back and forth cannot stack duplicates and a month you have
+// already materialised is left exactly as it is.
+async function materialiseBillsForMonth(dueItems, viewDate) {
+  const now = new Date();
+  const inFuture = !isSameMonth(viewDate, now) && !isBeforeThisMonth(viewDate);
+  if (!inFuture) return dueItems;
+
+  let wrote = false;
+  // Dates created by this pass. The stored list alone is not enough: a bill
+  // whose whole chain exists (October, November, ...) has a row that maps to the
+  // month being viewed for every month in the chain, and each of those would
+  // add the same occurrence again.
+  const created = [];
+  for (const item of dueItems) {
+    if (item.paid === true) continue;
+    const frequency = frequencyOf(item);
+    if (!frequency) continue;
+    const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate);
+    if (!occurrence || occurrence === item.dueDate) continue;
+    if (created.includes(occurrence)) continue;
+    if (dueItems.some((r) => r.dueDate === occurrence && r.title === item.title)) continue;
+    created.push(occurrence);
+
+    // The stored row's receipt stays with it. A future occurrence has not been
+    // photographed yet, and copying one would attach last month's paper to it.
+    const copy = { ...item };
+    delete copy.id;
+    delete copy.receipt;
+    delete copy.createdAt;
+    delete copy.updatedAt;
+    await addItem('due', Object.assign(copy, { paid: false, dueDate: occurrence }));
+    wrote = true;
+  }
+  return wrote ? await getAll('due') : dueItems;
+}
+
 function billsForMonth(dueItems, date) {
   const lookingBack = isBeforeThisMonth(date);
   // A recurring bill's next occurrences, so stepping forward through the
@@ -904,6 +955,150 @@ function billsForMonth(dueItems, date) {
   const stored = [...inMonth, ...overdueElsewhere].sort(byDate);
   const items = [...stored, ...projections].sort(byDate);
   return { items, stored, projections, inMonth, overdueElsewhere };
+}
+
+// The projected rows for a month: one per recurring item that lands here and
+// isn't already stored here. The "isn't already stored" part is what stops a
+// bill showing twice — paying a recurring bill rolls its stored date forward
+// into the very month we're projecting, so without that check the paid bill
+// and its own projection would both appear.
+function projectionsForMonth(items, viewDate, dateKey) {
+  const rows = [];
+  for (const item of items) {
+    // A settled bill has no future occurrences. Paying one leaves a fresh row
+    // for the next date, and that row is what projects from then on — so
+    // projecting the settled bill as well put the same occurrence in the month
+    // twice, once real and once as a forecast.
+    if (item.paid === true) continue;
+    const frequency = frequencyOf(item);
+    if (!frequency) continue;
+    const stored = item[dateKey];
+    const occurrence = occurrenceInMonth(stored, frequency, viewDate);
+    if (!occurrence || occurrence === stored) continue;
+    // Another row already holds this date and this name, so the occurrence is
+    // real and not a forecast. Without this, a month whose bills have been
+    // materialised shows each of them twice — once as a row and once as the
+    // projection that row has now replaced.
+    if (items.some((r) => r !== item && r[dateKey] === occurrence && r.title === item.title)) continue;
+    rows.push({
+      ...item,
+      [dateKey]: occurrence,
+      id: null,
+      projected: true
+    });
+  }
+  return rows;
+}
+
+// Modal Forms
+/* How often a recurring item repeats
+   --------------------------------------------------------------------------
+   Stored as `frequency` on the item: 'monthly' or 'annually', or absent for a
+   one-off. The older boolean `recurring` is still read and written, because
+   every store on a device already holds rows that predate this and nothing
+   should be rewritten to suit it — `recurring: true` with no frequency means
+   monthly, which is exactly how those items behaved before.
+
+   What the frequency buys is the future. A bill is only ever stored with the
+   date it's *currently* due, so stepping forward through the months used to
+   show nothing at all after the current one. A recurring item now projects its
+   own next occurrences into the months on screen, up to a year ahead.
+   ------------------------------------------------------------------------ */
+
+const RECURRING_HORIZON_MONTHS = 12;
+
+const FREQUENCY_CHOICES = [
+  { value: 'no', label: 'No' },
+  { value: 'monthly', label: 'Yes, monthly' },
+  { value: 'annually', label: 'Yes, annually' }
+];
+
+// Monthly is the fallback for anything that was already flagged recurring.
+function frequencyOf(item) {
+  if (item.frequency === 'monthly' || item.frequency === 'annually') return item.frequency;
+  return item.recurring === true ? 'monthly' : null;
+}
+
+function isRecurring(item) {
+  return frequencyOf(item) !== null;
+}
+
+// The ISO date this item would land on in the month on screen, or null if it
+// doesn't land there. Day-of-month is preserved and clamped to the target
+// month's length, so the 31st still means "the 31st" except where there isn't
+// one, exactly as the stored roll-forward already does.
+function occurrenceInMonth(startDate, frequency, viewDate) {
+  if (!startDate || !frequency) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
+  if (!m) return null;
+  const startYear = Number(m[1]);
+  const startMonth = Number(m[2]);
+  const startDay = Number(m[3]);
+
+  const gap = (viewDate.getFullYear() - startYear) * 12 + (viewDate.getMonth() + 1 - startMonth);
+  if (gap < 0) return null;                                   // the month is behind the item
+  if (gap === 0) return startDate;                            // the item's own month
+  if (frequency === 'annually' && gap % 12 !== 0) return null;
+  if (gap > RECURRING_HORIZON_MONTHS) return null;            // nothing projected a year out
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  return localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
+}
+
+
+/* Income
+   --------------------------------------------------------------------------
+   The only thing that arrives rather than leaves. It exists so the forecast has
+   a real "in" side — until this, the cashflow chart's income column was
+   transfers between your own accounts, which is the same money counted twice.
+
+   Salary, sale and other are categories rather than different types of entry:
+   the form and the forecast treat all three identically, and the category is
+   there so "how much of this was a one-off sale" is answerable later without
+   another field.
+   -------------------------------------------------------------------------- */
+
+const INCOME_CATEGORIES = [
+  ['salary', 'Salary'],
+  ['sale', 'Sale'],
+  ['other', 'Other']
+];
+
+function incomeCategoryLabel(value) {
+  const found = INCOME_CATEGORIES.find(([v]) => v === value);
+  return found ? found[1] : 'Other';
+}
+
+async function addIncome(entry) {
+  return addItem('income', entry);
+}
+
+async function removeIncome(id) {
+  await deleteItem('income', id);
+}
+
+// The repeat toggle offers the opposite of what its label currently says, so
+// tapping it changes the label. Three things made that read as broken rather
+// than as a confirmation: the button grew from 89px to 142px and slid sideways
+// under the thumb; a full re-render four seconds later replaced every row on
+// the page; and the "you have tapped this once" flag lived on the button
+// The frequency button on an income row. It now says what the row is — Monthly
+// or One-off — and changes it on the tap. It used to need a second tap to
+// confirm, because the first tap swapped the label to "Stop repeating" and a
+// row could be flipped by a mis-tap that was never intended; the state is
+// trivially undone and a control that changes what it says before it does
+// anything read as broken.
+function incomeRepeatLabel(item) {
+  return item.frequency ? 'Monthly' : 'One-off';
+}
+
+async function toggleIncomeRecurring(id) {
+  const item = await getItem('income', id);
+  if (!item) return;
+  await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
+  renderPage();
 }
 
 function renderCategoryBreakdown(totals, grandTotal, tone) {
@@ -1498,7 +1693,10 @@ const BILL_FILTERS = [
 async function renderDue(container) {
   const token = renderToken;
   
-  const [all, spendItems] = await Promise.all([getAll('due'), getAll('spend')]);
+  // A future month is made real before it is read, so its bills are rows you
+  // can tap, edit and pay — and so Total Due counts them like any other month.
+  const all = await materialiseBillsForMonth(await getAll('due'), dueViewedDate);
+  const [spendItems] = await Promise.all([getAll('spend')]);
   all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   
   // The month view exists so a recurring bill's *next* occurrences are
@@ -2249,7 +2447,9 @@ function categoryMovement(row) {
 
 function renderPatternsCard(shift) {
   if (!shift.enough || shift.rows.length === 0) {
-    return '<div class="setting-hint" style="padding: 8px 0;">Nothing recorded this month yet.</div>';
+    // The heading with it, so the card is never a bare sentence.
+    return `<h2 class="report-title">Patterns</h2>
+      <div class="setting-hint" style="padding: 8px 0;">Nothing recorded this month yet.</div>`;
   }
   const rows = shift.rows.map((r) => `
     <div class="pattern-row">
@@ -2258,8 +2458,15 @@ function renderPatternsCard(shift) {
         : r.delta < 0 ? 'pattern-amount--down' : 'pattern-amount--flat'}">${categoryMovement(r)}</span>
     </div>`).join('');
 
+  // The caption sits on the heading's line, as every other Reports card's
+  // figure does. Under the heading it read as a second title of its own, and
+  // the card was the only one on the page with a line between its heading and
+  // its rows.
   return `
-    <div class="pattern-sub">days 1-${shift.days} of this month and last</div>
+    <div class="report-head">
+      <h2 class="report-title">Patterns</h2>
+      <span class="pattern-sub">days 1-${shift.days} of this month and last</span>
+    </div>
     ${rows}`;
 }
 
@@ -2395,7 +2602,6 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Patterns</h2>
         ${renderPatternsCard(shift)}
       </div>
 
@@ -3324,10 +3530,6 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        ${passcodeSettings()}
-      </div>
-
-      <div class="report-card">
         ${notifySettingsHtml()}
       </div>
 
@@ -3589,15 +3791,19 @@ const BIN_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"
 function peopleSettingsHtml() {
   const people = [...peopleCache.values()];
   const current = getCurrentPersonId();
+  // No passcode, no keypad: the icons go grey rather than staying bright. A
+  // bright control that does nothing is worse than a greyed one that says why.
+  const passcodeOn = isPasscodeSet();
   const rows = people.map((p) => `
-    <div class="setting-row setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
       </div>
       <div class="setting-control">
-        <button class="btn btn-icon-sq" aria-label="${hasPersonPin(p.id) ? 'Change' : 'Set'} ${escapeHTML(p.name)}'s PIN"
+        <button class="btn btn-icon-sq${passcodeOn ? '' : ' btn-icon-sq--off'}"
+                aria-label="${hasPersonPin(p.id) ? 'Change' : 'Set'} ${escapeHTML(p.name)}'s PIN"
                 title="${hasPersonPin(p.id) ? 'Change PIN' : 'Set PIN'}"
-                onclick="openPersonPinModal('${p.id}')">${KEYPAD_SVG}</button>
+                ${passcodeOn ? `onclick="openPersonPinModal('${p.id}')"` : 'aria-disabled="true"'}>${KEYPAD_SVG}</button>
         <button class="btn btn-icon-sq" aria-label="Remove ${escapeHTML(p.name)}"
                 title="Remove" onclick="removePersonFromSettings('${p.id}', this)">${BIN_SVG}</button>
       </div>
@@ -3607,11 +3813,15 @@ function peopleSettingsHtml() {
   // it opened straight into a list of names with only "Add someone" to explain
   // what the list was for — which is a list of people and not obviously a
   // setting.
+  //
+  // The passcode is at the bottom rather than in a card of its own, because it
+  // belongs to this feature: it is the switch for these very icons, and a card
+  // across the page from them could not say so.
   return `
     <h2 class="report-title">People</h2>
-    <p style="color: var(--text-secondary); margin-bottom: 15px;">Track more accurately who is spending and saving</p>
+    <p style="color: var(--text-secondary); margin-bottom: 12px;">Track who is spending, paying bills and saving</p>
     ${rows}
-    <div class="setting-row setting-row--add setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--add setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label setting-label--title">Add someone</div>
       </div>
@@ -3620,7 +3830,67 @@ function peopleSettingsHtml() {
         <button class="btn btn-primary" onclick="addPersonFromSettings()">Add</button>
       </div>
     </div>
+    ${passcodeBlockHtml()}
   `;
+}
+
+/* The passcode, which is now a switch for the PINs above.
+   --------------------------------------------------------------------------
+   There is no app-wide passcode any more. Two keys that both locked the app and
+   meant different things could not be told apart by anyone using them, so there
+   is one switch and one kind of key. With it off there is no lock and the icons
+   are greyed out; with it on, each person's PIN unlocks the app to them.
+
+   "Lock after" and "Lock now" belong here too, because they are the lock's
+   timing and there is nowhere else they could go.
+   ------------------------------------------------------------------------ */
+function passcodeBlockHtml() {
+  const on = isPasscodeSet();
+  return `
+    <div class="setting-row setting-row--inline setting-row--tight passcode-row">
+      <div class="setting-text">
+        <div class="setting-label setting-label--title">Passcode</div>
+      </div>
+      <div class="setting-control">
+        <button class="switch" role="switch" aria-checked="${on}"
+                aria-label="${on ? 'Turn the passcode off' : 'Turn the passcode on'}"
+                onclick="togglePasscodeFromSettings(this)"></button>
+      </div>
+    </div>
+    <p style="color: var(--text-secondary); margin: 0 0 12px;">Set your pin per person. This locks the app and assigns spending, payments and savings to them automatically.</p>
+    ${isLockEnabled() ? `
+      <div class="setting-block">
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text"><div class="setting-label setting-label--title">Lock after</div></div>
+          <div class="setting-control">
+            <select class="form-input" id="lock-timeout" style="width: auto;"
+                    onchange="setLockTimeoutMinutes(Number(this.value))">
+              ${LOCK_TIMEOUTS.map((t) => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text"><div class="setting-label setting-label--title">Lock now</div></div>
+          <div class="setting-control">
+            <button class="btn btn-ghost" onclick="lockApp()">Lock</button>
+          </div>
+        </div>
+      </div>` : ''}
+  `;
+}
+
+// Turning it on needs somebody to have a PIN first, and saying so is the whole
+// job: the switch would otherwise flip and then nothing would happen, because
+// the lock only arms once a person holds a key.
+async function togglePasscodeFromSettings() {
+  const on = !isPasscodeSet();
+  if (!setPasscodeEnabled(on)) {
+    showToast('Set someone’s PIN first');
+    await renderPage();
+    return;
+  }
+  await renderPage();
+  showToast(on ? 'Passcode on — Sorted will ask for a PIN' : 'Passcode off');
 }
 
 // A person's PIN: the app passcode still opens the app, and this switches it to
@@ -3665,7 +3935,7 @@ async function savePersonPin(personId) {
   if (problem === 'taken') {
     const taker = await isPersonPinTaken(first, personId);
     return showFormError(
-      taker === PIN_TAKEN_BY_APP ? 'That’s the app passcode' : `That’s ${personById(taker)?.name || 'someone else'}’s PIN`,
+      `That’s ${personById(taker)?.name || 'someone else'}’s PIN`,
       'person-pin-new');
   }
   if (problem) return showFormError('That PIN could not be saved', 'person-pin-new');
@@ -3756,279 +4026,6 @@ function themeSegment() {
   return `<div class="segmented segmented--icons" role="radiogroup" aria-label="Theme">
     ${opt('light', 'Light', SUN_SVG)}${opt('dark', 'Dark', MOON_SVG)}${opt('system', 'System', SCREEN_SVG)}
   </div>`;
-}
-
-function passcodeSettings() {
-  // "Lock after" and "Lock now" belong to the app lock, not to the app
-  // passcode specifically — with someone's PIN set the app locks either way,
-  // and hiding these would leave the idle timeout unreachable while the app is
-  // in fact locking.
-  const lockBlock = isLockEnabled() ? `
-    <div class="setting-block">
-      <div class="setting-row setting-row--left">
-        <div class="setting-text">
-          <div class="setting-label">Lock after</div>
-        </div>
-        <div class="setting-control">
-          <select class="form-input" id="lock-timeout" style="width: auto;" onchange="setLockTimeoutMinutes(Number(this.value))">
-            ${LOCK_TIMEOUTS.map(t => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="setting-row setting-row--left">
-        <div class="setting-text">
-          <div class="setting-label">Lock now</div>
-        </div>
-        <div class="setting-control">
-          <button class="btn btn-ghost" onclick="lockApp()">Lock</button>
-        </div>
-      </div>
-    </div>
-  ` : '';
-
-  // The switch sits beside the card's own heading. Repeating it as a second
-  // labelled row underneath meant the same fact stated twice, and the explanation
-  // was long enough to push everything below it down a screen — so this line is
-  // short enough to stay one, and it exists to answer the question the two
-  // controls raise between them: what locks the app, and what says who walked in.
-  const row = () => `
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label setting-label--title">Passcode</div>
-      </div>
-      <div class="setting-control">
-        ${isPasscodeSet()
-          ? `<button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
-                   onclick="confirmRemovePasscode(this)"></button>`
-          : `<button class="switch" role="switch" aria-checked="false" aria-label="Set a passcode"
-                   onclick="openPasscodeSetup()"></button>`}
-      </div>
-    </div>`;
-
-  // Either key locks the app; only a person's PIN says who has walked in. Said
-  // once, here, because the lock controls below appear as soon as either is set
-  // and this is the only place both are visible together. A line of its own
-  // rather than a hint under the heading, because the heading has to stay on one
-  // line beside the switch — a hint there is what made the row two lines before.
-  const note = isPasscodeSet() || anyPersonPins()
-    ? 'Either kind of key locks it. A PIN says who.'
-    : 'Locks the whole app. A person’s PIN unlocks to them.';
-  return `${row()}
-    <p style="color: var(--text-secondary); margin-bottom: 15px;">${note}</p>${lockBlock}`;
-}
-
-// Passcode setup is a modal rather than a field on the page: the toggle is the
-// only entry point, and a form that appears under a switch you just tapped
-// reads as a glitch.
-function openPasscodeSetup() {
-  openModal('Set a passcode', `
-    <p class="form-label">4 to 8 digits. You'll need it every time the app locks.</p>
-    <div class="form-group">
-      <label class="form-label" for="passcode-new">New passcode</label>
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="form-input"
-             id="passcode-new" autocomplete="new-password" placeholder="••••">
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="passcode-confirm">Confirm passcode</label>
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="form-input"
-             id="passcode-confirm" autocomplete="new-password" placeholder="••••">
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="passcode-timeout">Lock after</label>
-      <select class="form-input" id="passcode-timeout">
-        ${LOCK_TIMEOUTS.map(t => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
-      </select>
-    </div>
-    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="savePasscodeSetup()">Save passcode</button>
-  `);
-}
-
-async function savePasscodeSetup() {
-  const first = normalisePasscode(document.getElementById('passcode-new').value);
-  const second = normalisePasscode(document.getElementById('passcode-confirm').value);
-
-  if (first.length < 4) return showFormError('Use at least 4 digits', 'passcode-new');
-  if (first !== second) return showFormError('Those two don’t match', 'passcode-confirm');
-
-  // Every PIN shares one length, because the lock screen's keypad submits on
-  // its own and has to know the length up front. Changing it now would strand
-  // every PIN already set, so it has to be refused rather than silently
-  // breaking them — remove the PINs first, then set the new length.
-  if (anyPersonPins() && isPasscodeSet() && first.length !== getPasscodeLength()) {
-    return showFormError(
-      `People's PINs are ${getPasscodeLength()} digits. Remove them first to change that.`, 'passcode-new');
-  }
-
-  await setPasscode(first);
-  setLockTimeoutMinutes(Number(document.getElementById('passcode-timeout').value));
-  closeModal();
-  showToast('Passcode on — Sorted will ask for it next time');
-  renderPage();
-}
-
-// Turning the passcode off needs a deliberate second tap, same as Delete in
-// the item form: one mis-tap shouldn't drop someone's lock screen.
-function confirmRemovePasscode(switchEl) {
-  if (switchEl.dataset.confirming !== '1') {
-    switchEl.dataset.confirming = '1';
-    switchEl.setAttribute('aria-label', 'Tap again to remove the passcode');
-    switchEl.title = 'Tap again to remove';
-    const row = switchEl.closest('.setting-text');
-    if (row) {
-      const hint = row.querySelector('.setting-hint');
-      if (hint) hint.textContent = 'Tap again to remove';
-    }
-    setTimeout(() => {
-      switchEl.dataset.confirming = '';
-      switchEl.setAttribute('aria-label', 'Remove passcode');
-      switchEl.removeAttribute('title');
-      renderPage();
-    }, 4000);
-    return;
-  }
-  clearPasscode();
-  // Removing the app passcode does not unlock the app if people still have
-  // PINs, and the toast above would otherwise imply that it did.
-  showToast(anyPersonPins() ? 'Passcode removed — people’s PINs still lock it' : 'Passcode removed');
-  renderPage();
-}
-
-// Modal Forms
-/* How often a recurring item repeats
-   --------------------------------------------------------------------------
-   Stored as `frequency` on the item: 'monthly' or 'annually', or absent for a
-   one-off. The older boolean `recurring` is still read and written, because
-   every store on a device already holds rows that predate this and nothing
-   should be rewritten to suit it — `recurring: true` with no frequency means
-   monthly, which is exactly how those items behaved before.
-
-   What the frequency buys is the future. A bill is only ever stored with the
-   date it's *currently* due, so stepping forward through the months used to
-   show nothing at all after the current one. A recurring item now projects its
-   own next occurrences into the months on screen, up to a year ahead.
-   ------------------------------------------------------------------------ */
-
-const RECURRING_HORIZON_MONTHS = 12;
-
-const FREQUENCY_CHOICES = [
-  { value: 'no', label: 'No' },
-  { value: 'monthly', label: 'Yes, monthly' },
-  { value: 'annually', label: 'Yes, annually' }
-];
-
-// Monthly is the fallback for anything that was already flagged recurring.
-function frequencyOf(item) {
-  if (item.frequency === 'monthly' || item.frequency === 'annually') return item.frequency;
-  return item.recurring === true ? 'monthly' : null;
-}
-
-function isRecurring(item) {
-  return frequencyOf(item) !== null;
-}
-
-// The ISO date this item would land on in the month on screen, or null if it
-// doesn't land there. Day-of-month is preserved and clamped to the target
-// month's length, so the 31st still means "the 31st" except where there isn't
-// one, exactly as the stored roll-forward already does.
-function occurrenceInMonth(startDate, frequency, viewDate) {
-  if (!startDate || !frequency) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
-  if (!m) return null;
-  const startYear = Number(m[1]);
-  const startMonth = Number(m[2]);
-  const startDay = Number(m[3]);
-
-  const gap = (viewDate.getFullYear() - startYear) * 12 + (viewDate.getMonth() + 1 - startMonth);
-  if (gap < 0) return null;                                   // the month is behind the item
-  if (gap === 0) return startDate;                            // the item's own month
-  if (frequency === 'annually' && gap % 12 !== 0) return null;
-  if (gap > RECURRING_HORIZON_MONTHS) return null;            // nothing projected a year out
-
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth() + 1;
-  const lastDay = new Date(year, month, 0).getDate();
-  return localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
-}
-
-// The projected rows for a month: one per recurring item that lands here and
-// isn't already stored here. The "isn't already stored" part is what stops a
-// bill showing twice — paying a recurring bill rolls its stored date forward
-// into the very month we're projecting, so without that check the paid bill
-// and its own projection would both appear.
-function projectionsForMonth(items, viewDate, dateKey) {
-  const rows = [];
-  for (const item of items) {
-    // A settled bill has no future occurrences. Paying one leaves a fresh row
-    // for the next date, and that row is what projects from then on — so
-    // projecting the settled bill as well put the same occurrence in the month
-    // twice, once real and once as a forecast.
-    if (item.paid === true) continue;
-    const frequency = frequencyOf(item);
-    if (!frequency) continue;
-    const stored = item[dateKey];
-    const occurrence = occurrenceInMonth(stored, frequency, viewDate);
-    if (!occurrence || occurrence === stored) continue;
-    rows.push({
-      ...item,
-      [dateKey]: occurrence,
-      id: null,
-      projected: true
-    });
-  }
-  return rows;
-}
-
-/* Income
-   --------------------------------------------------------------------------
-   The only thing that arrives rather than leaves. It exists so the forecast has
-   a real "in" side — until this, the cashflow chart's income column was
-   transfers between your own accounts, which is the same money counted twice.
-
-   Salary, sale and other are categories rather than different types of entry:
-   the form and the forecast treat all three identically, and the category is
-   there so "how much of this was a one-off sale" is answerable later without
-   another field.
-   -------------------------------------------------------------------------- */
-
-const INCOME_CATEGORIES = [
-  ['salary', 'Salary'],
-  ['sale', 'Sale'],
-  ['other', 'Other']
-];
-
-function incomeCategoryLabel(value) {
-  const found = INCOME_CATEGORIES.find(([v]) => v === value);
-  return found ? found[1] : 'Other';
-}
-
-async function addIncome(entry) {
-  return addItem('income', entry);
-}
-
-async function removeIncome(id) {
-  await deleteItem('income', id);
-}
-
-// The repeat toggle offers the opposite of what its label currently says, so
-// tapping it changes the label. Three things made that read as broken rather
-// than as a confirmation: the button grew from 89px to 142px and slid sideways
-// under the thumb; a full re-render four seconds later replaced every row on
-// the page; and the "you have tapped this once" flag lived on the button
-// The frequency button on an income row. It now says what the row is — Monthly
-// or One-off — and changes it on the tap. It used to need a second tap to
-// confirm, because the first tap swapped the label to "Stop repeating" and a
-// row could be flipped by a mis-tap that was never intended; the state is
-// trivially undone and a control that changes what it says before it does
-// anything read as broken.
-function incomeRepeatLabel(item) {
-  return item.frequency ? 'Monthly' : 'One-off';
-}
-
-async function toggleIncomeRecurring(id) {
-  const item = await getItem('income', id);
-  if (!item) return;
-  await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
-  renderPage();
 }
 
 // The categories offered, in the order they're meant to be scanned. Bills get
