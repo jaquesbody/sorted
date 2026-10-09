@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.47.0';
+const APP_VERSION = '2.48.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1655,6 +1655,22 @@ function paidBillsForMonth(dueItems, spendItems, date) {
     .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
 }
 
+// One row per bill per month. A recurring bill can legitimately hold rows in
+// several months at once — one overdue from last month and one for this one —
+// but never two in the same month, and a month that somehow holds the same bill
+// twice is a month where somebody can pay for something they do not owe.
+function dedupeBills(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    // The filter hands back { item, paid }, so the bill is one level in.
+    const bill = row && row.item ? row.item : row;
+    const key = `${bill.title}@${bill.dueDate}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function applyDueFilter(outstanding, paid) {
   // The person filter applies to the list; the Total Due card deliberately
   // keeps counting the household, because what a bill is worth doesn't change
@@ -1703,13 +1719,20 @@ async function renderDue(container) {
   // visible — a bill is only ever stored with the date it's currently due,
   // so without stepping forward there was no way to see what the following
   // few months look like.
-  const { stored: outstanding, inMonth, overdueElsewhere, projections } = billsForMonth(all, dueViewedDate);
+  const read = billsForMonth(all, dueViewedDate);
+  const { stored: outstanding, inMonth, overdueElsewhere, projections } = read;
   const paid = paidBillsForMonth(all, spendItems, dueViewedDate);
   // Only the stored rows go through the filters; a forecast isn't a bill you
   // can have confirmed or pay, and letting a status chip hide it would make a
   // month look emptier than it is.
-  const rows = applyDueFilter(outstanding, paid)
-    .concat(projections.map((item) => ({ item, paid: false, projected: true })));
+  //
+  // And a forecast is not drawn at all. Materialising above makes every bill in
+  // the month a real row, so a projection here would mean one that could not be
+  // made real — and drawing it as an inert card you cannot tap, edit or pay is
+  // the fault this page kept being reported for. It is dropped, and deduped:
+  // a month that somehow holds the same bill twice shows it once, because a
+  // duplicate is how someone pays for something they do not owe.
+  const rows = dedupeBills(applyDueFilter(outstanding, paid));
   
   // What's actually owed: the real stored rows only. Adding a forecast to this
   // figure would report money that hasn't been billed yet as though it already

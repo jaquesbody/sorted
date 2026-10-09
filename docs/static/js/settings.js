@@ -91,30 +91,43 @@ function getPasscodeRecord() {
     if (!raw) return null;
     const rec = JSON.parse(raw);
     if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return null;
+    if (typeof rec.on === 'boolean') return rec;
+    // An older build stored a salted hash of a code. Reading it as "on" and
+    // rewriting it as a switch keeps the lock on for somebody who had one.
     if (typeof rec.hash === 'string' && typeof rec.salt === 'string') {
       const migrated = { on: true };
       localStorage.setItem(PASSCODE_KEY, JSON.stringify(migrated));
       return migrated;
     }
-    return rec.on ? rec : null;
+    return null;
   } catch (err) {
     return null;
   }
 }
 
+// The switch is derived as well as stored, because the data it belongs to may
+// predate the switch. A person's PIN is written by its own feature and always
+// was, so somebody who set PINs under an earlier build has PINs and no record
+// of the switch — and defaulting them to unlocked would silently drop the lock
+// they already had. People holding PINs therefore means the switch is on, and an
+// explicit `{on:false}` is what turns that off.
 function isPasscodeSet() {
-  return !!getPasscodeRecord();
+  const rec = getPasscodeRecord();
+  if (rec) return rec.on === true;
+  return anyPersonPins();
 }
 
 // Turning it on needs at least one person to have a PIN. With nobody holding a
 // key the app would lock and nothing could open it, and the only way back in
 // would be clearing storage — a lock that costs you your own data is not a lock.
+// Written explicitly either way, so an off is distinguishable from "nothing
+// recorded" — which means "derive it from the people who have PINs".
 function setPasscodeEnabled(on) {
   if (on) {
     if (!anyPersonPins()) return false;
     localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: true }));
   } else {
-    localStorage.removeItem(PASSCODE_KEY);
+    localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: false }));
     localStorage.removeItem(TIMEOUT_KEY);
     // Turning the passcode off must never leave the app locked. With the key gone
     // there is nothing that could open it, and a lock nobody can open is a way to
