@@ -1,13 +1,20 @@
 // Sorted v2 - IndexedDB Database Layer
 
 const DB_NAME = 'sorted-v2-db';
-// v2 added `people`; v3 `accounts` and `transfers`; v4 `income`. None of the
-// bumps changed an existing store: new rows get their own generated id, so the
-// old stores keep the key generator they were created with and no record is
-// rewritten. Adding a store is the cheapest migration IndexedDB offers —
-// creating one touches nothing else.
-const DB_VERSION = 4;
-const STORES = ['spend', 'due', 'savings', 'recurring', 'people', 'accounts', 'transfers', 'income'];
+// v2 added `people`; v3 `accounts` and `transfers`; v4 `income`; v5
+// `savingsTopUps`. None of the bumps changed an existing store: new rows get
+// their own generated id, so the old stores keep the key generator they were
+// created with and no record is rewritten. Adding a store is the cheapest
+// migration IndexedDB offers — creating one touches nothing else.
+//
+// `savingsTopUps` exists because a balance has to be datable. A savings goal
+// stores one running total with no date on it, so "what was my balance in
+// January" cannot be answered from it — and the Total Money card is scoped by a
+// month selector, so it asks exactly that. Every rise in a goal's `current` is
+// therefore written here as a dated contribution, and the total can be walked
+// backwards.
+const DB_VERSION = 5;
+const STORES = ['spend', 'due', 'savings', 'savingsTopUps', 'recurring', 'people', 'accounts', 'transfers', 'income'];
 
 // Cash isn't a payment method, it's an account with notes in it. Same concept
 // as a bank account, so it goes through the same code rather than being a
@@ -231,6 +238,40 @@ function nextDueDate(dueDate, frequency) {
 //     projection — nothing to tap, so next month's rent could never be
 //     settled. A recurring bill therefore becomes two rows: this one, settled,
 //     and the next one, real.
+// A rise in a savings goal is money that left an account. It is written down
+// here as a dated contribution, because the goal itself keeps one running total
+// with no date on it — and a balance that is asked for by month cannot be
+// answered from a figure that has no month.
+//
+// The same event `noteGoalSaves` in notify.js detects; that one drives a
+// reminder and records only the last date, which is not enough to walk a balance
+// backwards through.
+async function recordGoalContribution(goalId, delta, whenIso) {
+  const amount = Number(delta);
+  if (!goalId || !Number.isFinite(amount) || amount <= 0) return;
+  await addItem('savingsTopUps', {
+    goalId,
+    delta: amount,
+    date: whenIso || new Date().toISOString(),
+  });
+}
+
+// How much of a goal's total was in place by the end of `monthEndIso`. What was
+// recorded is counted exactly; what predates the record — a goal the user had
+// before this existed — is given the month the goal was created, because a goal
+// simply did not exist before then.
+function goalContributedBy(goal, topUps, monthEndIso) {
+  const mine = (topUps || []).filter((t) => String(t.goalId) === String(goal.id));
+  const loggedBefore = mine.reduce((n, t) => n
+    + (String(t.date || '').slice(0, 10) <= monthEndIso ? (Number(t.delta) || 0) : 0), 0);
+  const loggedTotal = mine.reduce((n, t) => n + (Number(t.delta) || 0), 0);
+  const shortfall = Math.max(0, (Number(goal.current) || 0) - loggedTotal);
+  const created = String(goal.createdAt || '').slice(0, 10);
+  const createdMonth = created ? created.slice(0, 7) + '-01' : '';
+  const preLogCounted = createdMonth && monthEndIso >= createdMonth ? shortfall : 0;
+  return loggedBefore + preLogCounted;
+}
+
 async function markDuePaid(dueItem, payerId) {
   const { id, ...rest } = dueItem;
   const repeats = dueItem.frequency === 'monthly'

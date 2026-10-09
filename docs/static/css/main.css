@@ -611,6 +611,42 @@ body {
   margin-bottom: 4px;
 }
 
+/* One breakdown, one typeface. The three Reports cards each carried their own:
+   Spending by Category set the name at 0.8rem in the secondary colour and the
+   amount at 0.85rem/600, Patterns used 0.95rem for both, and Where Your Money
+   Is used 0.95rem/600 for the name and 1.1rem/700 for the amount — three cards
+   in one column, one of them visibly louder than the rest, which is what was
+   reported as "some font and values are bold, some are larger".
+
+   Spending by Category is the standard, so everything here follows it. Scoped
+   to a report card on purpose: `.account-total-*` is also the Accounts page's
+   row, where the larger figures are right, and a page that lists your balances
+   should show them at a readable size.
+
+   The rhythm is the 8px a `.category-row` has always had between rows, instead
+   of 4px of padding either side of each one. */
+.report-card .account-total-name,
+.report-card .pattern-name,
+.report-card .category-name {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.report-card .account-total-amount,
+.report-card .pattern-amount,
+.report-card .category-amount {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.report-card .account-total,
+.report-card .pattern-row,
+.report-card .category-row {
+  padding: 0;
+  margin-bottom: 8px;
+}
+
 /* The add-someone row sits under the list, so it needs a little air above. The
    rule that used to be here drew a second line a few pixels below the one the
    list rows had already drawn, which on the People card was two horizontal

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.45.0';
+const APP_VERSION = '2.46.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -163,6 +163,63 @@ async function accountBalances() {
 // goal's running total, a one-off adjustment to the opening figure — has no
 // place on a timeline and is listed after the dated entries instead of being
 // given a date it never had.
+// The money there was at the end of a month.
+//
+// The Total Money card is scoped by the month selector, so it asks a question
+// with a month in it: "what was my balance in January?" A balance has to be able
+// to answer that, and "the same figure for every month" is not an answer — it is
+// what the card used to say, because the total was simply today's balance
+// whatever month was on screen. With income and spending in between, January's
+// balance and October's cannot be the same number.
+//
+// Built *backwards* from today rather than forwards from the opening balance,
+// because the opening balance is a snapshot with no date on it — nobody said
+// which month they typed it in. Everything that has moved since the month ended
+// is therefore undone: spending that came later, income that arrived later, bills
+// that were settled later, and savings that went in later. A transfer between
+// two of your own accounts is skipped deliberately: it moves money, but it does
+// not change the total.
+//
+// The month on screen gets today's balance, because nothing has moved since.
+async function totalMoneyAtEndOf(monthEndIso) {
+  const [spend, income, dueItems, goals, topUps, balances] = await Promise.all([
+    getAll('spend'), getAll('income'), getAll('due'), getAll('savings'),
+    getAll('savingsTopUps'), accountBalances()
+  ]);
+  const now = balances.reduce((n, b) => n + (b.balance || 0), 0);
+  const later = (iso) => String(iso || '').slice(0, 10) > monthEndIso;
+
+  // How much the total has grown by since the month ended. Spending and settled
+  // bills took money out; income put it in; a goal contribution moved money out
+  // of reach, so it is added back as money that was still there.
+  //
+  // Only what is attached to an account counts. `accountBalances` attributes by
+  // accountId, so a row with none never moved a balance — and counting it here
+  // would make the card disagree with the figure it is derived from.
+  const moves = (row) => !!row.accountId;
+  let net = 0;
+  for (const s of spend) if (moves(s) && later(s.date)) net -= Number(s.amount) || 0;
+  for (const i of income) if (moves(i) && later(i.date)) net += Number(i.amount) || 0;
+  for (const b of dueItems) {
+    if (b.paid === true && moves(b) && later(b.dueDate)) net -= Number(b.amount) || 0;
+  }
+  for (const g of goals) {
+    if (!moves(g)) continue;
+    const contributed = Number(g.current) || 0;
+    const byThen = goalContributedBy(g, topUps, monthEndIso);
+    net -= Math.max(0, contributed - byThen);
+  }
+  return now - net;
+}
+
+// The last day of the month a date falls in, as an ISO date. Comparisons here
+// are on ISO strings, where lexicographic order is chronological order.
+function endOfMonthIso(date) {
+  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`;
+}
+
 async function accountActivity(accountId) {
   const [spend, savings, transfers, income, dueItems] = await Promise.all([
     getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income'), getAll('due')
@@ -620,8 +677,14 @@ async function renderPage() {
 }
 
 // Dashboard
-function renderTotalMoneyCard(balances, spent, due, saved, savedTarget) {
-  const total = balances.reduce((n, b) => n + b.balance, 0);
+function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt) {
+  // The balance for the month on screen, passed in. The card used to work this
+  // out from the accounts, which made it today's balance whatever month was
+  // showing — and a January card then carried the same figure as an October one,
+  // which is the thing that was reported as wrong.
+  const total = Number.isFinite(totalAt)
+    ? totalAt
+    : balances.reduce((n, b) => n + b.balance, 0);
   const count = balances.length;
   const over = total < 0;
 
@@ -632,8 +695,8 @@ function renderTotalMoneyCard(balances, spent, due, saved, savedTarget) {
   const savedPart = Math.max(0, saved);
   const spare = total - spent - committed - savedPart;
 
-  // Widths as a share of the largest thing being shown, so the parts are always
-  // readable and never vanish because the total is large.
+  // The bar is scaled to the biggest thing on it, so a month with no bills still
+  // shows the parts it has.
   const scale = Math.max(total, spent + committed + savedPart, 1);
   const pct = (n) => Math.max(0, Math.min(100, (Math.max(0, n) / scale) * 100));
 
@@ -689,16 +752,19 @@ async function renderDashboard(container) {
   const dueTotal = dueShown.reduce((sum, i) => sum + i.amount, 0);
   const overdueCount = dueShown.filter(i => isOverdue(i.dueDate)).length;
 
-  // A month gone past has no outstanding bills left, so `dueTotal` is £0.00 for
-  // every one of them — which reads as "there were no bills in January" when the
-  // truth is "they have all been paid". The Total Money card is a picture of
-  // what a month did, so a past month counts its bills either way. The Bills
-  // card beside it answers the other question — what is still owed — and says so
-  // in its own sub-line, so the two are meant to differ in a past month.
-  const dueForTotal = isBeforeThisMonth(dashViewedDate)
-    ? dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate))
-        .reduce((sum, i) => sum + i.amount, 0)
-    : dueTotal;
+  // A bill that has been paid is still a bill. `dueTotal` counts only what is
+  // outstanding, so settling one used to make the Total Money card's Bills drop
+  // to £0.00 and look as though the money had been spent instead. The card is a
+  // picture of what a month did, so it counts the month's bills whether they are
+  // settled or not; the Bills card beside it keeps answering the other question
+  // — what is still owed — and says so in its own sub-line. A month ahead is the
+  // one place projections are the right answer, because nothing is stored for it.
+  const billsThisMonth = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
+  const dashInFuture = !isBeforeThisMonth(dashViewedDate)
+    && !isSameMonth(dashViewedDate, new Date());
+  const dueForTotal = dashInFuture
+    ? dueTotal
+    : billsThisMonth.reduce((sum, i) => sum + i.amount, 0);
   
   const savingsCurrent = savingsItems.reduce((sum, i) => sum + i.current, 0);
   const savingsTarget = savingsItems.reduce((sum, i) => sum + i.target, 0);
@@ -711,6 +777,9 @@ async function renderDashboard(container) {
   // What there is, and what has already been spoken for. Read once here and
   // handed to both the new card and the trend below.
   const balancesForDash = await accountBalances();
+  // The balance the card's own month belongs to. The month on screen gets
+  // today's balance, because nothing has moved since it ended.
+  const totalAt = await totalMoneyAtEndOf(endOfMonthIso(dashViewedDate));
 
   if (token !== renderToken) return;
   container.innerHTML = `
@@ -721,7 +790,7 @@ async function renderDashboard(container) {
               title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
 
-    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, savingsCurrent, savingsTarget)}
+    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, savingsCurrent, savingsTarget, totalAt)}
 
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
@@ -3718,13 +3787,14 @@ function passcodeSettings() {
   ` : '';
 
   // The switch sits beside the card's own heading. Repeating it as a second
-  // labelled row underneath meant the same fact stated twice, and the
-  // explanation was long enough to push everything below it down a screen.
-  const row = (label, hint) => `
+  // labelled row underneath meant the same fact stated twice, and the explanation
+  // was long enough to push everything below it down a screen — so this line is
+  // short enough to stay one, and it exists to answer the question the two
+  // controls raise between them: what locks the app, and what says who walked in.
+  const row = () => `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label setting-label--title">Passcode</div>
-        ${hint ? `<div class="setting-hint">${hint}</div>` : ''}
       </div>
       <div class="setting-control">
         ${isPasscodeSet()
@@ -3735,7 +3805,16 @@ function passcodeSettings() {
       </div>
     </div>`;
 
-  return row() + lockBlock;
+  // Either key locks the app; only a person's PIN says who has walked in. Said
+  // once, here, because the lock controls below appear as soon as either is set
+  // and this is the only place both are visible together. A line of its own
+  // rather than a hint under the heading, because the heading has to stay on one
+  // line beside the switch — a hint there is what made the row two lines before.
+  const note = isPasscodeSet() || anyPersonPins()
+    ? 'Either kind of key locks it. A PIN says who.'
+    : 'Locks the whole app. A person’s PIN unlocks to them.';
+  return `${row()}
+    <p style="color: var(--text-secondary); margin-bottom: 15px;">${note}</p>${lockBlock}`;
 }
 
 // Passcode setup is a modal rather than a field on the page: the toggle is the
@@ -4481,11 +4560,24 @@ async function saveItem(type, editId = null) {
       // version) survive an edit.
       const merged = { ...existing, ...fields, id: editId };
       await updateItem(type, merged);
+      // A goal that rose is money that left an account, and it needs a date:
+      // the goal itself keeps one undated running total, so without this the
+      // Total Money card cannot walk a balance back through the month it asks
+      // about. Only a rise counts — a target edited down is not a withdrawal.
+      if (type === 'savings' && Number(fields.current) > Number(existing.current || 0)) {
+        await recordGoalContribution(editId, Number(fields.current) - Number(existing.current || 0));
+      }
     }
   } else {
     if (type === 'spend') Object.assign(fields, { confirmed: false, paid: false });
 
-    await addItem(type, fields);
+    const newId = await addItem(type, fields);
+    // A goal created with money already in it is a top-up from the day it
+    // existed, and is recorded like any other — so a balance from before that
+    // month adds the whole figure back.
+    if (type === 'savings' && Number(fields.current) > 0) {
+      await recordGoalContribution(newId, Number(fields.current));
+    }
   }
 
   // A goal that went up is a top-up, which is what the savings nudge counts
