@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.48.0';
+const APP_VERSION = '2.50.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -905,10 +905,17 @@ async function materialiseBillsForMonth(dueItems, viewDate) {
   if (!inFuture) return dueItems;
 
   let wrote = false;
-  // Dates created by this pass. The stored list alone is not enough: a bill
-  // whose whole chain exists (October, November, ...) has a row that maps to the
-  // month being viewed for every month in the chain, and each of those would
-  // add the same occurrence again.
+  // Bills already served by this pass, by name. The stored list alone is not
+  // enough: a bill whose whole chain exists (October, November, ...) has a row
+  // that maps to the month being viewed for every month in the chain, and each
+  // of those would add the month again.
+  //
+  // And the key is the *name*, not the date, which matters more than it sounds.
+  // A bill due on the 31st clamps to the 30th in a shorter month, so its chain
+  // holds two rows that both land in December — one on the 30th and one on the
+  // 31st. Two different dates are the same bill appearing twice, which is how
+  // the same water bill ended up on three cards and the month's total read
+  // high until you left and came back.
   const created = [];
   for (const item of dueItems) {
     if (item.paid === true) continue;
@@ -916,9 +923,10 @@ async function materialiseBillsForMonth(dueItems, viewDate) {
     if (!frequency) continue;
     const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate);
     if (!occurrence || occurrence === item.dueDate) continue;
-    if (created.includes(occurrence)) continue;
+    if (created.includes(item.title)) continue;
     if (dueItems.some((r) => r.dueDate === occurrence && r.title === item.title)) continue;
-    created.push(occurrence);
+    if (dueItems.some((r) => isSameMonth(r.dueDate, viewDate) && r.title === item.title)) continue;
+    created.push(item.title);
 
     // The stored row's receipt stays with it. A future occurrence has not been
     // photographed yet, and copying one would attach last month's paper to it.
@@ -945,9 +953,18 @@ function billsForMonth(dueItems, date) {
   // month would carry this month's settled bill *and* project the next
   // occurrence of it — the same money twice, which is precisely what this
   // function's separation of stored from projected exists to prevent.
+  // A bill that has not been paid still has to be payable, so it rides forward —
+  // but only until the month being viewed has a row of its own for it. Now that
+  // every month's occurrences are made real when you look at them, an unpaid
+  // recurring bill has a row in the very month it would ride into, and carrying
+  // it in as well counted the same rent twice: the rider and this month's row
+  // are one bill. It also made the pile grow without limit, so a month a year
+  // ahead held twelve months of unpaid bills.
+  const inThisMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
   const overdueElsewhere = lookingBack
     ? []
-    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
+    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date)
+        && !inThisMonth.some((r) => r.paid !== true && r.title === i.title));
   // Real and projected are handed back separately, never mixed into one list:
   // anything that sums what a month costs has to be able to tell them apart,
   // and a caller that can't is how a forecast ends up in a Total Due figure.
@@ -1664,7 +1681,10 @@ function dedupeBills(rows) {
   return rows.filter((row) => {
     // The filter hands back { item, paid }, so the bill is one level in.
     const bill = row && row.item ? row.item : row;
-    const key = `${bill.title}@${bill.dueDate}`;
+    // One bill per month, not one bill per date. A bill due on the 31st clamps
+    // to the 30th in a shorter month, so the same bill can hold two rows in one
+    // month with two different dates — and both would be drawn.
+    const key = `${bill.title}@${String(bill.dueDate || '').slice(0, 7)}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -1686,7 +1706,12 @@ function applyDueFilter(outstanding, paid) {
       .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
       .map((i) => ({ item: i, paid: minePaid.includes(i) }));
   }
-  // All: everything the month held, unpaid first, both in date order.
+  // All: everything the month held, in date order. It used to be unpaid first
+  // and then the paid ones, which made the list jump: paying a bill moved it
+  // from the top group to the bottom, and the following month it rolled back to
+  // the top, so a recurring bill changed place every month — the one thing a
+  // list of fixed commitments must not do if you scan it by eye. Paid state is
+  // already on the row: it says it once, and in green.
   return [
     ...mine.map((i) => ({ item: i, paid: false })),
     ...minePaid.map((i) => ({ item: i, paid: true }))
@@ -3828,7 +3853,7 @@ function peopleSettingsHtml() {
                 title="${hasPersonPin(p.id) ? 'Change PIN' : 'Set PIN'}"
                 ${passcodeOn ? `onclick="openPersonPinModal('${p.id}')"` : 'aria-disabled="true"'}>${KEYPAD_SVG}</button>
         <button class="btn btn-icon-sq" aria-label="Remove ${escapeHTML(p.name)}"
-                title="Remove" onclick="removePersonFromSettings('${p.id}', this)">${BIN_SVG}</button>
+                title="Remove" onclick="removePersonFromSettings('${p.id}')">${BIN_SVG}</button>
       </div>
     </div>`).join('');
 
@@ -4005,19 +4030,28 @@ async function addPersonFromSettings() {
 
 // Two-step confirm, like every other destructive action in the app (no native
 // dialogs). The first tap rewrites itself to say what will happen.
-async function removePersonFromSettings(id, btn) {
+// Destroying a person used to be a two-tap confirm that shoved a sentence into
+// the space the icon occupied, stretching the row and looking broken. It asks in
+// a dialog with a red button, the same shape as every other destructive
+// question in the app.
+async function removePersonFromSettings(id) {
   const person = personById(id);
   if (!person) return;
-  if (btn.dataset.confirming !== '1') {
-    btn.dataset.confirming = '1';
-    btn.textContent = 'Their entries stay — remove?';
-    setTimeout(() => {
-      btn.dataset.confirming = '';
-      btn.textContent = 'Remove';
-    }, 5000);
-    return;
-  }
+  openModal(`Remove ${escapeHTML(person.name)}?`, `
+    <p class="form-label">Their spending, bills and savings stay. They stop being
+    anyone's, and their PIN goes with them.</p>
+    <div class="form-row" style="gap: 10px; margin-top: 14px;">
+      <button class="btn btn-ghost" style="flex: 1;" onclick="closeModal()">Keep</button>
+      <button class="btn btn-danger" style="flex: 1;" onclick="confirmRemovePersonFromSettings('${id}')">Remove</button>
+    </div>
+  `);
+}
+
+async function confirmRemovePersonFromSettings(id) {
+  const person = personById(id);
+  if (!person) return;
   await removePerson(id);
+  closeModal();
   showToast(`${person.name} removed`);
   await renderPage();
 }

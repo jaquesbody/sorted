@@ -111,10 +111,21 @@ function getPasscodeRecord() {
 // of the switch — and defaulting them to unlocked would silently drop the lock
 // they already had. People holding PINs therefore means the switch is on, and an
 // explicit `{on:false}` is what turns that off.
+// Whether the People list has anybody in it at all. The passcode belongs to that
+// list, so "people exist" is the strongest signal that the feature is in use —
+// which is what the switch now derives its starting state from. Read from the
+// cache the People card already fills, because every reader here is synchronous.
+function peopleArePopulated() {
+  return typeof peopleCache !== 'undefined' && peopleCache.size > 0;
+}
+
 function isPasscodeSet() {
   const rec = getPasscodeRecord();
   if (rec) return rec.on === true;
-  return anyPersonPins();
+  // Nothing recorded. Somebody who has people — or PINs — already written by an
+  // earlier build has no record of a switch that did not exist then, and
+  // defaulting them to unlocked would drop the lock they believe they have.
+  return peopleArePopulated() || anyPersonPins();
 }
 
 // Turning it on needs at least one person to have a PIN. With nobody holding a
@@ -122,9 +133,13 @@ function isPasscodeSet() {
 // would be clearing storage — a lock that costs you your own data is not a lock.
 // Written explicitly either way, so an off is distinguishable from "nothing
 // recorded" — which means "derive it from the people who have PINs".
+// Turning it on always works. Refusing to arm with no PIN held was meant to stop
+// the app locking with nothing that could open it, but it did the opposite: with
+// the switch off the keypads are greyed and dead, so nobody could set the first
+// PIN, so the switch could never arm — a lock you cannot create the key for. The
+// lock itself still refuses to engage until somebody holds one.
 function setPasscodeEnabled(on) {
   if (on) {
-    if (!anyPersonPins()) return false;
     localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: true }));
   } else {
     localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: false }));
