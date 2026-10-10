@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.56.0';
+const APP_VERSION = '2.57.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -823,7 +823,7 @@ async function renderDashboard(container) {
 
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       ${monthNavHtml('dash', dashViewedDate)}
       <button class="icon-btn icon-btn--float${syncConfigured() ? '' : ' icon-btn--quiet'}" id="sync-refresh"
               onclick="dashboardSyncNow(this)" aria-label="Sync and refresh"
@@ -1629,7 +1629,7 @@ async function renderSpend(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       ${monthNavHtml('spend', viewedDate)}
       <span class="toolbar-add">
         ${infoTipButton('spend-tip', 'Record your day-to-day or one-off spending here, then tick them off once paid. Bills that repeat every month belong on the Bills tab.')}
@@ -1885,7 +1885,7 @@ async function renderDue(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       ${monthNavHtml('due', dueViewedDate)}
       <span class="toolbar-add">
         ${infoTipButton('bill-tip', 'Record your recurring bills here, then tick them off once paid. Anything one-off and irregular belongs on the Spend tab.')}
@@ -1995,7 +1995,7 @@ async function renderSavings(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar page-toolbar--end page-toolbar--wrap">
+    <div class="page-toolbar page-toolbar--fixed page-toolbar--end page-toolbar--wrap">
       <button class="btn btn-primary" onclick="openAccountSetup()">+ Account</button>
       <button class="btn btn-primary" onclick="openIncomeSetup()">+ Income</button>
       <button class="btn btn-primary" onclick="openAddModal('savings')">+ Goal</button>
@@ -2789,7 +2789,7 @@ async function renderReports(container) {
 
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       <div class="filter-bar">
         ${chip('all', 'All time')}
         ${chip('month', 'This month')}
@@ -4832,6 +4832,16 @@ function ocrFailureText(err) {
   return 'Could not read that file — enter the details manually.';
 }
 
+// How sure of itself the engine has to be before a sideways photo is left
+// as it is. Measured: a receipt the right way up reads 92-93, the same
+// receipt turned reads 42-44. 65 sits between them.
+//
+// It decides only whether to spend a second read, never which answer to
+// keep: the clearer of the two wins either way, which is what lets it be a
+// conservative number. A receipt in poor light reads low the right way up
+// and still wins the comparison.
+const OCR_TURN_TRUST = 65;
+
 async function ocrPrefill(file) {
   const titleEl = document.getElementById('form-title');
   const amountEl = document.getElementById('form-amount');
@@ -4851,7 +4861,34 @@ async function ocrPrefill(file) {
     setOcrStatus('Reading receipt…');
     renderReceiptPanel();
 
-    const text = await runOCRWithTimeout(prepared.source, (msg) => setOcrStatus(msg));
+    // A photo taken with the phone held sideways arrives as a landscape frame
+    // and reads as nothing, so it is turned upright first. Which way to turn it
+    // is not in the file, and turning it the wrong way is exactly as useless as
+    // not turning it — so one read buys one direction and the second is only
+    // spent when the engine was unsure of the first. Measured on the same
+    // receipt: right way up 92-93, wrong way up 42-44.
+    //
+    // The threshold only decides whether to *spend* a second read, never which
+    // answer to keep — the better of the two wins either way. That matters,
+    // because a real receipt in poor light can score 30 the right way up, and a
+    // threshold that discarded those would be worse than one that costs an extra
+    // pass.
+    const fromCamera = typeof isPDF !== 'function' || !isPDF(prepared.source);
+    const frame = fromCamera
+      ? await uprightReceiptFrame(prepared.source, 'cw')
+      : { file: prepared.source, turned: false };
+    let text = await runOCRWithTimeout(frame.file, (msg) => setOcrStatus(msg));
+    let kept = lastReadConfidence;
+    if (frame.turned && kept < OCR_TURN_TRUST) {
+      setOcrStatus('That photo is sideways — reading it the other way round…');
+      const other = await uprightReceiptFrame(prepared.source, 'ccw');
+      const otherText = await runOCRWithTimeout(other.file, (msg) => setOcrStatus(msg));
+      if (lastReadConfidence > kept) {
+        // The other way round it is: a clearer read of the same frame.
+        text = otherText;
+        kept = lastReadConfidence;
+      }
+    }
     const title = guessTitleFromText(text);
     const amount = guessAmountFromText(text);
     const date = guessDateFromText(text);

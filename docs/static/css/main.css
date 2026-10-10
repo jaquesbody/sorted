@@ -6,6 +6,12 @@
 :root {
   color-scheme: dark;
   --bg: #0d0d0f;
+  /* The page's own padding, and how far down from the top of the viewport a
+     fixed top row pins. Desktop has no fixed bar, so the row pins wherever it
+     starts — which is one page padding down. */
+  --content-pad: 30px;
+  --toolbar-chrome: 0px;
+  --toolbar-top: calc(var(--toolbar-chrome) + var(--content-pad));
   --bg-surface: #1a1a1f;
   --bg-card: #222228;
   --text-primary: #f0f0f5;
@@ -929,6 +935,47 @@ body {
   align-items: center;
   gap: 10px;
   margin-bottom: 15px;
+}
+
+/* The page's own top row, kept on screen while the page moves.
+   --------------------------------------------------------------------------
+   The month navigator, the report range chips and the page's buttons are the
+   controls that make the decision about what the list *is*, and they used to
+   scroll away with it — read a month's spending and you would have to scroll
+   back to the top to see a different month's.
+
+   It sticks, so the control stays beside what it is controlling. The strip of
+   page above it — the content's own padding — is covered by the pseudo-element
+   below, so content scrolling past is not shown through the seam.
+
+   The background is a pseudo-element rather than padding on the row itself,
+   which is what it was first: padding grows the row's padding box, and the
+   dashboard's sync button is centred on exactly that box (`top: 50%`), so it
+   drifted 15px out of line with the month navigator beside it and the row's own
+   contents moved down. The row's box is left exactly the size it always was.
+
+   The document scrolls (nothing between `.content` and the body carries an
+   overflow), which is what makes sticky available here at all — inside a
+   scrolling container it would stick to that container's edge instead, and a
+   modal's list is exactly that case.
+   ----------------------------------------------------------------------- */
+.page-toolbar--fixed {
+  position: sticky;
+  top: var(--toolbar-top, var(--content-pad, 30px));
+  z-index: 20;
+  background: var(--bg);
+}
+
+.page-toolbar--fixed::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: var(--content-pad, 30px);
+  background: var(--bg);
+  /* Not a control: it is paint. */
+  pointer-events: none;
 }
 
 .page-toolbar--end {
@@ -2713,6 +2760,15 @@ body.is-locked {
     margin-left: 60px;
     margin-top: calc(52px + env(safe-area-inset-top, 0px));
     padding: 15px;
+  }
+
+  /* A phone has a fixed top bar, so a fixed top row pins below it — the bar's
+     height plus the page's own padding, which is where the row sits when the
+     page has not been scrolled at all. */
+  :root {
+    --content-pad: 15px;
+    --toolbar-chrome: calc(52px + env(safe-area-inset-top, 0px));
+    --toolbar-top: calc(var(--toolbar-chrome) + var(--content-pad));
   }
   
   .dashboard-grid {

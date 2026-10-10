@@ -31,6 +31,47 @@ const OCR_MAX_WIDTH = 2400;
 // runOCRWithTimeout's deadline only knows the pipeline is alive when something
 // reports. Called before the decode and again before the encode, because those
 // two are the slow parts and the encode is the slow one.
+// Turns a photo taken with the phone held sideways.
+//
+// The camera stores what the sensor saw, and a phone held landscape stores a
+// landscape frame — which is a receipt photograph with the roll running along
+// the frame's long edge and every line of text standing on its side. Measured,
+// the same receipt upright and turned scores 1/1/1 against 0/0/0 for title,
+// amount and date: Tesseract returns the *shapes* of the letters and none of
+// their meaning, so "TOTAL GBP 11.78" comes back as "=EEootaliz iss". Nothing
+// about a rotated read is a near miss; it is nothing.
+//
+// Which way to turn it is not in the file. A phone held with its top pointing
+// left needs the opposite turn from one held with its top pointing right, and
+// neither carries a tag saying which — the frame is simply landscape. So the
+// caller turns it one way, reads it, and turns it the other way if the first
+// read as nothing. One extra pass on a badly framed photo, none on a good one.
+async function uprightReceiptFrame(file, turn) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    if (bitmap.width <= bitmap.height) return { file, turned: false };
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.height;
+    canvas.height = bitmap.width;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    // White, not transparent: a transparent corner reads as black ink.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(turn === 'ccw' ? -Math.PI / 2 : Math.PI / 2);
+    ctx.drawImage(bitmap, -bitmap.width / 2, -bitmap.height / 2);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    if (!blob) return { file, turned: true };
+    return { file: blob, turned: true };
+  } catch (err) {
+    // A receipt that reads badly is better than a receipt that reads as an error.
+    console.warn('Receipt could not be turned upright:', err);
+    return { file, turned: false };
+  } finally {
+    if (typeof bitmap.close === 'function') bitmap.close();
+  }
+}
+
 async function preprocessForOCR(file, onTick) {
   try {
     if (onTick) onTick('Preparing the photo…');
@@ -221,6 +262,7 @@ async function runOCR(imageFile, onProgress, onWorker) {
   try {
     const out = await worker.recognize(prepared);
     text = out.data.text;
+    lastReadConfidence = Number(out.data.confidence) || 0;
   } catch (err) {
     ocrReading = false;
     // Not kept for next time. Whatever just went wrong, this worker is now
@@ -232,6 +274,13 @@ async function runOCR(imageFile, onProgress, onWorker) {
   // Left alive on purpose: the next receipt should not pay for it again.
   return text;
 }
+
+// How sure the engine was about the read it just finished, in its own units
+// (0-100). Set on every read and read only by the caller that has to choose
+// between two of them — the sideways-photo case in app.js. Not returned with the
+// text, because the text is what every other caller wants and this is a property
+// of the *read* rather than of the receipt.
+let lastReadConfidence = 0;
 
 // A read in flight must not have its worker taken away. Android suspends the
 // WebView when the app is backgrounded, which is why the worker used to be
