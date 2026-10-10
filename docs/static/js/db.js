@@ -284,7 +284,11 @@ async function markDuePaid(dueItem, payerId) {
     // dated the same day whenever the following month had been entered by hand,
     // and the month's total counted that bill twice.
     const next = nextDueDate(rest.dueDate, dueItem.frequency);
-    const already = (await getAll('due')).some((r) => r.dueDate === next);
+    // A bill told to stop stops: no fresh row is left behind for a month that
+    // is past the last one the user chose, so paying the final month ends it
+    // instead of quietly carrying it forward.
+    const pastEnd = dueItem.repeatUntil && next > dueItem.repeatUntil;
+    const already = pastEnd || (await getAll('due')).some((r) => r.dueDate === next);
     if (!already) {
       await addItem('due', {
         ...rest,

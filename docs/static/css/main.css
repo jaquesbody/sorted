@@ -2528,6 +2528,14 @@ body.is-locked {
   vertical-align: middle;
 }
 
+/* The dot naming who owns a row, sitting after the title it belongs to rather
+   than out among the row's buttons, where it would read as part of whichever
+   control it happened to precede. */
+.item-title .person-dot {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
 .person-chip {
   display: inline-flex;
   align-items: center;

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.54.0';
+const APP_VERSION = '2.55.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -518,6 +518,11 @@ if (IS_NATIVE) {
 let resumeRenderedAt = 0;
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  // A read in flight owns the receipt panel. Re-rendering it here wipes the
+  // status line and the thumbnail for a read that is still running, and the
+  // flow that produces this event is the photo picker — the same flow that
+  // starts the read.
+  if (typeof isOcrReading === 'function' && isOcrReading()) return;
   // Android fires this more than once for a single return to the app, and
   // re-rendering the heaviest page on each one is the last thing a phone needs.
   const now = Date.now();
@@ -979,7 +984,7 @@ async function materialiseBillsForMonth(dueItems, viewDate) {
     if (item.paid === true) continue;
     const frequency = frequencyOf(item);
     if (!frequency) continue;
-    const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate);
+    const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate, item.repeatUntil);
     if (!occurrence || occurrence === item.dueDate) continue;
     if (created.includes(item.title)) continue;
     if (dueItems.some((r) => r.dueDate === occurrence && r.title === item.title)) continue;
@@ -1048,7 +1053,7 @@ function projectionsForMonth(items, viewDate, dateKey) {
     const frequency = frequencyOf(item);
     if (!frequency) continue;
     const stored = item[dateKey];
-    const occurrence = occurrenceInMonth(stored, frequency, viewDate);
+    const occurrence = occurrenceInMonth(stored, frequency, viewDate, item.repeatUntil);
     if (!occurrence || occurrence === stored) continue;
     // Another row already holds this date and this name, so the occurrence is
     // real and not a forecast. Without this, a month whose bills have been
@@ -1082,11 +1087,37 @@ function projectionsForMonth(items, viewDate, dateKey) {
 
 const RECURRING_HORIZON_MONTHS = 12;
 
+// The third choice opens a calendar for the last month a bill should be rolled
+// into. "Cancelled my subscription in June" was a thing people had to remember
+// by hand, and a bill that keeps rolling after that is a bill that keeps
+// appearing in the forecast for a thing nobody pays any more.
 const FREQUENCY_CHOICES = [
   { value: 'no', label: 'No' },
   { value: 'monthly', label: 'Yes, monthly' },
-  { value: 'annually', label: 'Yes, annually' }
+  { value: 'annually', label: 'Yes, annually' },
+  { value: 'until', label: 'Yes, until this date' }
 ];
+
+// The period, asked again only for the choice that needs a second answer. "Yes,
+// until this date" says when a bill stops but not how often it runs in the
+// meantime, and assuming monthly would quietly turn a yearly bill into twelve
+// of them the first time someone gave it an end date. The wording repeats the
+// dropdown's own so it reads as the same choice.
+const REPEAT_PERIODS = [
+  { value: 'monthly', label: 'Every month' },
+  { value: 'annually', label: 'Every year' }
+];
+
+// The frequency a form answer really means. 'until' is not a frequency — it is
+// a bill with an end date, so it answers "how often" from the period beside the
+// calendar and "until when" from the date. Falling back to monthly there would
+// quietly turn a yearly bill into twelve of them the first time someone gave it
+// an end date.
+function frequencyFromChoice(choice, period) {
+  if (choice === 'no') return null;
+  if (choice === 'until') return period === 'annually' ? 'annually' : 'monthly';
+  return choice;
+}
 
 // Monthly is the fallback for anything that was already flagged recurring.
 function frequencyOf(item) {
@@ -1098,11 +1129,32 @@ function isRecurring(item) {
   return frequencyOf(item) !== null;
 }
 
+// How the frequency badge reads. A bill told to stop says so, because
+// "Monthly" on its own promises it goes on for ever, and the row is the only
+// place the end date can be seen without reopening the form.
+function repeatLabel(item) {
+  const base = item.frequency === 'annually' ? 'Yearly' : 'Monthly';
+  if (!item.repeatUntil) return base;
+  const date = new Date(item.repeatUntil);
+  const safe = isNaN(date) ? '' : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return safe ? `${base} · until ${safe}` : base;
+}
+
 // The ISO date this item would land on in the month on screen, or null if it
 // doesn't land there. Day-of-month is preserved and clamped to the target
 // month's length, so the 31st still means "the 31st" except where there isn't
 // one, exactly as the stored roll-forward already does.
-function occurrenceInMonth(startDate, frequency, viewDate) {
+//
+// `until` is the last date a recurring bill should land on. Without it, a
+// cancelled subscription keeps appearing in every month ahead of it for the
+// rest of the forecast — a bill nobody pays any more. The date itself decides,
+// not just its month: choosing the 5th means a bill that lands on the 10th does
+// not come again, which is what picking a date on a calendar promises.
+//
+// The item's own month is exempt. That row is stored, real money that was
+// already promised, and muting it would make the bill look like it vanished
+// rather than stopped.
+function occurrenceInMonth(startDate, frequency, viewDate, until) {
   if (!startDate || !frequency) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
   if (!m) return null;
@@ -1119,7 +1171,9 @@ function occurrenceInMonth(startDate, frequency, viewDate) {
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth() + 1;
   const lastDay = new Date(year, month, 0).getDate();
-  return localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
+  const occurrence = localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
+  if (until && occurrence > until) return null;               // the bill has stopped by then
+  return occurrence;
 }
 
 
@@ -1652,7 +1706,7 @@ function renderSpendItems(items, total) {
             <div class="item-meta">${formatDate(item.date)}</div>
             <div class="item-meta item-meta--sub">
               ${escapeHTML(item.category)}
-              ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
+              ${isRecurring(item) ? `<span class="badge badge-recurring">${repeatLabel(item)}</span>` : ''}
               ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
             </div>
           </div>
@@ -1886,7 +1940,7 @@ async function renderDue(container) {
                 <div class="item-meta">${formatDate(item.dueDate)} <span class="item-timing${isPaid ? ' item-timing--paid' : ''}">· ${billTiming(item, isPaid)}</span></div>
                 <div class="item-meta item-meta--sub">
                   ${escapeHTML(item.category)}
-                  ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
+                  ${isRecurring(item) ? `<span class="badge badge-recurring">${repeatLabel(item)}</span>` : ''}
                   ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
                 </div>
               </div>
@@ -2041,7 +2095,7 @@ function renderAccountRow(row) {
     <div class="item-row item-row--lines item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
       <div class="item-row-main">
         <div class="item-info">
-          <div class="item-title">${escapeHTML(row.name)}</div>
+          <div class="item-title">${escapeHTML(row.name)}${personDot(personById(row.personId))}</div>
           <div class="item-meta">${escapeHTML(accountTypeLabel(row.type))}</div>
           <div class="item-meta item-meta--sub">
             <span class="item-timing">${[
@@ -3249,7 +3303,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     }
     for (const key of months) {
       const [yy, mm] = key.split('-').map(Number);
-      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1));
+      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1), item.repeatUntil);
       if (occurrence && occurrence > localISO(today)) add(plannedIncome, occurrence, item.amount);
     }
   }
@@ -4397,10 +4451,19 @@ function buildForm(type, editId = null, existingCategory = null) {
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Repeats</label>
-          <select class="form-input" id="form-recurring">
+          <label class="form-label" for="form-recurring">Repeats</label>
+          <select class="form-input" id="form-recurring" onchange="onRepeatChoiceChange()">
             ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}">${f.label}</option>`).join('')}
           </select>
+          <div id="form-recurring-until" hidden>
+            <label class="form-label" for="form-repeatFrequency">Repeats</label>
+            <select class="form-input" id="form-repeatFrequency">
+              ${REPEAT_PERIODS.map((p) => `<option value="${p.value}">${p.label}</option>`).join('')}
+            </select>
+            <label class="form-label" for="form-repeatUntil" style="margin-top: 10px;">Last date it repeats</label>
+            <input type="date" class="form-input" id="form-repeatUntil">
+            <p class="setting-hint" style="margin: 4px 0 0;">Nothing is rolled into a month past this date. Bills already paid stay where they are.</p>
+          </div>
         </div>
       </div>
       ${personHtml}
@@ -4451,6 +4514,16 @@ function openAddModal(type) {
   if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
 
+// The calendar that "Yes, until this date" opens. Anything else hides it: a
+// control that was there for one choice and stayed for the others is a control
+// nobody trusts.
+function onRepeatChoiceChange() {
+  const sel = document.getElementById('form-recurring');
+  const wrap = document.getElementById('form-recurring-until');
+  if (!sel || !wrap) return;
+  wrap.hidden = sel.value !== 'until';
+}
+
 async function openEditModal(type, id) {
   const item = await getItem(type, id);
   if (!item) return;
@@ -4482,7 +4555,17 @@ function prefillForm(item) {
   const recurring = document.getElementById('form-recurring');
   // A row that was saved with the old yes/no flag has no frequency, but it
   // still repeats — monthly is what "yes" meant.
-  if (recurring) recurring.value = frequencyOf(item) || 'no';
+  if (recurring) {
+    recurring.value = item.repeatUntil ? 'until' : (frequencyOf(item) || 'no');
+    onRepeatChoiceChange();
+  }
+  // The end date brings its period back with it: an annual bill told to stop in
+  // March is annual until March, and showing "Every month" instead would have
+  // anyone who saved it turn one bill into twelve.
+  const repeatUntil = document.getElementById('form-repeatUntil');
+  if (repeatUntil && item.repeatUntil) repeatUntil.value = item.repeatUntil;
+  const repeatFrequency = document.getElementById('form-repeatFrequency');
+  if (repeatFrequency) repeatFrequency.value = frequencyOf(item) || 'monthly';
   setVal('form-person', item.personId || '');
   setVal('form-account', item.accountId || '');
 }
@@ -4760,13 +4843,20 @@ async function saveItem(type, editId = null) {
   // offers the choice, so editing one can't quietly strip its frequency.
   const repeatField = document.getElementById('form-recurring');
   if (type !== 'savings' && repeatField) {
-    const repeatChoice = repeatField.value;
+    const choice = repeatField.value;
+    const period = document.getElementById('form-repeatFrequency');
     // `recurring` is kept alongside the frequency so everything that already
     // reads the boolean (the pay-a-bill roll-forward, the recurring filters,
     // the Reports breakdowns) keeps working without a second pass over stored
     // data.
-    fields.frequency = repeatChoice === 'no' ? null : repeatChoice;
-    fields.recurring = repeatChoice !== 'no';
+    fields.frequency = frequencyFromChoice(choice, period ? period.value : null);
+    fields.recurring = choice !== 'no';
+    const repeatUntil = document.getElementById('form-repeatUntil');
+    // The end date is only kept for the choice that owns it. Picking "No" or a
+    // plain period is how someone takes an end date off, and leaving the old
+    // one behind would have the bill keep stopping after they said it doesn't.
+    fields.repeatUntil = (choice === 'until' && repeatUntil && repeatUntil.value)
+      ? repeatUntil.value : null;
   }
   // Written only when the panel actually changed: an edit that leaves it alone
   // leaves the stored image alone (the merge below keeps it), and a removed

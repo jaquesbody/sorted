@@ -178,7 +178,10 @@ async function getOcrWorker(onProgress) {
   return worker;
 }
 
+let ocrReading = false;
+
 async function runOCR(imageFile, onProgress, onWorker) {
+  ocrReading = true;
   // Every stage announces itself, and not only for the person watching. The
   // deadline below can only tell "working" from "stuck" by being told
   // something, and the spans between Tesseract's own reports — loading the
@@ -192,7 +195,9 @@ async function runOCR(imageFile, onProgress, onWorker) {
   try {
     worker = await getOcrWorker(onProgress);
   } catch (err) {
-    // A half-built worker is not a worker. Next receipt starts clean.
+    // A half-built worker is not a worker. Next receipt starts clean, and the
+    // read is over so the guard on dropping it can be released.
+    ocrReading = false;
     dropOcrWorker();
     throw err;
   }
@@ -217,25 +222,36 @@ async function runOCR(imageFile, onProgress, onWorker) {
     const out = await worker.recognize(prepared);
     text = out.data.text;
   } catch (err) {
+    ocrReading = false;
     // Not kept for next time. Whatever just went wrong, this worker is now
     // suspect, and holding on to it would have the next receipt repeat it.
     dropOcrWorker();
     throw err;
   }
+  ocrReading = false;
   // Left alive on purpose: the next receipt should not pay for it again.
   return text;
 }
 
-// Android suspends the WebView when the app is backgrounded, which kills the
-// worker, and the picker and the camera both background the app — a receipt is
-// chosen by leaving Sorted and coming back. So the worker is dropped on the way
-// out and rebuilt when it is next needed, rather than held as a reference to
-// something that has already gone.
+// A read in flight must not have its worker taken away. Android suspends the
+// WebView when the app is backgrounded, which is why the worker used to be
+// dropped on the way out — the picker and the camera both background the app,
+// so a receipt is chosen by leaving Sorted and coming back. But dropping it
+// *while it is reading* kills the recognition: terminate() on a worker that
+// has a recognize() in flight never lets that call answer, the deadline fires
+// and the user is told the read stopped, for a photo they took by leaving the
+// app. So the drop only happens when there is nothing to interrupt: it is
+// guarded on this flag, and app.js reads the same one to keep a return to the
+// foreground from re-rendering the panel the read is talking through.
+function isOcrReading() {
+  return ocrReading;
+}
+
 if (typeof document !== 'undefined') {
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') dropOcrWorker();
+    if (document.visibilityState === 'hidden' && !ocrReading) dropOcrWorker();
   });
-  window.addEventListener('pagehide', dropOcrWorker);
+  window.addEventListener('pagehide', () => { if (!ocrReading) dropOcrWorker(); });
 }
 
 // Recognition is slow because a phone is not a desk, not because the photo is
