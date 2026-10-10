@@ -948,6 +948,15 @@ body {
    page above it — the content's own padding — is covered by the pseudo-element
    below, so content scrolling past is not shown through the seam.
 
+   And the strip *below* it is painted too. The row's own `margin-bottom` is a
+   gap in the flow, and a gap in the flow scrolls: with nothing painted beneath
+   the row, a list scrolls up until its first row touches the row's bottom edge,
+   which is what "everything is touching the very bottom of the fixed row" was
+   reporting. Painting the same gap means content is occluded before it gets
+   there, so the separation survives every scroll position. Measured on the
+   Spend tab: without it, the next row sat 285px *behind* the row's bottom edge;
+   with it, it stops 15px short.
+
    The background is a pseudo-element rather than padding on the row itself,
    which is what it was first: padding grows the row's padding box, and the
    dashboard's sync button is centred on exactly that box (`top: 50%`), so it
@@ -964,6 +973,23 @@ body {
   top: var(--toolbar-top, var(--content-pad, 30px));
   z-index: 20;
   background: var(--bg);
+}
+
+/* The gap below the row, painted, so content stops short of it rather than
+   running into it. The height is the row's own margin-bottom — the gap it
+   already has in the flow — so nothing is painted over content that would
+   otherwise be visible, and the row's box is not changed by having it. */
+.page-toolbar--fixed::after {
+  content: '';
+  position: absolute;
+  /* A sticky element is positioned, so it is the containing block for this. */
+  top: 100%;
+  left: 0;
+  right: 0;
+  height: 15px;
+  background: var(--bg);
+  /* Paint, not a control. */
+  pointer-events: none;
 }
 
 .page-toolbar--fixed::before {
