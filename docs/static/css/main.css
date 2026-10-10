@@ -1844,6 +1844,51 @@ body {
   transition: border-color 0.15s ease;
 }
 
+/* The titles the user has already entered, offered under the title box.
+   In flow rather than floating: the modal it sits in scrolls
+   (`overflow-y: auto`, 80vh), and a positioned list gets clipped by the very
+   container it has to appear over. Opening it pushes the rest of the form
+   down, which is the honest way to say "here are more answers" without
+   covering the ones already below. */
+.title-suggestions {
+  margin-top: 6px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-y: auto;
+  /* Tall enough for a few to choose from, short enough that the Save button
+     stays on screen with the keyboard up on a phone. */
+  max-height: 176px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.title-suggestion {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* The last row keeps its border against the panel's own, which is the same
+     colour — so the list reads as one card. */
+  border-radius: 0;
+}
+
+.title-suggestion:last-child {
+  border-bottom: none;
+}
+
+.title-suggestion:hover,
+.title-suggestion:focus-visible {
+  background: var(--accent-muted);
+  outline: none;
+}
+
 /* A picker inside a settings row. The default form input is a full-width field
    for a form; here it sits beside a switch on one line, so it is sized to its
    own content and allowed to shrink rather than pushing the switch off the

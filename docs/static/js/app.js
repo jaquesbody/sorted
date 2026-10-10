@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.55.0';
+const APP_VERSION = '2.56.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1131,13 +1131,17 @@ function isRecurring(item) {
 
 // How the frequency badge reads. A bill told to stop says so, because
 // "Monthly" on its own promises it goes on for ever, and the row is the only
-// place the end date can be seen without reopening the form.
+// place the end date can be seen without reopening the form. The year is
+// short because the row has no room for a long one: "until 31 Jan 27".
 function repeatLabel(item) {
   const base = item.frequency === 'annually' ? 'Yearly' : 'Monthly';
   if (!item.repeatUntil) return base;
   const date = new Date(item.repeatUntil);
-  const safe = isNaN(date) ? '' : date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  return safe ? `${base} · until ${safe}` : base;
+  if (isNaN(date)) return base;
+  const day = date.getDate();
+  const month = date.toLocaleDateString('en-GB', { month: 'short' });
+  const year = String(date.getFullYear()).slice(-2);
+  return `${base} · until ${day} ${month} ${year}`;
 }
 
 // The ISO date this item would land on in the month on screen, or null if it
@@ -4375,6 +4379,23 @@ function buildForm(type, editId = null, existingCategory = null) {
   // removed after the entry is saved.
   const receiptHtml = (type === 'spend' || type === 'due') ? `
       <div class="receipt-panel" id="receipt-panel"></div>` : '';
+
+  // The title box offers what this user has already called things. A household
+  // writes "Electricity bill" eleven times a year, and typing it every time is
+  // the slowest step in recording it. The suggestions come from their own rows
+  // on this device — no network, and nothing searched on a server that does not
+  // exist.
+  //
+  // The panel underneath is built by initTitleSuggestions once the modal is up,
+  // because the list is read from the stores and this function is not async.
+  const titleInput = (label, placeholder) => `
+      <div class="form-group">
+        <label class="form-label" for="form-title">${label}</label>
+        <input type="text" class="form-input" id="form-title" placeholder="${placeholder}"
+               autocomplete="off" spellcheck="false" role="combobox"
+               aria-expanded="false" aria-controls="title-suggestions" aria-autocomplete="list">
+        <div class="title-suggestions" id="title-suggestions" hidden></div>
+      </div>`;
   // Who this entry belongs to. Pre-filled with whoever is currently using the
   // app, so the common case is no taps at all and the odd case (adding a
   // bill in someone else's name) is one dropdown away.
@@ -4404,8 +4425,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     spend: `
       ${receiptHtml}
       <div class="form-group">
-        <label class="form-label">Title</label>
-        <input type="text" class="form-input" id="form-title" placeholder="e.g., Electricity bill">
+        ${titleInput('Title', 'e.g., Electricity bill')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -4430,8 +4450,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     due: `
       ${receiptHtml}
       <div class="form-group">
-        <label class="form-label">Title</label>
-        <input type="text" class="form-input" id="form-title" placeholder="e.g., Mortgage payment">
+        ${titleInput('Title', 'e.g., Mortgage payment')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -4462,7 +4481,6 @@ function buildForm(type, editId = null, existingCategory = null) {
             </select>
             <label class="form-label" for="form-repeatUntil" style="margin-top: 10px;">Last date it repeats</label>
             <input type="date" class="form-input" id="form-repeatUntil">
-            <p class="setting-hint" style="margin: 4px 0 0;">Nothing is rolled into a month past this date. Bills already paid stay where they are.</p>
           </div>
         </div>
       </div>
@@ -4472,8 +4490,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     `,
     savings: `
       <div class="form-group">
-        <label class="form-label">Goal Name</label>
-        <input type="text" class="form-input" id="form-title" placeholder="e.g., Holiday fund">
+        ${titleInput('Goal Name', 'e.g., Holiday fund')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -4500,11 +4517,13 @@ function buildForm(type, editId = null, existingCategory = null) {
   return forms[type];
 }
 
-function openAddModal(type) {
+async function openAddModal(type) {
   if (type !== 'spend' && type !== 'due') currentReceipt = null;
   receiptRemoved = false;
   ocrStatusText = '';
+  const suggestions = await titleSuggestions(type);
   openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type));
+  initTitleSuggestions(suggestions);
   // Default to whoever is using the app, rather than making the common case
   // a dropdown trip every time.
   const personEl = document.getElementById('form-person');
@@ -4517,9 +4536,92 @@ function openAddModal(type) {
 // The calendar that "Yes, until this date" opens. Anything else hides it: a
 // control that was there for one choice and stayed for the others is a control
 // nobody trusts.
+// Titles this user has already entered, most used first and most recent first
+// as the tie-break — the box should offer what they type most, not everything
+// alphabetical. Only the type being edited: a bill's history is not a useful
+// answer to "what did I spend on?", and two lists would be two things to learn.
+async function titleSuggestions(type, limit = 50) {
+  if (type !== 'spend' && type !== 'due') return '';
+  const rows = await getAll(type);
+  const seen = new Map();
+  for (const row of rows) {
+    const text = String(row.title || '').trim();
+    if (!text) continue;
+    const entry = seen.get(text) || { n: 0, last: '' };
+    entry.n += 1;
+    const when = row.date || row.dueDate || row.updatedAt || row.createdAt || '';
+    if (when > entry.last) entry.last = when;
+    seen.set(text, entry);
+  }
+  return [...seen.entries()]
+    .sort((a, b) => b[1].n - a[1].n || (b[1].last < a[1].last ? -1 : 1))
+    .slice(0, limit)
+    .map(([text]) => text);
+}
+
+// The panel under the title box. It appears in flow rather than floating over
+// the form, because the modal scrolls (`overflow-y: auto`, 80vh) and an
+// absolutely-positioned list is clipped by the very container it has to appear
+// over. It opens on focus with what is most used and narrows as the user types,
+// so the answer is there to be taken without anyone having to guess the box is
+// a search box.
+//
+// This is done by hand rather than with a datalist: the native popup's
+// behaviour differs between WebView versions, and a suggestion nobody can see
+// is not a suggestion.
+function initTitleSuggestions(titles) {
+  const input = document.getElementById('form-title');
+  const panel = document.getElementById('title-suggestions');
+  if (!input || !panel || !titles.length) return;
+
+  const all = titles;
+  const render = (filter) => {
+    const want = String(filter || '').trim().toLowerCase();
+    const matches = want
+      ? all.filter((t) => t.toLowerCase().includes(want)).slice(0, 8)
+      : all.slice(0, 8);
+    if (!matches.length) { hide(); return; }
+    panel.innerHTML = matches.map((t) => (
+      `<button type="button" class="title-suggestion" role="option"
+               aria-selected="false" data-title="${escapeHTML(t)}">${escapeHTML(t)}</button>`
+    )).join('');
+    panel.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+  };
+  const hide = () => {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+  };
+
+  input.addEventListener('focus', () => render(input.value));
+  input.addEventListener('input', () => render(input.value));
+  panel.addEventListener('click', (e) => {
+    const row = e.target.closest('.title-suggestion');
+    if (!row) return;
+    input.value = row.dataset.title;
+    // No synthetic input event: it would re-run the filter and put the panel
+    // straight back up for the value that was just chosen.
+    hide();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !panel.hidden) { e.stopPropagation(); hide(); }
+  });
+  // A tap anywhere else is a decision to be typing, not choosing.
+  document.addEventListener('pointerdown', (e) => {
+    if (!panel.hidden && !panel.contains(e.target) && e.target !== input) hide();
+  });
+  // Blur waits a beat: the tap that follows it has to reach the button before
+  // the panel goes away, or the first suggestion can never be picked.
+  input.addEventListener('blur', () => setTimeout(hide, 150));
+  // Unclaimed handler, so the panel is available to the tests and to anything
+  // else that opens the same form.
+  input.__titleSuggest = { render, hide };
+}
+
 function onRepeatChoiceChange() {
-  const sel = document.getElementById('form-recurring');
   const wrap = document.getElementById('form-recurring-until');
+  const sel = document.getElementById('form-recurring');
   if (!sel || !wrap) return;
   wrap.hidden = sel.value !== 'until';
 }
@@ -4532,8 +4634,11 @@ async function openEditModal(type, id) {
   currentReceipt = item.receipt || null;
   receiptRemoved = false;
   ocrStatusText = '';
-  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type, id, item.category));
+  const suggestions = await titleSuggestions(type);
+  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`,
+    buildForm(type, id, item.category));
   prefillForm(item);
+  initTitleSuggestions(suggestions);
   if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
 
@@ -4892,20 +4997,32 @@ async function saveItem(type, editId = null) {
       // version) survive an edit.
       const merged = { ...existing, ...fields, id: editId };
       await updateItem(type, merged);
-      // A recurring bill is one bill held in many months. Changing its category
-      // on one row and leaving the rest meant the breakdowns below reported the
-      // same bill under two headings, and each month stepped forward quietly
-      // moved money between them — which is what "changing a category does not
-      // update future or past items" was costing the reports.
-      if (type === 'due' && fields.category !== undefined
-          && fields.category !== existing.category) {
-        const title = String(existing.title || '').trim();
-        if (title) {
-          const chain = await getAll('due');
-          for (const row of chain) {
-            if (row.id === editId || String(row.title || '').trim() !== title) continue;
-            if (row.category === fields.category) continue;
-            await updateItem('due', { ...row, category: fields.category });
+      // A recurring bill is one bill held in many months. Changing what the form
+      // chooses about it — its category, or whose it is — on one row and leaving
+      // the rest meant the breakdowns below reported the same bill under two
+      // headings, and each month stepped forward quietly moved money between
+      // them.
+      if (type === 'due') {
+        // A bill is one bill held in many months, and the form chooses two
+        // things about it: what it is and whose it is. Leaving the rest of the
+        // chain on the old answer split one bill across two people or two
+        // headings — "Who Spent What" then showed Sarah paying electricity in
+        // June and nobody in July, which is what "changing a category does not
+        // update future or past items" was costing the reports.
+        const personBefore = existing.personId || null;
+        const personAfter = fields.personId || null;
+        if ((fields.category !== undefined && fields.category !== existing.category)
+            || personBefore !== personAfter) {
+          const title = String(existing.title || '').trim();
+          if (title) {
+            const chain = await getAll('due');
+            for (const row of chain) {
+              if (row.id === editId || String(row.title || '').trim() !== title) continue;
+              const patch = {};
+              if (row.category !== fields.category) patch.category = fields.category;
+              if ((row.personId || null) !== personAfter) patch.personId = personAfter;
+              if (Object.keys(patch).length) await updateItem('due', { ...row, ...patch });
+            }
           }
         }
       }
