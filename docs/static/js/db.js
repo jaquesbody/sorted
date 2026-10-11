@@ -288,7 +288,14 @@ async function markDuePaid(dueItem, payerId) {
     // is past the last one the user chose, so paying the final month ends it
     // instead of quietly carrying it forward.
     const pastEnd = dueItem.repeatUntil && next > dueItem.repeatUntil;
-    const already = pastEnd || (await getAll('due')).some((r) => r.dueDate === next);
+    // ...and the check is for *this bill*. It used to ask whether anything at
+    // all was due that day, so paying Rent while Council Tax already sat on next
+    // month's date left Rent with no next row and the series quietly stopped —
+    // a bill that simply never appears again, with nothing on screen to say so.
+    // materialiseBillsForMonth keys on the title for exactly this reason.
+    const title = String(rest.title || '').trim();
+    const already = pastEnd || (await getAll('due'))
+      .some((r) => r.dueDate === next && String(r.title || '').trim() === title);
     if (!already) {
       await addItem('due', {
         ...rest,
@@ -465,7 +472,13 @@ function sanitizeItem(storeName, item) {
   out.accountId = item.accountId || null;
 
   out.title = str(item.title).slice(0, 100);
-  if (!out.title) return null;
+  // A title is required of the entries that are shown as lines — spend and
+  // bills. It used to be required of *everything*, which quietly meant the
+  // savings top-ups were thrown away on every import and every sync pull: a
+  // top-up is a note against somebody else's row and has no title of its own,
+  // so every one was dropped and the Total Money card forgot which month each
+  // contribution arrived in. The stores that need a name say so themselves.
+  if ((storeName === 'spend' || storeName === 'due') && !out.title) return null;
   out.category = str(item.category).slice(0, 60) || 'General';
 
   if (storeName === 'spend' || storeName === 'due') {
@@ -505,6 +518,21 @@ function sanitizeItem(storeName, item) {
     if (typeof item.monthly === 'number' && Number.isFinite(item.monthly) && item.monthly >= 0) {
       out.monthly = Math.round(item.monthly * 100) / 100;
     }
+  } else if (storeName === 'savingsTopUps') {
+    // A record of money actually put into a goal, and the only thing that tells
+    // the Total Money card which month it arrived in. It carries no title — it
+    // is a note against somebody else's row — and the generic tail below
+    // requires one, so without this branch every one of these was dropped on
+    // every import and every sync pull, and the card silently forgot the month
+    // of every contribution. The goal it names is remapped by stripSourceId.
+    const delta = num(item.delta);
+    const date = isoDate(item.date);
+    // A top-up with no money in it is not a top-up. A goal it can't name is not
+    // a note about anything.
+    if (delta === null || delta <= 0 || !item.goalId) return null;
+    out.delta = delta;
+    out.goalId = String(item.goalId);
+    if (date) out.date = date;
   }
 
   if ('notes' in item) out.notes = str(item.notes).slice(0, 1000);
@@ -603,6 +631,14 @@ async function importDataToDB(data, mode = 'merge') {
   const personMap = idMaps.people.idMap;
   const accountMap = idMaps.accounts.idMap;
 
+  // A savings top-up names the goal it was paid into, and every goal is given a
+  // fresh id on import. The translation is filled in as the goals are written,
+  // because stripSourceId() mints each new id itself: a map built beforehand
+  // would hold ids nothing was ever stored under, and the notes would point at
+  // goals that don't exist — the same failure as losing them.
+  const goalIdMap = {};
+  const rememberGoalId = (from, to) => { if (from && to) goalIdMap[from] = to; };
+
   const remaining = STORES.filter((name) => name !== 'people' && name !== 'accounts');
 
   if (mode === 'replace') {
@@ -612,9 +648,10 @@ async function importDataToDB(data, mode = 'merge') {
       const store = tx.objectStore(storeName);
       store.clear();
       (usable[storeName] || []).forEach((item) => {
-        const record = stripSourceId(item, personMap, accountMap);
+        const record = stripSourceId(item, personMap, accountMap, goalIdMap);
         if (storeName === 'transfers' && (!record.fromId || !record.toId)) { skipped++; return; }
         store.add(record);
+        if (storeName === 'savings') rememberGoalId(item._sourceId, record.id);
         imported++;
       });
       await txDone(tx);
@@ -634,7 +671,7 @@ async function importDataToDB(data, mode = 'merge') {
         // transfer is visible and fixable, a balance that silently drifts
         // because of one is neither.
         if (storeName === 'transfers') {
-          const mapped = stripSourceId(item, personMap, accountMap);
+          const mapped = stripSourceId(item, personMap, accountMap, goalIdMap);
           if (!mapped.fromId || !mapped.toId || mapped.fromId === mapped.toId) { skipped++; return; }
           const key = importKeyOf(mapped);
           if (seen.has(key)) { skipped++; return; }
@@ -649,7 +686,9 @@ async function importDataToDB(data, mode = 'merge') {
           return;
         }
         seen.add(key);
-        store.add(stripSourceId(item, personMap, accountMap));
+        const record = stripSourceId(item, personMap, accountMap, goalIdMap);
+        store.add(record);
+        if (storeName === 'savings') rememberGoalId(item._sourceId, record.id);
         imported++;
       });
 
@@ -705,7 +744,7 @@ async function writeNamedStore(storeName, keyOf, rows, mode, inFile) {
 // new rows on this device, so they get a fresh id from the same generator
 // addItem() uses — leaving them to the store's counter would put numbers back
 // into a store that's meant to hold UUIDs.
-function stripSourceId(item, personMap, accountMap) {
+function stripSourceId(item, personMap, accountMap, goalIdMap) {
   const { _sourceId, ...rest } = item;
   if (personMap && 'personId' in rest) rest.personId = personMap[item.personId] || null;
   if (accountMap) {
@@ -715,6 +754,14 @@ function stripSourceId(item, personMap, accountMap) {
     // dropped rather than half-applied.
     if (rest.fromId !== undefined) rest.fromId = accountMap[rest.fromId] || null;
     if (rest.toId !== undefined) rest.toId = accountMap[rest.toId] || null;
+  }
+  // A savings top-up names the goal it was paid into, and every goal gets a
+  // fresh id on import. Left alone, every note points at a goal that no longer
+  // exists and the Total Money card's month walk-back is wrong for each of them
+  // — which is the same failure as losing the notes entirely, just quieter.
+  if ('goalId' in rest) {
+    rest.goalId = goalIdMap ? goalIdMap[item.goalId] || null : item.goalId;
+    if (!rest.goalId) return null;
   }
   return { id: newId(), ...rest };
 }

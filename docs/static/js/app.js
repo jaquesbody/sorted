@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.58.0';
+const APP_VERSION = '2.59.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -921,12 +921,22 @@ function spendingHistory(spendItems) {
   return spendItems.filter((i) => !isSettledBillPayment(i));
 }
 
+// Grouped by category. Built through a Map and converted once at the end,
+// because the keys are free text that can come from an imported file: a
+// category named `toString`, `__proto__` or `constructor` is not a shelf
+// ornament on a plain object, it is a lookup that returns a function — so the
+// total becomes a string, real money reads as £0.00, and `__proto__` vanishes
+// from the breakdown entirely. Object.fromEntries writes each key as an own
+// property, which is the one safe way to get a plain object out of this.
 function groupByCategory(items, amountKey) {
-  const totals = {};
+  const totals = new Map();
   items.forEach(item => {
-    totals[item.category] = (totals[item.category] || 0) + item[amountKey];
+    // A row saved before the category was required has none; calling it
+    // "undefined" in a report is not a description of anything.
+    const key = String(item.category == null || item.category === '' ? 'Uncategorised' : item.category);
+    totals.set(key, (totals.get(key) || 0) + (Number(item[amountKey]) || 0));
   });
-  return totals;
+  return Object.fromEntries(totals);
 }
 
 // Bills for the month on screen: what's due then, plus — while you're looking
@@ -5249,18 +5259,41 @@ async function toggleConfirm(type, id) {
 }
 
 // Putting a bill back to unpaid. Two shapes have to be handled: a settled row
-// from 2.8.3 onwards, and a payment copy left in Spend by the old model, where
-// undoing means deleting the copy and letting the bill come back.
-async function unpayBill(id) {
-  const bill = await getItem('due', id);
+// from 2.8.3 onwards, where undoing means clearing `paid`, and a payment copy
+// left in Spend by the old model, where undoing means deleting the copy so the
+// bill it paid for comes back as owing.
+//
+// The store has to come from the caller. Both stores use autoIncrement, so a
+// spend row's id and a due row's id can be the same number — looking a
+// pre-2.8.3 payment up in `due` finds whichever unrelated bill happens to share
+// that key and marks *it* unpaid, or finds nothing and the tap does nothing at
+// all. The row already carries the right store; it was being thrown away.
+async function unpayBill(id, store = 'due') {
+  const bill = await getItem(store, id);
+  if (store === 'spend') {
+    // The copy is the payment. Deleting it is what puts the bill back into
+    // what's owing; flipping `paid` instead would leave it as ordinary
+    // spending, which is a different thing entirely.
+    await deleteItem('spend', id);
+    showToast('Back to unpaid');
+    await renderPage();
+    refreshReminders();
+    return;
+  }
   if (bill && bill.paid === true) {
+    // A settled row from 2.8.3 onwards.
     await updateItem('due', { ...bill, paid: false });
     showToast('Back to unpaid');
     await renderPage();
     refreshReminders();
     return;
   }
-  const twin = (await getAll('spend')).find((s) => s.paid === true && s.dueDate === bill?.dueDate);
+  // A pre-2.8.3 payment: the copy in Spend, and the bill it paid for. Matched
+  // on the title as well as the date, because two bills can be due the same day
+  // and deleting the other one's payment would silently move money.
+  const twin = (await getAll('spend')).find((s) => s.paid === true
+    && s.dueDate === bill?.dueDate
+    && String(s.title || '').trim() === String(bill?.title || '').trim());
   if (twin) {
     await deleteItem('spend', twin.id);
     showToast('Back to unpaid');
@@ -6014,7 +6047,7 @@ document.getElementById('content').addEventListener('click', (e) => {
     const id = action.dataset.id;
     if (action.dataset.action === 'toggle') toggleConfirm(action.dataset.type, id);
     else if (action.dataset.action === 'paid') markPaid(id);
-    else if (action.dataset.action === 'unpaid') unpayBill(id);
+    else if (action.dataset.action === 'unpaid') unpayBill(id, action.dataset.type || 'due');
     else if (action.dataset.action === 'receipt') viewItemReceipt(action.dataset.type, id);
     else if (action.dataset.action === 'edit-receipt') openEditModal(action.dataset.type, id);
     return;
