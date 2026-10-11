@@ -412,12 +412,33 @@ const TOTAL_WORDS = [
   ['to pay', 90],
   ['net due', 88],
   ['balance due', 86],
-  ['balance', 70],
-  ['amount', 68],
-  ['total', 66],
+  // Plain `total` outranks the bare `balance` and `amount`, which it did not
+  // for a long time. Both bare words are what a loyalty scheme and a coupon
+  // print: "YOUR BALANCE 105.55" on a Nectar card and "AMOUNT SAVED 1.50" on a
+  // Sainsbury's coupon both beat the real "TOTAL 18.40", so the app recorded
+  // the points balance or the discount as what was spent. The compound forms —
+  // "balance due", "amount due" — are unambiguous and stay high, because they
+  // are how an invoice states it.
+  ['total', 72],
+  ['amount tendered', 66],
+  ['balance', 64],
+  ['amount', 62],
   ['subtotal', 30],
 ];
 const TOTAL_WEIGHTS = TOTAL_WORDS.map(([word, weight]) => [fuzzyWord(word), weight]);
+
+// Lines about a discount or a loyalty balance rather than what was owed. These
+// are excluded outright rather than demoted: "AMOUNT SAVED" carries the word
+// `amount` and "YOUR BALANCE" the word `balance`, and no weight low enough to
+// lose to every real total is low enough to stop one of them winning on a
+// receipt with no better line. Measured on a real Sainsbury's receipt.
+const NOT_A_TOTAL_LIST = [
+  'amount saved', 'you saved', 'total saved', 'saved', 'discount', 'voucher',
+  'coupon', 'points', 'your balance', 'balance forward', 'promotion',
+  'member price', 'offer',
+];
+const NOT_A_TOTAL = new RegExp(
+  `\\b(${NOT_A_TOTAL_LIST.map(fuzzyBody).join('|')})\\b`, 'i');
 
 // Words about how you paid rather than what you owed. The old fallback took the
 // largest number anywhere on the page, so any receipt with a CASH line returned
@@ -433,15 +454,53 @@ const TENDER_WORDS = new RegExp(
 
 // A money figure, preferring one with two decimal places. Also catches the
 // thousands separator a till prints, and pence-only totals.
-const MONEY = /(?:\u00a3|GBP)?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d{1,5}\.\d{2})/g;
+// A money figure. The second alternative is the one a till prints when the font
+// is too narrow for pence — `TOTAL 1,234` matched nothing at all and the app
+// fell through to the smallest figure on the page.
+const MONEY = /(?:\u00a3|GBP)?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?|\d{1,5}\.\d{2})/g;
+
+// The letters OCR reads as digits, read the other way: the letter back to the
+// digit it is standing in for. Applied to a figure after it is matched, so the
+// figure grammar stays exactly what it was and does not have to carry the
+// tolerance as well.
+//
+// The reason this is a post-pass and not part of MONEY: putting the
+// substitutions inside the pattern changes which sub-strings look like figures
+// at all, and every attempt at it matched `11` and `.78` as two numbers, or
+// matched the letters of a word. Measured on `£1O.78` — which the original
+// regex missed entirely and then re-anchored on the two zeros after the point
+// to return £0.78 — and on `11.7B`, which it returned as 11.
+const DIGIT_FROM = { O: '0', o: '0', I: '1', l: '1', L: '1', '|': '1', Z: '2', A: '4', S: '5', G: '6', B: '8' };
+function normaliseDigits(figure) {
+  return String(figure).replace(/[OoLl|ZASGB]/g, (ch) => DIGIT_FROM[ch] || ch);
+}
 
 function moneyOn(line) {
   const found = [];
+  // A refund, two ways: the line says so, or the figure itself carries a minus.
+  // `TOTAL -12.99` has the minus *before* the match, so the line's own wording is
+  // not enough on its own — measured, that line came back as +12.99 and the
+  // refund was recorded as spending.
+  const isRefund = /^\s*(?:\u2212|\-)|\brefund\b|\bcredit\b|\breversal\b/i.test(String(line));
+  // The digits a figure should have had, put back before the figure is looked
+  // for. Only where a substituted letter sits directly between a digit and more
+  // figure — so the letters of a word are never eaten, and a receipt with no
+  // substitution on it is matched by the original grammar exactly as before.
+  //
+  // `TOTAL GBP 1O.78`: the O sits where a digit belongs, and without this the
+  // engine matched only the `0.78` and the app recorded £0.78. `TOTAL 11.7B`
+  // matched `11` and the B was lost. Both were measured.
+  const repaired = String(line)
+    .replace(/(?<=\d)[OoLl|ZASGB](?=\d|\.)|(?<=\d\.\d)[OoLl|ZASGB](?!\d)/g, (ch) => DIGIT_FROM[ch] || ch);
   MONEY.lastIndex = 0;
   let m;
-  while ((m = MONEY.exec(line)) !== null) {
-    const n = parseFloat(String(m[1]).replace(/,/g, ''));
-    if (Number.isFinite(n)) found.push(n);
+  while ((m = MONEY.exec(repaired)) !== null) {
+    const n = parseFloat(normaliseDigits(String(m[1])).replace(/,/g, ''));
+    if (Number.isFinite(n)) {
+      // A minus immediately before the figure is the other way a refund says so.
+      const minusBefore = /[\u2212\-]\s*$/.test(repaired.slice(0, m.index));
+      found.push((isRefund || minusBefore) ? -Math.abs(n) : n);
+    }
   }
   return found;
 }
@@ -449,6 +508,8 @@ function moneyOn(line) {
 // A line's claim to being the total, 0 if it isn't claiming.
 function totalWeight(line) {
   if (TENDER_WORDS.test(line)) return 0;
+  // A discount or a points balance is not what was owed, at any weight.
+  if (NOT_A_TOTAL.test(line)) return 0;
   let best = 0;
   for (const [re, weight] of TOTAL_WEIGHTS) {
     if (re.test(line)) best = Math.max(best, weight);
@@ -472,7 +533,14 @@ function guessAmountFromText(text) {
       money = moneyOn(lines[i + 1]);
     }
     if (!money.length) return;
-    const amount = Math.max(...money);
+    // A refund is money coming back. "REFUND -12.99 / TOTAL -12.99" was read as
+    // +12.99, because Math.max picked the positive out of the line — so the
+    // refund was recorded as spending, the right money moved the wrong way.
+    // When every figure on the line is a refund, take it as one. Otherwise the
+    // largest positive: a "TOTAL 18.40 REFUND -2.00" line is still a purchase.
+    const allRefund = money.every((n) => n < 0);
+    const positives = money.filter((n) => n > 0);
+    const amount = allRefund ? Math.max(...money) : (positives.length ? Math.max(...positives) : 0);
     if (score > best.score || (score === best.score && amount > best.amount)) {
       best = { score: score, amount: amount };
     }
@@ -612,11 +680,35 @@ const CATEGORY_WORDS = Object.entries(CATEGORY_KEYWORDS).map(([name, words]) => 
 // shop. Read as a standalone four-digit group — a card number is longer than
 // that, so the group is matched on its own boundaries rather than inside the
 // longer number — and returned for the caller to match against the accounts.
+// The last four digits of the card a receipt was paid with.
+//
+// This was "the last four-digit group on the page", which is right about half
+// the time and confidently wrong the rest. A VAT-registered retailer prints its
+// VAT number *after* the payment block, so "VAT NO 123 4567 89" returned 4567
+// and the spend was filed against whichever account happens to carry those
+// digits. A date did the same: "28/09/2026" returned 2026. Because account
+// balances are derived rather than stored, that single mis-attribution silently
+// skewed every balance, the forecast and "Where Your Money Is" from then on,
+// with nothing on screen to show it.
+//
+// So the digits are only taken from a line that says they are card digits, and
+// a group inside a longer run of digits is not one.
 function guessCardLast4(text) {
-  const found = String(text || '').match(/\b\d{4}\b/g) || [];
-  // The last group on the page: a receipt prints the card digits in the
-  // payment block, which is at the bottom.
-  return found.length ? found[found.length - 1] : null;
+  const lines = String(text || '').split('\n');
+  // A payment line, read upwards from the bottom where receipts put them.
+  const paymentLine = /\b(?:visa|mastercard|maestro|amex|debit|credit|card|acct|account|ending)\b|\*{2,}/i;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!paymentLine.test(line)) continue;
+    // A masked card prints its own last four.
+    const masked = line.match(/\*{3,}\s*(\d{4})(?!\d)/);
+    if (masked) return masked[1];
+    // Otherwise a four-digit group standing alone. A group inside a longer run
+    // is a card number, an authorisation code or a VAT number.
+    const groups = line.match(/(?<!\d)\d{4}(?!\d)/g) || [];
+    if (groups.length) return groups[groups.length - 1];
+  }
+  return null;
 }
 
 function guessCategoryFromText(text, title) {
