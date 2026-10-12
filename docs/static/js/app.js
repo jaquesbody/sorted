@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.62.0';
+const APP_VERSION = '2.63.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -6100,6 +6100,11 @@ async function commitImport(mode, btn) {
   if (!data) return;
 
   try {
+    // A replace wipes the stores one at a time, so a failure halfway leaves the
+    // database as a mixture of the file's and the old data — and the user reads
+    // "Import failed" with half their history gone. Keep a copy first; the
+    // Restore button in the Sync card is how it comes back.
+    if (mode === 'replace') stashReplacedCopy(await buildReplacedCopy());
     const { imported, skipped, dropped } = await importDataToDB(data, mode);
     if (mode === 'replace') {
       showToast(`Replaced with ${imported} item${imported === 1 ? '' : 's'}${dropped ? ` (${dropped} unusable skipped)` : ''}`);

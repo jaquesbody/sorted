@@ -333,7 +333,7 @@ async function syncNow() {
   if (remoteT > localT) {
     // Keep what is here before it goes, always. This is the only thing standing
     // between a stale remote and lost local work.
-    localStorage.setItem(SYNC_BACKUP_KEY, JSON.stringify(local));
+    stashReplacedCopy(local);
     // replace, not merge. A snapshot is the whole truth, so merging would keep
     // the rows this device has that the file doesn't — which is exactly the
     // resurrection problem snapshots exist to avoid. It does mean a pull
@@ -353,6 +353,38 @@ async function syncNow() {
 // When the local copy was replaced by a pull, so a settings page can offer it
 // back. Held in localStorage rather than a file so it is available even if the
 // filesystem permissions are not.
+// Keep what is here before it is replaced, always. Both paths that wipe the
+// data go through this one — a pull, and the user's own "Replace all stored
+// data" button — because the alternative is a database with no way back.
+//
+// The import path did not do this. Its replace commits store by store, so a
+// failure in the seventh leaves stores one to six already the file's and the rest
+// the old set, and the user reads "Import failed" with half their data gone and
+// no copy anywhere. Now a replace stashes first, and the Restore button in the
+// Sync card is what gets it back.
+//
+// In localStorage, not a file: it has to be available even if the export ever
+// fails, and a backup nobody can reach is not a backup. The quota is 5MB-ish and
+// a snapshot with receipts can exceed it, so the write is guarded and its
+// failure never stops the import that called it.
+function stashReplacedCopy(snapshot) {
+  try {
+    localStorage.setItem(SYNC_BACKUP_KEY, JSON.stringify(snapshot));
+    return true;
+  } catch (err) {
+    console.warn('Could not keep a copy of the current data:', err);
+    return false;
+  }
+}
+
+// The current data as a snapshot, so what `stashReplacedCopy` keeps is the same
+// shape restoreSyncBackup() expects. A plain `getAllData()` would keep the rows
+// but not the envelope, and restore would refuse it as "not a Sorted snapshot" —
+// which reads to the user as their data being gone twice over.
+async function buildReplacedCopy() {
+  return { format: SYNC_FORMAT, updatedAt: new Date().toISOString(), data: await getAllData() };
+}
+
 function syncBackup() {
   try { return JSON.parse(localStorage.getItem(SYNC_BACKUP_KEY) || 'null'); }
   catch (err) { return null; }

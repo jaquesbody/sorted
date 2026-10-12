@@ -105,6 +105,7 @@ async function getAll(storeName) {
     const request = store.getAll();
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -116,6 +117,7 @@ async function getItem(storeName, id) {
     const request = store.get(normaliseId(id));
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -137,53 +139,74 @@ function dataChanged() {
   if (typeof syncTouch === 'function') syncTouch();
 }
 
+// A write is not done when its request succeeds. `onsuccess` fires when the
+// request completes, which is strictly *before* the transaction commits — and a
+// commit can still fail, with `QuotaExceededError` being the realistic one here
+// because receipts are 1400px JPEG data URLs stored inline. When it does, the
+// promise has already resolved, the row is on no disk, the next getAll does not
+// return it, and the toast has already said it was saved.
+//
+// So these resolve on the transaction, the way txDone() does below, and reject
+// if it aborts. The larger someone's store the more likely a quota failure
+// becomes, and the more likely they are to blame the app rather than the disk.
 async function addItem(storeName, item) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    // An id is minted only if the caller didn't bring one — importing mints
-    // per row so ids stay unique to this device, and seeding follows the
-    // same path as any other add.
-    const record = { createdAt: new Date().toISOString(), ...item };
-    if (record.id === undefined || record.id === null) record.id = newId();
-    const request = store.add(record);
-    // The id the record itself carries, not request.id: that's only populated
-    // when the store's key generator made the key, and every new row now
-    // brings its own.
-    request.onsuccess = () => { dataChanged(); resolve(record.id); };
-    request.onerror = () => reject(request.error);
-  });
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  // An id is minted only if the caller didn't bring one — importing mints
+  // per row so ids stay unique to this device, and seeding follows the
+  // same path as any other add.
+  const record = { createdAt: new Date().toISOString(), ...item };
+  if (record.id === undefined || record.id === null) record.id = newId();
+  const request = store.add(record);
+  const done = txDone(tx);
+  // The id the record itself carries, not request.id: that's only populated
+  // when the store's key generator made the key, and every new row now
+  // brings its own.
+  try {
+    await done;
+    dataChanged();
+    return record.id;
+  } catch (err) {
+    throw err || request.error || new Error('The write was rolled back');
+  }
 }
 
 async function updateItem(storeName, item) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    // The id has to be normalised here too, not just on read and delete. An
-    // edit arrives with the id as it came off a data attribute — a string —
-    // and putting a legacy row back under the string "3" when it was stored
-    // as the number 3 silently creates a *second* row instead of editing the
-    // first. The original keeps rendering unchanged, so the edit looks like it
-    // did nothing, and Delete then appears to do nothing too. Same trap as
-    // getItem/deleteItem, one layer up.
-    const record = { ...item, id: normaliseId(item.id), updatedAt: new Date().toISOString() };
-    const request = store.put(record);
-    request.onsuccess = () => { dataChanged(); resolve(record.id); };
-    request.onerror = () => reject(request.error);
-  });
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  // The id has to be normalised here too, not just on read and delete. An
+  // edit arrives with the id as it came off a data attribute — a string —
+  // and putting a legacy row back under the string "3" when it was stored
+  // as the number 3 silently creates a *second* row instead of editing the
+  // first. The original keeps rendering unchanged, so the edit looks like it
+  // did nothing, and Delete then appears to do nothing too. Same trap as
+  // getItem/deleteItem, one layer up.
+  const record = { ...item, id: normaliseId(item.id), updatedAt: new Date().toISOString() };
+  const request = store.put(record);
+  const done = txDone(tx);
+  try {
+    await done;
+    dataChanged();
+    return record.id;
+  } catch (err) {
+    throw err || request.error || new Error('The write was rolled back');
+  }
 }
 
 async function deleteItem(storeName, id) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    const request = store.delete(normaliseId(id));
-    request.onsuccess = () => { dataChanged(); resolve(); };
-    request.onerror = () => reject(request.error);
-  });
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  const request = store.delete(normaliseId(id));
+  const done = txDone(tx);
+  try {
+    await done;
+    dataChanged();
+  } catch (err) {
+    throw err || request.error || new Error('The delete was rolled back');
+  }
 }
 
 // The next date this item is due, given how often it repeats. Monthly is the
@@ -300,27 +323,46 @@ async function markDuePaid(dueItem, payerId) {
     || dueItem.frequency === 'annually'
     || dueItem.recurring === true;
 
-  if (repeats) {
-    // Read before writing, on its own transaction. The next occurrence is only
-    // added if it is not already there: adding one unconditionally left two rows
-    // dated the same day whenever the following month had been entered by hand,
-    // and the month's total counted that bill twice.
-    const next = nextDueDate(rest.dueDate, dueItem.frequency, dueDayValue(dueItem));
-    // A bill told to stop stops: no fresh row is left behind for a month that
-    // is past the last one the user chose, so paying the final month ends it
-    // instead of quietly carrying it forward.
-    const pastEnd = dueItem.repeatUntil && next > dueItem.repeatUntil;
+  // One transaction, and everything inside it happens in one callback.
+  //
+  // The comment at the top of this function promises "a failure can never leave
+  // the bill in both lists or in neither", and three separate transactions do
+  // not implement that: a suspension between the add and the update — which
+  // Android does routinely to a backgrounded WebView — leaves the next
+  // occurrence created and the original bill still unpaid, so the same rent
+  // appears in this month and the next and gets paid twice. That is the
+  // double-count the single-record rule exists to prevent.
+  //
+  // The read and both writes are registered from one onsuccess, rather than
+  // across awaits: an await with no request pending is exactly what makes a
+  // readwrite transaction auto-commit, and this transaction would have ended
+  // before its own writes arrived.
+  const db = await openDB();
+  const tx = db.transaction('due', 'readwrite');
+  const store = tx.objectStore('due');
+
+  const next = repeats ? nextDueDate(rest.dueDate, dueItem.frequency, dueDayValue(dueItem)) : null;
+  // A bill told to stop stops: no fresh row is left behind for a month that
+  // is past the last one the user chose, so paying the final month ends it
+  // instead of quietly carrying it forward.
+  const pastEnd = !!(next && dueItem.repeatUntil && next > dueItem.repeatUntil);
+  const title = String(rest.title || '').trim();
+
+  const read = store.getAll();
+  read.onerror = () => { /* the transaction aborts and txDone rejects */ };
+  read.onsuccess = () => {
+    const existing = read.result || [];
     // ...and the check is for *this bill*. It used to ask whether anything at
     // all was due that day, so paying Rent while Council Tax already sat on next
     // month's date left Rent with no next row and the series quietly stopped —
     // a bill that simply never appears again, with nothing on screen to say so.
     // materialiseBillsForMonth keys on the title for exactly this reason.
-    const title = String(rest.title || '').trim();
-    const already = pastEnd || (await getAll('due'))
-      .some((r) => r.dueDate === next && String(r.title || '').trim() === title);
-    if (!already) {
-      await addItem('due', {
+    const already = pastEnd || (next && existing
+      .some((r) => r.dueDate === next && String(r.title || '').trim() === title));
+    if (repeats && !already) {
+      store.add({
         ...rest,
+        id: newId(),
         paid: false,
         personId: payerId || rest.personId || null,
         dueDate: next,
@@ -329,14 +371,16 @@ async function markDuePaid(dueItem, payerId) {
         dueDay: dueDayValue(dueItem)
       });
     }
-  }
+    store.put({
+      ...rest,
+      id: normaliseId(id),
+      paid: true,
+      personId: payerId || rest.personId || null
+    });
+  };
 
-  await updateItem('due', {
-    ...rest,
-    id,
-    paid: true,
-    personId: payerId || rest.personId || null
-  });
+  await txDone(tx);
+  dataChanged();
 }
 
 // Everything, for the backup. Driven off STORES so a new store can't be
