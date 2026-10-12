@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.60.0';
+const APP_VERSION = '2.61.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -18,7 +18,7 @@ let dashViewedDate = new Date();
 dashViewedDate.setDate(1);
 let spendFilter = 'all';
 let dueFilter = 'all'; // Bills page: 'all' | 'pending' | 'confirmed' | 'recurring'
-let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
+let reportRange = 'month'; // Reports date range: 'month' | 'year' | 'all'
 
 /* -----------------------------------------------------------------------------
    People
@@ -782,15 +782,33 @@ async function renderDashboard(container) {
   // The month selector at the top scopes the two cards that have dates. The
   // Bills card uses the same rule as the Bills page, so the two never
   // disagree about what "September" owes.
-  const spendMonth = spendItems.filter(i => isSameMonth(i.date, dashViewedDate));
-  const spendYear = spendItems.filter(i => isSameYear(i.date, dashViewedDate));
+  // Spending is what is left once the bills are taken out of it. A bill paid
+  // before 2.8.3 was written into Spend, so every one of those rows is still in
+  // this store carrying `paid: true` and a `dueDate` — and counting them as
+  // spending here put the same rent on the Dashboard under "Spent" *and* on the
+  // Bills page under "Paid": two screens describing the same money as two
+  // different things. Reports and Save Report already used this rule; the
+  // Dashboard and the Spend page were the two it never reached.
+  const realSpend = spendingHistory(spendItems);
+  const spendMonth = realSpend.filter(i => isSameMonth(i.date, dashViewedDate));
+  const spendYear = realSpend.filter(i => isSameYear(i.date, dashViewedDate));
   const spendMonthTotal = spendMonth.reduce((sum, i) => sum + i.amount, 0);
   const spendYearTotal = spendYear.reduce((sum, i) => sum + i.amount, 0);
   const dashYear = dashViewedDate.getFullYear();
   
-  const { items: dueShown, overdueElsewhere } = billsForMonth(dueItems, dashViewedDate);
+  const { items: dueShown, overdueElsewhere, projections } = billsForMonth(dueItems, dashViewedDate);
   const dueTotal = dueShown.reduce((sum, i) => sum + i.amount, 0);
   const overdueCount = dueShown.filter(i => isOverdue(i.dueDate)).length;
+
+  // "Total bills this month", the figure the Bills page shows beside its own
+  // total. Everything landing in the month on screen, settled or not, plus the
+  // projections a month ahead carries because nothing is stored for it yet.
+  // Without the projections a future month would read the bills of whichever
+  // rows happened to be stored there, which is usually none.
+  const billsThisMonthTotal = dueItems
+    .filter(i => isSameMonth(i.dueDate, dashViewedDate))
+    .reduce((sum, i) => sum + i.amount, 0)
+    + projections.reduce((sum, i) => sum + i.amount, 0);
 
   // A bill that has been paid is still a bill. `dueTotal` counts only what is
   // outstanding, so settling one used to make the Total Money card's Bills drop
@@ -852,6 +870,7 @@ async function renderDashboard(container) {
           <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'}</span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
+        <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
         <div class="stat-card-sub">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
@@ -896,7 +915,7 @@ async function renderDashboard(container) {
     .map((d) => ({ ...d, date: d.dueDate, confirmed: true }));
 
   // Draw simple bar chart
-  drawTrendChart([...spendItems, ...paidBills], dashViewedDate);
+  drawTrendChart([...realSpend, ...paidBills], dashViewedDate);
 }
 
 // A bill payment written into Spend. Until 2.8.3, paying a bill wrote its
@@ -1613,8 +1632,8 @@ function receiptChip(item, type) {
 // Spend Page
 async function renderSpend(container) {
   const token = renderToken;
-  
-  const items = await getAll('spend');
+
+  const items = spendingHistory(await getAll('spend'));
   items.sort((a, b) => new Date(b.date) - new Date(a.date));
   
   const inMonth = items.filter(i => isSameMonth(i.date, viewedDate));
@@ -1892,6 +1911,15 @@ async function renderDue(container) {
   const total = outstanding.reduce((sum, i) => sum + i.amount, 0);
   const overdue = outstanding.filter(i => isOverdue(i.dueDate));
   const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
+  // Every bill landing in the month on screen, settled or not. Total Due above
+  // answers "what do I still owe"; this answers "what did this month cost me",
+  // which is the question a settled bill used to make unanswerable — paying
+  // everything made the page read £0.00 as though the month had been free. The
+  // Dashboard's Total Money card uses the same figure for its Bills segment, so
+  // the two agree.
+  const billsThisMonthTotal = all
+    .filter((i) => isSameMonth(i.dueDate, dueViewedDate))
+    .reduce((sum, i) => sum + i.amount, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
@@ -1909,6 +1937,7 @@ async function renderDue(container) {
         <span class="stat-card-sub">${outstanding.length} unpaid</span>
       </div>
       <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
+      <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
       ${overdue.length > 0
         ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>`
         : `<div class="stat-card-sub">${upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month'}</div>`}
@@ -2181,6 +2210,7 @@ async function openIncomeSetup(id) {
   if (id && !item) return;
   const accounts = [...accountsCache.values()];
   const people = [...peopleCache.values()];
+  const currentPerson = getCurrentPersonId();
 
   openModal(item ? 'Edit income' : 'Add income', `
     <div class="form-group">
@@ -2222,7 +2252,7 @@ async function openIncomeSetup(id) {
       <label class="form-label" for="income-person">Whose</label>
       <select class="form-input" id="income-person">
         <option value="">Anyone</option>
-        ${people.map((p) => `<option value="${p.id}"${item && item.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+        ${people.map((p) => `<option value="${p.id}"${(item ? item.personId === p.id : p.id === currentPerson) ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
       </select>
     </div>
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveIncome('${id || ''}')">${item ? 'Save' : 'Add income'}</button>
@@ -2346,6 +2376,10 @@ function openAccountSetup(id) {
   const account = id ? accountById(id) : null;
   const isCash = account ? account.type === CASH_TYPE : false;
   const people = [...peopleCache.values()];
+  // A new account starts as whoever is using the app, the way a new spend does
+  // — an account somebody then uses is nearly always theirs, and a dropdown
+  // trip on every account is the sort of thing that ends up left on "Anyone".
+  const currentPerson = getCurrentPersonId();
 
   openModal(account ? `Edit ${escapeHTML(account.name)}` : 'Add an account', `
     <div class="form-group">
@@ -2357,7 +2391,7 @@ function openAccountSetup(id) {
       <label class="form-label" for="account-person">Whose</label>
       <select class="form-input" id="account-person">
         <option value="">Anyone</option>
-        ${people.map((p) => `<option value="${p.id}"${account && account.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+        ${people.map((p) => `<option value="${p.id}"${(account ? account.personId === p.id : p.id === currentPerson) ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
       </select>
     </div>
     <div class="form-group">
@@ -2801,9 +2835,9 @@ async function renderReports(container) {
   container.innerHTML = `
     <div class="page-toolbar page-toolbar--fixed">
       <div class="filter-bar">
-        ${chip('all', 'All time')}
         ${chip('month', 'This month')}
         ${chip('year', 'This year')}
+        ${chip('all', 'All time')}
       </div>
     </div>
     
@@ -2856,7 +2890,7 @@ async function renderReports(container) {
            made in this dialog, so the dialog cannot show it. The sentence says
            so once, here, rather than leaving someone to wonder which period the
            file they are about to write will contain. -->
-      <p class="setting-hint" style="margin-top: 8px;">This will create a report for the time period chosen (All time, This month or This year)</p>
+      <p class="setting-hint" style="margin-top: 8px;">This will create a report for the time period chosen (This month, This year or All time)</p>
     </div>
   `;
 
