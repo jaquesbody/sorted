@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.61.0';
+const APP_VERSION = '2.62.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -439,7 +439,15 @@ async function addPerson(name) {
 async function removePerson(id) {
   // Their entries are left alone — a spend doesn't stop being real because
   // the person is removed — they just become unattributed.
-  for (const store of ['spend', 'due', 'savings']) {
+  //
+  // Every store that names them, not just the first three. The removal dialog
+  // promises "spending, bills, savings, accounts, income and reports", and
+  // accounts and income were the two it skipped: an account stayed owned by a
+  // person who could no longer be selected, and income stayed theirs, so both
+  // kept resolving to null in every breakdown and quietly reappeared in the
+  // Anyone row of Who Spent What — a different fate from the same person's
+  // spending in the same list.
+  for (const store of ['spend', 'due', 'savings', 'accounts', 'income']) {
     const items = await getAll(store);
     for (const item of items) {
       if (item.personId === id) await updateItem(store, { ...item, personId: null });
@@ -867,11 +875,10 @@ async function renderDashboard(container) {
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
           <span class="stat-card-title">Bills</span>
-          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'}</span>
+          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · ${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
         <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
-        <div class="stat-card-sub">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
         <div class="stat-card-progress">
@@ -1013,7 +1020,7 @@ async function materialiseBillsForMonth(dueItems, viewDate) {
     if (item.paid === true) continue;
     const frequency = frequencyOf(item);
     if (!frequency) continue;
-    const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate, item.repeatUntil);
+    const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate, item.repeatUntil, dueDayValue(item));
     if (!occurrence || occurrence === item.dueDate) continue;
     if (created.includes(item.title)) continue;
     if (dueItems.some((r) => r.dueDate === occurrence && r.title === item.title)) continue;
@@ -1082,7 +1089,7 @@ function projectionsForMonth(items, viewDate, dateKey) {
     const frequency = frequencyOf(item);
     if (!frequency) continue;
     const stored = item[dateKey];
-    const occurrence = occurrenceInMonth(stored, frequency, viewDate, item.repeatUntil);
+    const occurrence = occurrenceInMonth(stored, frequency, viewDate, item.repeatUntil, dueDayValue(item));
     if (!occurrence || occurrence === stored) continue;
     // Another row already holds this date and this name, so the occurrence is
     // real and not a forecast. Without this, a month whose bills have been
@@ -1178,6 +1185,12 @@ function repeatLabel(item) {
 // month's length, so the 31st still means "the 31st" except where there isn't
 // one, exactly as the stored roll-forward already does.
 //
+// `day` is the day the bill is really on, which is not always the day of the
+// stored date: a bill due 31 January that has rolled through a February is
+// stored on the 28th, and rolling from *that* would keep it on the 28th for
+// good. The stored day is therefore passed in (see `dueDayValue`) and the
+// stored date is only used as the anchor for which month to step to.
+//
 // `until` is the last date a recurring bill should land on. Without it, a
 // cancelled subscription keeps appearing in every month ahead of it for the
 // rest of the forecast — a bill nobody pays any more. The date itself decides,
@@ -1187,13 +1200,14 @@ function repeatLabel(item) {
 // The item's own month is exempt. That row is stored, real money that was
 // already promised, and muting it would make the bill look like it vanished
 // rather than stopped.
-function occurrenceInMonth(startDate, frequency, viewDate, until) {
+function occurrenceInMonth(startDate, frequency, viewDate, until, day) {
   if (!startDate || !frequency) return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
   if (!m) return null;
   const startYear = Number(m[1]);
   const startMonth = Number(m[2]);
   const startDay = Number(m[3]);
+  const onDay = (day === undefined || day === null) ? startDay : (Number(day) || startDay);
 
   const gap = (viewDate.getFullYear() - startYear) * 12 + (viewDate.getMonth() + 1 - startMonth);
   if (gap < 0) return null;                                   // the month is behind the item
@@ -1204,7 +1218,7 @@ function occurrenceInMonth(startDate, frequency, viewDate, until) {
   const year = viewDate.getFullYear();
   const month = viewDate.getMonth() + 1;
   const lastDay = new Date(year, month, 0).getDate();
-  const occurrence = localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
+  const occurrence = localISO(new Date(year, month - 1, Math.min(onDay, lastDay)));
   if (until && occurrence > until) return null;               // the bill has stopped by then
   return occurrence;
 }
@@ -1809,6 +1823,16 @@ function monthNavHtml(which, date) {
 // rolling or deleting the bill, so those months have no paid bill here at all.
 // They are still read from Spend as before, which is the only way a person's
 // existing history stays visible after the model changed underneath it.
+// What the top-right of a Bills card says about the month. "3 overdue" when
+// there are some, "Nothing overdue" when the month's bills are still ahead,
+// and "Nothing due this month" for a month with no bills in it at all — which
+// is a different statement from "nothing is late", and conflating them made an
+// empty month read as a clean one.
+function overdueStatus(overdue, upcoming) {
+  if (overdue.length > 0) return overdue.length + ' overdue';
+  return upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month';
+}
+
 function paidBillsForMonth(dueItems, spendItems, date) {
   const settled = dueItems
     .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date));
@@ -1934,13 +1958,10 @@ async function renderDue(container) {
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
       <div class="stat-card-header">
         <span class="stat-card-title">Total Due</span>
-        <span class="stat-card-sub">${outstanding.length} unpaid</span>
+        <span class="stat-card-sub">${outstanding.length} unpaid · ${overdueStatus(overdue, upcoming)}</span>
       </div>
       <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
       <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
-      ${overdue.length > 0
-        ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>`
-        : `<div class="stat-card-sub">${upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month'}</div>`}
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
     </div>
@@ -2442,6 +2463,15 @@ async function saveAccount(id) {
     // Rather than relabel the field and keep the surprise, the number is
     // converted on the way in: the figures already applied to this account are
     // added back, so what you type is what the row then shows.
+    //
+    // And the adjustment is taken back out, because it is *also* part of the
+    // balance. The old code added `applied` back but left the adjustment where
+    // it was, so a row showing £1,040 with £100 of adjustment typed back as
+    // £1,040 came out at £1,140 — the field moved by exactly the adjustment,
+    // which is the one field whose whole purpose is making the row agree.
+    // Opening is therefore whatever is left once the adjustment the form is
+    // saving has been taken out: opening + adjustment − applied = what was
+    // typed.
     const balances = await accountBalances();
     const row = balances.find((b) => b.id === id);
     const applied = row
@@ -2458,7 +2488,7 @@ async function saveAccount(id) {
       type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
       cardLast4: cardLast4 || null,
       personId,
-      opening: (Number.parseFloat(opening) || 0) + applied,
+      opening: (Number.parseFloat(opening) || 0) + applied - (Number.parseFloat(adjustment) || 0),
       adjustment: Number.parseFloat(adjustment) || 0
     });
     showToast('Account updated');
@@ -3351,7 +3381,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     }
     for (const key of months) {
       const [yy, mm] = key.split('-').map(Number);
-      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1), item.repeatUntil);
+      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1), item.repeatUntil, dueDayValue(item));
       if (occurrence && occurrence > localISO(today)) add(plannedIncome, occurrence, item.amount);
     }
   }
@@ -5249,7 +5279,8 @@ async function deleteRecurringBill(id, wholeSeries) {
     if (bill.paid !== true && frequencyOf(bill) && !alreadyScheduled) {
       await addItem('due', {
         ...bill, paid: false,
-        dueDate: nextDueDate(bill.dueDate, bill.frequency)
+        dueDate: nextDueDate(bill.dueDate, bill.frequency, dueDayValue(bill)),
+        dueDay: dueDayValue(bill)
       });
     }
     showToast('Removed this month only');
@@ -5346,7 +5377,7 @@ async function markPaid(id) {
   // that was just tapped. Say where it went — otherwise a payment looks like
   // it deleted the bill.
   if (item.recurring) {
-    showToast(`Paid — next due ${formatDate(nextDueDate(item.dueDate))}`);
+    showToast(`Paid — next due ${formatDate(nextDueDate(item.dueDate, item.frequency, dueDayValue(item)))}`);
   } else {
     showToast('Marked as paid');
   }
@@ -5384,6 +5415,34 @@ const EXPORT_ROWS = [
   { store: 'income', kind: 'Income' }
 ];
 
+// A CSV cell: quoted when it carries a comma or a quote, and neutralised when
+// it starts with something a spreadsheet would execute.
+//
+// Excel, Numbers and Google Sheets all read a leading =, +, - or @ as a formula
+// and evaluate it on open, so a cell holding `=cmd|'/c calc'!A1` runs calc. The
+// untrusted text here is first-party: a receipt's title is OCR'd, and the app's
+// own worked example of a mangled logo is `=EEootaliz iss` — which then lands
+// in the title field and into this file. An imported backup can put any string
+// in a title or a category, and sanitizeItem does not restrict it.
+//
+// A leading apostrophe is the standard neutraliser: the spreadsheet shows the
+// text as typed and evaluates nothing. Only the first character is touched, so
+// an amount of -12.99 is left alone — it does not start the cell.
+function csvCell(v) {
+  let text = String(v == null ? '' : v);
+  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+}
+
+// The amount column. A figure is never a formula, and a leading apostrophe would
+// make a spreadsheet read the whole column as text — which is a worse outcome
+// than the one this is guarding against. So the neutraliser is skipped and only
+// the quoting rule applies: a refund of -12.99 must arrive as a number.
+function csvNumber(v) {
+  const text = String(v == null ? '' : v);
+  return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+}
+
 function exportMovementRows(data) {
   const out = [];
   for (const spec of EXPORT_ROWS) {
@@ -5410,13 +5469,11 @@ function exportCsv(data) {
   // Quoted where a value could contain the separator. Getting this wrong is how
   // a spreadsheet silently turns one column into three, so it is quoted even
   // when it does not strictly need to be.
-  const cell = (v) => {
-    const text = String(v == null ? '' : v);
-    return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
-  };
+  const cell = csvCell;
   const head = ['Date', 'Type', 'Description', 'Category', 'Amount', 'Paid', 'Person'];
   const lines = exportMovementRows(data).map((r) =>
-    [r.date, r.kind, r.title, r.category, r.amount.toFixed(2), r.paid, r.person].map(cell).join(','));
+    [r.date, r.kind, r.title, r.category, r.amount.toFixed(2), r.paid, r.person]
+    .map((v, i) => (i === 4 ? csvNumber(v) : cell(v))).join(','));
   // BOM: without it Excel on Windows reads the first column as mojibake and
   // every date as text.
   return '\ufeff' + head.join(',') + '\n' + lines.join('\n') + (lines.length ? '\n' : '');
@@ -5637,11 +5694,9 @@ function reportRight(row) {
 }
 
 function reportCsv(rep) {
-  const cell = (v) => {
-    const text = String(v == null ? '' : v);
-    return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
-  };
-  const line = (a, b, c, d) => [a, b, c, d].map(cell).join(',');
+  const cell = csvCell;
+  // Card, Item and Detail are text; Amount is the last column and must stay numeric.
+  const line = (a, b, c, d) => [cell(a), cell(b), cell(c), csvNumber(d)].join(',');
   const out = [line('Card', 'Item', 'Detail', 'Amount')];
   for (const sec of rep.sections) {
     out.push(line(sec.title, '', '', sec.total == null ? '' : Number(sec.total).toFixed(2)));

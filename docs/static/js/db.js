@@ -190,7 +190,16 @@ async function deleteItem(storeName, id) {
 // default: every row that predates the frequency field is simply recurring,
 // and rolling a yearly bill forward a month at a time was the old behaviour for
 // all of them.
-function nextDueDate(dueDate, frequency) {
+//
+// `day` is the day of the month to roll on. It defaults to the day of the date
+// being rolled, which is right for the first roll and wrong for every one after
+// it if the month just past was short: a bill due 31 January clamped to 28
+// February, and 28 February then rolled to 28 March. The bill never came back to
+// the 31st — a rent due at month end quietly became a rent due on the 28th,
+// permanently, after the first short month. Callers pass the day the bill was
+// actually set to, stored alongside the row, so a short month clamps only for
+// itself.
+function nextDueDate(dueDate, frequency, day) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueDate || '');
   let y, mo, d;
   if (m) {
@@ -199,6 +208,8 @@ function nextDueDate(dueDate, frequency) {
     const t = new Date();
     y = t.getFullYear(); mo = t.getMonth() + 1; d = t.getDate();
   }
+  if (day === undefined || day === null) day = d;
+  day = Number(day) || d;
   // Annual keeps the month and the day and only moves the year, so a bill due
   // 29 February rolls to 28 February rather than into March.
   const stepMonths = frequency === 'annually' ? 12 : 1;
@@ -206,7 +217,18 @@ function nextDueDate(dueDate, frequency) {
   const ny = Math.floor(total / 12);
   const nm = (total % 12) + 1;
   const lastDay = new Date(ny, nm, 0).getDate();
-  return localISO(new Date(ny, nm - 1, Math.min(d, lastDay)));
+  return localISO(new Date(ny, nm - 1, Math.min(day, lastDay)));
+}
+
+// The day of the month a bill is really on. Stored when the row was rolled
+// forward, because the date it was clamped to is not always the day it was set
+// to — and read straight off the date for every row written before that field
+// existed, which is the honest answer for a chain that has already drifted.
+function dueDayValue(item) {
+  const day = Number(item && item.dueDay);
+  if (day >= 1 && day <= 31) return day;
+  const m = /^\d{4}-\d{2}-(\d{2})/.exec(String((item && item.dueDate) || ''));
+  return m ? Number(m[1]) : null;
 }
 
 // Paying a bill: the payment lands in Spend. A recurring bill then rolls
@@ -283,7 +305,7 @@ async function markDuePaid(dueItem, payerId) {
     // added if it is not already there: adding one unconditionally left two rows
     // dated the same day whenever the following month had been entered by hand,
     // and the month's total counted that bill twice.
-    const next = nextDueDate(rest.dueDate, dueItem.frequency);
+    const next = nextDueDate(rest.dueDate, dueItem.frequency, dueDayValue(dueItem));
     // A bill told to stop stops: no fresh row is left behind for a month that
     // is past the last one the user chose, so paying the final month ends it
     // instead of quietly carrying it forward.
@@ -301,7 +323,10 @@ async function markDuePaid(dueItem, payerId) {
         ...rest,
         paid: false,
         personId: payerId || rest.personId || null,
-        dueDate: next
+        dueDate: next,
+        // The day the bill is really on — 31, not the 28th February clamped it
+        // to — so the month after a short one rolls back to the right day.
+        dueDay: dueDayValue(dueItem)
       });
     }
   }
