@@ -506,21 +506,6 @@ async function scheduleAllReminders() {
   return notifications.length;
 }
 
-// A read-only view of what's actually pending, for Settings to show rather than
-// telling the user reminders are on when three of them silently failed.
-async function pendingReminders() {
-  if (!notifyIsNative()) return [];
-  if (!(await notifyPermissionGranted())) return [];
-  try {
-    const res = await notifyCap().getPending();
-    return (res.notifications || []).map((n) => ({
-      id: n.id, title: n.title, body: n.body,
-      at: n.schedule && n.schedule.at ? new Date(n.schedule.at) : null
-    }));
-  } catch (err) {
-    return [];
-  }
-}
 
 // A reminder in a minute, through exactly the same path as a real one.
 //
@@ -767,15 +752,6 @@ async function checkBillNotifications() {
 // permission, and is false for reasons the permission screen can't fix.
 let notifyPermissionCache = null;
 
-// What the phone last reported as pending. Read once when Settings opens rather
-// than on every render, because it is a bridge call and Settings is repainted
-// every time a switch moves.
-let notifyPendingCache = null;
-
-async function loadPendingReminders() {
-  notifyPendingCache = await pendingReminders();
-  return notifyPendingCache;
-}
 
 async function notificationPermission(request) {
   if (!notifyIsNative()) {
@@ -839,6 +815,15 @@ function permissionMessage(state) {
   }
   if (state === 'prompt' || state === 'prompt-with-rationale') {
     return { ok: false, text: 'Sorted still needs permission to post notifications' };
+  }
+  // 'unknown' is what a hung bridge, a half-installed plugin or a rejected
+  // native call produces — not a refusal. It used to fall through to the
+  // "turn it on in your phone settings" branch, which is the exact outcome
+  // enableNotifications() was written to stop reporting: a missing plugin and a
+  // user genuinely saying no, indistinguishable. The three-way split was built
+  // at the source and then lost at the wording.
+  if (state === 'unknown') {
+    return { ok: false, text: 'Sorted could not check notifications on this phone' };
   }
   return {
     ok: false,
@@ -955,6 +940,14 @@ function reportReminderOutcome(kind, perm) {
     // later the reason is explained rather than assumed to be known.
     localStorage.removeItem(NOTIFY_BLOCKED_KEY);
     showToast(`${name} on`);
+    return;
+  }
+  // Only a real answer is remembered. 'unknown' is a failure to ask, and
+  // writing it down silenced the message for the rest of the run — so a
+  // transient bridge failure read as "already told you" and the real reason was
+  // never shown again.
+  if (perm.state === 'unknown') {
+    showToast(`${permissionMessage(perm.state).text}`, 8000);
     return;
   }
   if (localStorage.getItem(NOTIFY_BLOCKED_KEY) === perm.state) return;

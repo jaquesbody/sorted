@@ -520,7 +520,10 @@ function sanitizeItem(storeName, item) {
     out.opening = money(item.opening);
     out.adjustment = money(item.adjustment);
     if ('personId' in item) out.personId = item.personId || null;
-    if (typeof item.archived === 'boolean') out.archived = item.archived;
+    // No `archived` here. It used to be accepted through and read nowhere, which
+    // meant a hand-edited file could set a flag that did nothing — and the next
+    // person to read it would have to go and find out that nothing did. Archiving
+    // is a UI feature when there is one.
     return out;
   }
 

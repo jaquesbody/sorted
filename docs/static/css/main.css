@@ -19,7 +19,9 @@
   /* One step further out again, for anything switched off. It was referenced but
      never defined, so a disabled control inherited its parent's colour and
      looked identical to an enabled one. */
-  --text-muted: #55555f;
+  /* 2.15:1 on a card, below the 3:1 floor for non-text. #74747f is 3.43:1
+     and still the quietest step in the scale. */
+  --text-muted: #74747f;
   --accent: #3d8bfd;
   --accent-hover: #2563eb;
   --accent-muted: rgba(61, 139, 253, 0.15);
@@ -33,7 +35,10 @@
   --success-muted: rgba(34, 197, 94, 0.15);
   --warning: #f59e0b;
   --warning-muted: rgba(245, 158, 11, 0.15);
-  --danger: #ef4444;
+  /* #ef4444 measured 4.20:1 on a card and AA normal text needs 4.5:1 — every
+     form error and the Danger zone heading failed it. #f0666a is 5.13:1 on the
+     card. Measured, not guessed. */
+  --danger: #f0666a;
   --danger-hover: #dc2626;
   --danger-muted: rgba(239, 68, 68, 0.12);
   --danger-line: rgba(239, 68, 68, 0.35);
@@ -60,7 +65,8 @@ html[data-theme="light"] {
   --bg-card: #ffffff;
   --text-primary: #16181d;
   --text-secondary: #5b6070;
-  --text-muted: #a6aab4;
+  /* 2.33:1 on white, below 3:1. #8f939f is 3.07:1. */
+  --text-muted: #8f939f;
   --accent: #1f6feb;
   --accent-hover: #1859c4;
   --accent-muted: rgba(31, 111, 235, 0.1);
@@ -885,22 +891,6 @@ body {
   margin-top: 3px;
 }
 
-/* The forecast chart's one-line verdict. Not a card and not a banner: it's a
-   sentence about the chart sitting directly beneath it. */
-.forecast-note {
-  margin: 14px 0 0;
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-}
-
-.forecast-note--short {
-  color: var(--danger);
-}
-
-.forecast-note strong {
-  color: inherit;
-}
-
 .category-amount {
   font-size: 0.85rem;
   font-weight: 600;
@@ -1063,7 +1053,12 @@ body {
 }
 
 .btn-danger:hover {
-  background: #dc2626;
+  /* It used to be a hardcoded #dc2626, which in light theme is *lighter* than the
+     base #d92d20 — the button brightened on hover. Derive it instead, so the
+     hover always goes the right way and the token that was defined for this and
+     never used is now the one being used. */
+  background: var(--danger-hover, #b42318);
+  filter: brightness(0.92);
 }
 
 .btn-icon {
@@ -1486,12 +1481,6 @@ body {
   color: var(--danger);
 }
 
-.account-split {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 14px;
-}
-
 .account-seg {
   display: inline-flex;
   align-items: center;
@@ -1820,31 +1809,6 @@ body {
   color: var(--accent-on-tint);
 }
 
-/* Search */
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 15px;
-  margin-bottom: 20px;
-}
-
-.search-box input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  color: var(--text-primary);
-  font-size: 0.95rem;
-  outline: none;
-}
-
-.search-box input::placeholder {
-  color: var(--text-secondary);
-}
-
 /* Modal */
 .modal {
   display: none;
@@ -2098,38 +2062,6 @@ body {
      added to that gap rather than replacing it, so those two pages had 34px
      between cards where the dashboard had 20. */
   padding: 20px;
-}
-
-/* What the phone says is waiting to fire. Reads as a list rather than a
-   sentence, because it is a list — and because "nothing scheduled" is itself
-   usually the answer someone opening this page came for. */
-.pending-list {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--border);
-}
-
-.pending-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  padding: 4px 0;
-}
-
-.pending-title {
-  font-size: 0.85rem;
-  color: var(--text-primary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.pending-when {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
 }
 
 /* After .report-card, not before it: both selectors are a single class, and
@@ -2462,25 +2394,6 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .icon-btn.is-busy svg { animation-duration: 2.4s; }
-}
-
-/* The lock settings' controls sit beside their label rather than pushed to the
-   far edge, so pairing a dropdown with the sentence describing it doesn't mean
-   travelling the width of the card. Applied to the whole lock block rather
-   than just "Lock after" — one row left-aligned and the next right-aligned in
-   the same block reads as a mistake rather than a choice. */
-.setting-row--left {
-  justify-content: flex-start;
-}
-
-.setting-row--left .setting-text {
-  flex: 0 1 auto;
-}
-
-.settings-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
 }
 
 /* A second group of rows inside one card. No rule of its own — the row above

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.65.0';
+const APP_VERSION = '2.66.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -665,17 +665,6 @@ async function renderPage() {
         break;
       case 'settings':
         renderSettings(content);
-        // The list of what the phone has pending is a bridge call, and it must
-        // not hold the page up: render from whatever is cached, then fill it in
-        // when it arrives. Awaiting it here meant a bridge call that was slow —
-        // or never answered, which is what a half-installed plugin does — left
-        // Settings not appearing at all, showing whatever was on screen before.
-        // That is the stale-screen fault from 2.23.0 in a new place.
-        loadPendingReminders().then(() => {
-          if (token !== renderToken) return;
-          if (currentPage !== 'settings') return;
-          renderSettings(content);
-        });
         break;
     }
   } catch (err) {
@@ -1172,8 +1161,11 @@ function isRecurring(item) {
 function repeatLabel(item) {
   const base = item.frequency === 'annually' ? 'Yearly' : 'Monthly';
   if (!item.repeatUntil) return base;
-  const date = new Date(item.repeatUntil);
-  if (isNaN(date)) return base;
+  // The local day, not the UTC one: `new Date('2027-01-31')` is the 30th in
+  // the evening in any zone west of Greenwich, and the lozenge would read
+  // "until 30 Jan".
+  const date = parseDateOnly(item.repeatUntil);
+  if (!date) return base;
   const day = date.getDate();
   const month = date.toLocaleDateString('en-GB', { month: 'short' });
   const year = String(date.getFullYear()).slice(-2);
@@ -5358,11 +5350,15 @@ async function unpayBill(id, store = 'due') {
     return;
   }
   // A pre-2.8.3 payment: the copy in Spend, and the bill it paid for. Matched
-  // on the title as well as the date, because two bills can be due the same day
-  // and deleting the other one's payment would silently move money.
+  // on the title and the amount as well as the date, because two bills can be
+  // due the same day and two bills with the same title are ordinary in a
+  // household with two of a thing. Deleting the wrong one's payment would
+  // silently move money between accounts, which is the one failure mode this
+  // file's own comments refuse to tolerate.
   const twin = (await getAll('spend')).find((s) => s.paid === true
     && s.dueDate === bill?.dueDate
-    && String(s.title || '').trim() === String(bill?.title || '').trim());
+    && String(s.title || '').trim() === String(bill?.title || '').trim()
+    && Number(s.amount) === Number(bill?.amount));
   if (twin) {
     await deleteItem('spend', twin.id);
     showToast('Back to unpaid');

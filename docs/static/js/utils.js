@@ -146,8 +146,28 @@ function currency(amount) {
   return fallback + ' ' + value.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+// A date-only string ("2026-10-01") parsed as the local calendar day it names.
+//
+// `new Date('2026-10-01')` is midnight *UTC* by spec. In London during BST that
+// is 01:00 the same day and everything looks fine, which is why this went years
+// without being noticed; in any zone west of Greenwich it is the previous
+// evening locally, so every month comparison, every printed date and every day
+// count is off by one. The app ships 51 currencies and documents forking as the
+// plan, so "works in the UK" is not good enough.
+//
+// A string that already carries a time is left to the normal parser, because
+// that is an instant rather than a day.
+function parseDateOnly(value) {
+  const s = String(value == null ? '' : value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+
 function formatDate(dateStr) {
-  const date = new Date(dateStr);
+  const date = parseDateOnly(dateStr);
+  if (!date) return '';
   return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -156,23 +176,27 @@ function formatMonth(date) {
 }
 
 function isThisMonth(dateStr) {
-  const date = new Date(dateStr);
+  const date = parseDateOnly(dateStr);
+  if (!date) return false;
   const now = new Date();
   return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
 }
 
 function isThisYear(dateStr) {
-  const date = new Date(dateStr);
+  const date = parseDateOnly(dateStr);
+  if (!date) return false;
   return date.getFullYear() === new Date().getFullYear();
 }
 
 function isSameMonth(dateStr, targetDate) {
-  const date = new Date(dateStr);
+  const date = parseDateOnly(dateStr);
+  if (!date) return false;
   return date.getMonth() === targetDate.getMonth() && date.getFullYear() === targetDate.getFullYear();
 }
 
 function isSameYear(dateStr, targetDate) {
-  const date = new Date(dateStr);
+  const date = parseDateOnly(dateStr);
+  if (!date) return false;
   return date.getFullYear() === targetDate.getFullYear();
 }
 
@@ -183,7 +207,8 @@ function isOverdue(dueDate) {
   // normalise to local midnight like daysUntil() does.
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate);
+  const due = parseDateOnly(dueDate);
+  if (!due) return false;
   due.setHours(0, 0, 0, 0);
   return due < today;
 }
@@ -191,9 +216,16 @@ function isOverdue(dueDate) {
 function daysUntil(dueDate) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate);
+  const due = parseDateOnly(dueDate);
+  if (!due) return null;
   due.setHours(0, 0, 0, 0);
-  return Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+  // Calendar days, not elapsed hours. On the spring-forward day the interval is
+  // 23 hours long and Math.ceil of that reads yesterday as today, so a bill one
+  // day overdue said "Due today" once a year.
+  const day = 24 * 60 * 60 * 1000;
+  const from = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const to = Date.UTC(due.getFullYear(), due.getMonth(), due.getDate());
+  return Math.round((to - from) / day);
 }
 
 
