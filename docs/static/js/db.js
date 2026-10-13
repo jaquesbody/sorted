@@ -535,7 +535,11 @@ function sanitizeItem(storeName, item) {
     out.title = title;
     out.amount = amount;
     out.date = date;
-    out.category = ['salary', 'sale', 'other'].includes(str(item.category)) ? str(item.category) : 'other';
+    // Whatever the form can offer survives the trip; anything else falls back
+    // to 'other', which is a real category rather than a hole.
+    out.category = INCOME_CATEGORIES.some(([value]) => value === str(item.category))
+      ? str(item.category)
+      : 'other';
     if (item.frequency === 'monthly' || item.frequency === 'annually') out.frequency = item.frequency;
     return out;
   }
@@ -639,6 +643,19 @@ function sanitizeItem(storeName, item) {
 // Identity colours for people. Deliberately not the app's semantic colours
 // (accent blue, danger red, success green, warning amber) — a person isn't a
 // state, and a red dot beside a number would be read as "overdue".
+// The categories income can be filed under. Defined here, next to the code
+// that validates an import, and not next to the form that offers them — it used
+// to be in both places, and the two drifted: the form offered 'Business' while
+// the sanitiser accepted only salary, sale and other, so exporting and importing
+// a backup quietly rewrote every business income row to 'Other'. There is no
+// form inside this file to keep in step with, so there is exactly one list.
+const INCOME_CATEGORIES = [
+  ['salary', 'Salary'],
+  ['sale', 'Sale'],
+  ['business', 'Business'],
+  ['other', 'Other']
+];
+
 const PERSON_COLOURS = [
   '#8b5cf6', // violet
   '#14b8a6', // teal

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.64.0';
+const APP_VERSION = '2.65.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1236,12 +1236,9 @@ function occurrenceInMonth(startDate, frequency, viewDate, until, day) {
    another field.
    -------------------------------------------------------------------------- */
 
-const INCOME_CATEGORIES = [
-  ['salary', 'Salary'],
-  ['sale', 'Sale'],
-  ['business', 'Business'],
-  ['other', 'Other']
-];
+// db.js owns the list — one definition, read by the form here and by the
+// sanitiser there, so what a form offers and what an import accepts cannot
+// drift apart again.
 
 function incomeCategoryLabel(value) {
   const found = INCOME_CATEGORIES.find(([v]) => v === value);
@@ -3979,6 +3976,13 @@ async function confirmRemoveAllData(btn) {
   // The PINs live in localStorage, not the database, and the people they
   // belonged to are gone — leaving them would lock the app against nobody.
   clearAllPersonPins();
+  // ...and Cash goes back on, here rather than at the next boot. A first launch
+  // and "delete all data" are documented as landing in the same place, and they
+  // did not: only one of them ran ensureDefaults(). The gap showed as a Savings
+  // page with "No accounts", empty From/Into dropdowns on a transfer, and
+  // nothing to allocate anything to — until the app was restarted, which is
+  // exactly the kind of "it works after a reboot" that should not exist.
+  await ensureDefaults();
   // Nothing is put back. There is no seed to re-arm: empty is what empty means,
   // so "delete all data" and a first launch both land in the same place.
   closeModal();
