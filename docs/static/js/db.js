@@ -429,18 +429,46 @@ function txDone(tx) {
 }
 
 // Identity for merge dedupe: enough to tell two logical entries apart
-// (title + money + when) without relying on ids, which are reassigned on
-// import. Deliberately heuristic — same naive spirit as the OCR guesses.
-// A receipt's image is not part of the key: the same bill photographed twice
-// is one entry, not two.
-function importKeyOf(item) {
+// without relying on ids, which are reassigned on import. Deliberately
+// heuristic — same naive spirit as the OCR guesses. A receipt's image is not
+// part of the key: the same bill photographed twice is one entry, not two.
+//
+// The key has to separate entries the user means as two things, and for years it
+// did not. It was title | amount | date | current | target, so two £40 Tesco
+// shops on the same Saturday — one Groceries, one Eating out — were one row, and
+// the losing category vanished from Reports entirely. Two spends of the same
+// money on the same day by two different people collapsed the same way. A
+// transfer has no title and no current and no target, so its key was
+// `|200|2026-10-04||` and every transfer of the same money on the same day was
+// the same transfer.
+//
+// Person and account are keyed by *name* rather than id, because ids are minted
+// per device: the same person is one id here and another id there, and the name
+// is the only thing both sides of the comparison agree on. Accounts use type
+// as well, because two bank accounts can legitimately share a name — "Cash" on
+// two devices is still one Cash, two "Current" accounts are not.
+//
+// `ctx` carries those two id-to-name lookups, built once per import and covering
+// both the file's ids and this device's.
+function importKeyOf(item, ctx) {
   const norm = (v) => String(v == null ? '' : v).trim().toLowerCase();
+  const who = ctx && ctx.people ? (ctx.people[String(item.personId)] || '') : '';
+  const where = ctx && ctx.accounts ? (ctx.accounts[String(item.accountId)] || '') : '';
+  // A transfer's two ends, as one token: moving £200 current-to-savings and
+  // £200 business-to-current are different events and were the same key.
+  const from = ctx && ctx.accounts ? (ctx.accounts[String(item.fromId)] || '') : '';
+  const to = ctx && ctx.accounts ? (ctx.accounts[String(item.toId)] || '') : '';
+  const legs = from && to ? from + '>' + to : '';
   return [
     norm(item.title),
     norm(item.amount),
     norm(item.date || item.dueDate || ''),
     norm(item.current),
-    norm(item.target)
+    norm(item.target),
+    norm(item.category),
+    who,
+    where,
+    legs
   ].join('|');
 }
 
@@ -726,10 +754,30 @@ async function importDataToDB(data, mode = 'merge') {
       await txDone(tx);
     }
   } else {
+    // Both id spaces, so a row from the file and a row already here agree on
+    // what they are rather than on an id that means something different on each
+    // device. Built once, before the loop that uses it.
+    const keyCtx = {
+      people: {},
+      accounts: {}
+    };
+    for (const p of (await getAll('people'))) keyCtx.people[String(p.id)] = String(p.name || '').toLowerCase();
+    for (const a of (await getAll('accounts'))) {
+      keyCtx.accounts[String(a.id)] = String(a.type || 'bank') + '|' + String(a.name || '').toLowerCase();
+    }
+    for (const p of (usable.people || [])) {
+      if (p && p._sourceId) keyCtx.people[String(p._sourceId)] = String(p.name || '').toLowerCase();
+    }
+    for (const a of (usable.accounts || [])) {
+      if (a && a._sourceId) {
+        keyCtx.accounts[String(a._sourceId)] = String(a.type || 'bank') + '|' + String(a.name || '').toLowerCase();
+      }
+    }
+
     for (const storeName of fileStores.filter((n) => remaining.includes(n))) {
       // Read existing keys on their own transaction first — mixing an await
       // into the readwrite transaction below would let it auto-commit early.
-      const seen = new Set((await getAll(storeName)).map(importKeyOf));
+      const seen = new Set((await getAll(storeName)).map((i) => importKeyOf(i, keyCtx)));
 
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
@@ -742,14 +790,14 @@ async function importDataToDB(data, mode = 'merge') {
         if (storeName === 'transfers') {
           const mapped = stripSourceId(item, personMap, accountMap, goalIdMap);
           if (!mapped.fromId || !mapped.toId || mapped.fromId === mapped.toId) { skipped++; return; }
-          const key = importKeyOf(mapped);
+          const key = importKeyOf(mapped, keyCtx);
           if (seen.has(key)) { skipped++; return; }
           seen.add(key);
           store.add(mapped);
           imported++;
           return;
         }
-        const key = importKeyOf(item);
+        const key = importKeyOf(item, keyCtx);
         if (seen.has(key)) {
           skipped++;
           return;
