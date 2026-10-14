@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.69.0';
+const APP_VERSION = '2.70.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -827,7 +827,8 @@ async function renderDashboard(container) {
   
   // Category breakdowns
   const spendByCategory = groupByCategory(spendMonth, 'amount');
-  const dueByCategory = groupByCategory(dueShown, 'amount');
+  const billsThisMonthItems = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
+  const dueByCategory = groupByCategory(billsThisMonthItems, 'amount');
 
   // What there is, and what has already been spoken for. Read once here and
   // handed to both the new card and the trend below.
@@ -863,15 +864,16 @@ async function renderDashboard(container) {
       
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
-          <span class="stat-card-title">Bills</span>
+          <span class="stat-card-title">BILLS DUE</span>
           <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · ${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal > 0 ? dueTotal : billsThisMonthTotal)}</div>
         <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
-        <div class="stat-card-progress">
-          <div class="stat-card-progress-fill progress-due" style="width: ${Math.min(100, (dueTotal / 500) * 100)}%"></div>
+        <div class="stat-card-progress" style="position: relative;">
+          <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, (billsThisMonthTotal / 500) * 100)}%"></div>
+          <div class="stat-card-progress-fill progress-due" style="position: absolute; left: 0; top: 0; width: ${Math.min(100, (dueTotal / 500) * 100)}%;"></div>
         </div>
         ${renderCategoryBreakdown(dueByCategory, dueTotal, 'danger')}
       </div>
@@ -1051,8 +1053,7 @@ function billsForMonth(dueItems, date) {
   const inThisMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
   const overdueElsewhere = lookingBack
     ? []
-    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date)
-        && !inThisMonth.some((r) => r.paid !== true && r.title === i.title));
+    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
   // Real and projected are handed back separately, never mixed into one list:
   // anything that sums what a month costs has to be able to tell them apart,
   // and a caller that can't is how a forecast ends up in a Total Due figure.
