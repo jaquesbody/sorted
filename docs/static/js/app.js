@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.76.0';
+const APP_VERSION = '2.77.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -921,21 +921,30 @@ async function renderDashboard(container) {
     .filter((d) => d.dueDate)
     .map((d) => ({ ...d, date: d.dueDate, type: 'bill', recurring: false }));
 
-  // Tag the spending rows so the chart can split them from the bills instead
-  // of lumping everything that happened to be recurring into one colour.
-  const chartItems = [
-    ...realSpend.map((s) => ({ ...s, type: 'spend', recurring: false })),
-    ...chartBills,
-  ];
-  const spare = totalAt - spendMonthTotal - dueForTotal - savingsCurrent;
-  // Each month gets its own fixed copy of savings and "left", so the trend
-  // reads as six month-end money cards and nothing in it moves around.
+  // Build the trend as six month-end snapshots: each bar is fixed to its own
+  // spent / bills / savings / left, so revisiting a later month can never
+  // rewrite what an earlier one actually did. The chart is no longer driven by
+  // "this month's" constants repeated across all six months (which was the
+  // thing that moved every bar when the displayed month changed).
+  const monthTopUps = await getAll('savingsTopUps');
+  const chartItems = [];
   const end = dashViewedDate ? new Date(dashViewedDate.getFullYear(), dashViewedDate.getMonth(), 1) : new Date();
   for (let i = 5; i >= 0; i--) {
     const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
     const iso = endOfMonthIso(d);
-    if (savingsCurrent > 0) chartItems.push({ amount: savingsCurrent, date: iso, type: 'savings', recurring: false });
-    if (spare > 0) chartItems.push({ amount: spare, date: iso, type: 'left', recurring: false });
+    const monthSpent = realSpend
+      .filter((s) => isSameMonth(s.date, d))
+      .reduce((n, s) => n + (Number(s.amount) || 0), 0);
+    const monthBills = dueItems
+      .filter((b) => b.dueDate && isSameMonth(b.dueDate, d))
+      .reduce((n, b) => n + (Number(b.amount) || 0), 0);
+    const monthSavings = savingsItems.reduce((n, g) => n + goalContributedBy(g, monthTopUps, iso), 0);
+    const monthTotal = await totalMoneyAtEndOf(iso);
+    const monthLeft = Math.max(0, monthTotal - monthSpent - monthBills - monthSavings);
+    if (monthSpent > 0) chartItems.push({ amount: monthSpent, date: iso, type: 'spend', recurring: false });
+    if (monthBills > 0) chartItems.push({ amount: monthBills, date: iso, type: 'bill', recurring: false });
+    if (monthSavings > 0) chartItems.push({ amount: monthSavings, date: iso, type: 'savings', recurring: false });
+    if (monthLeft > 0) chartItems.push({ amount: monthLeft, date: iso, type: 'left', recurring: false });
   }
   // Draw simple bar chart
   drawTrendChart(chartItems, dashViewedDate);
