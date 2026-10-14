@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.72.0';
+const APP_VERSION = '2.73.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -897,8 +897,10 @@ async function renderDashboard(container) {
            onclick="navigate('reports')" title="See the Reports breakdowns">
         <h2 class="chart-title">Monthly Trend</h2>
         <div class="chart-legend">
-          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Recurring</span>
-          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>One-off</span>
+          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Spent</span>
+          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>Bills</span>
+          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Savings</span>
+          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>Left</span>
         </div>
       </div>
       <canvas id="trend-chart" class="chart-canvas"></canvas>
@@ -911,10 +913,26 @@ async function renderDashboard(container) {
   // which is exactly the month a trend is most worth looking at.
   const paidBills = dueItems
     .filter((d) => d.paid === true && d.dueDate)
-    .map((d) => ({ ...d, date: d.dueDate, confirmed: true }));
+    .map((d) => ({ ...d, date: d.dueDate, confirmed: true, type: 'bill' }));
 
+  // Tag the spending rows so the chart can split them from the bills instead
+  // of lumping everything that happened to be recurring into one colour.
+  const chartItems = [
+    ...realSpend.map((s) => ({ ...s, type: 'spend', recurring: false })),
+    ...paidBills,
+  ];
+  // Savings and "left" are not per-movement numbers, so the trend can't
+  // attribute them to months before this one — they ride on this month's bar
+  // as a copy of the Total Money card, which is exactly the picture asked for.
+  if (savingsCurrent > 0) {
+    chartItems.push({ amount: savingsCurrent, date: endOfMonthIso(dashViewedDate), type: 'savings', recurring: false });
+  }
+  const spare = totalAt - spendMonthTotal - dueForTotal - savingsCurrent;
+  if (spare > 0) {
+    chartItems.push({ amount: spare, date: endOfMonthIso(dashViewedDate), type: 'left', recurring: false });
+  }
   // Draw simple bar chart
-  drawTrendChart([...realSpend, ...paidBills], dashViewedDate);
+  drawTrendChart(chartItems, dashViewedDate);
 }
 
 // A bill payment written into Spend. Until 2.8.3, paying a bill wrote its
@@ -1364,18 +1382,26 @@ function drawTrendChart(spendItems, focusDate) {
 
     // One-off first from the baseline, recurring stacked on top of it — a
     // month's bar reads as "how much of this repeats every month".
-    const oneOffHeight = max > 0 ? (m.oneOff / max) * (h - 40) : 0;
-    const recurringHeight = max > 0 ? (m.recurring / max) * (h - 40) : 0;
-    ctx.fillStyle = accent;
-    if (oneOffHeight > 0) ctx.fillRect(x, baseline - oneOffHeight, barWidth, oneOffHeight);
-    ctx.fillStyle = danger;
-    if (recurringHeight > 0) ctx.fillRect(x, baseline - oneOffHeight - recurringHeight, barWidth, recurringHeight);
-
-    // A sliver of a tiny total still has to be visible, or a month with only
-    // a few pounds in it reads as no month at all.
-    if (m.total > 0 && oneOffHeight + recurringHeight < 2) {
+    const spentHeight = max > 0 ? (m.spent / max) * (h - 40) : 0;
+    const billsHeight = max > 0 ? (m.bills / max) * (h - 40) : 0;
+    const savingsHeight = max > 0 ? (m.savings / max) * (h - 40) : 0;
+    const leftHeight = max > 0 ? (m.left / max) * (h - 40) : 0;
+    let cursor = baseline;
+    const drawSeg = (color, segHeight) => {
+      if (segHeight <= 0) return;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, cursor - segHeight, barWidth, segHeight);
+      cursor -= segHeight;
+    };
+    drawSeg(accent, spentHeight);
+    drawSeg(danger, billsHeight);
+    drawSeg('#22c55e', savingsHeight);
+    drawSeg('#94a3b8', leftHeight);
+    if (m.total > 0 && spentHeight + billsHeight + savingsHeight + leftHeight < 2) {
       ctx.fillStyle = accent;
       ctx.fillRect(x, baseline - 2, barWidth, 2);
+      cursor = baseline - 2;
+    }
     }
 
     ctx.fillStyle = m.selected ? textPrimary : muted;
