@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.75.0';
+const APP_VERSION = '2.76.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -907,7 +907,7 @@ async function renderDashboard(container) {
         <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px;margin-right:4px"></span>Bills</span>
         <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:#94a3b8;border-radius:2px;margin-right:4px"></span>Left</span>
         <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Savings</span>
-      </div
+      </div>
     </div>
   `;
   
@@ -915,25 +915,27 @@ async function renderDashboard(container) {
   // wrote a payment into Spend and the trend picked it up for free; when that
   // stopped, a month where the only activity was paying bills went blank —
   // which is exactly the month a trend is most worth looking at.
-  const paidBills = dueItems
-    .filter((d) => d.paid === true && d.dueDate)
-    .map((d) => ({ ...d, date: d.dueDate, confirmed: true, type: 'bill' }));
+  // Render each stored bill into the month it falls due, so every month bar
+  // carries its own bills rather than only the ones already paid.
+  const chartBills = dueItems
+    .filter((d) => d.dueDate)
+    .map((d) => ({ ...d, date: d.dueDate, type: 'bill', recurring: false }));
 
   // Tag the spending rows so the chart can split them from the bills instead
   // of lumping everything that happened to be recurring into one colour.
   const chartItems = [
     ...realSpend.map((s) => ({ ...s, type: 'spend', recurring: false })),
-    ...paidBills,
+    ...chartBills,
   ];
-  // Savings and "left" are not per-movement numbers, so the trend can't
-  // attribute them to months before this one — they ride on this month's bar
-  // as a copy of the Total Money card, which is exactly the picture asked for.
-  if (savingsCurrent > 0) {
-    chartItems.push({ amount: savingsCurrent, date: endOfMonthIso(dashViewedDate), type: 'savings', recurring: false });
-  }
   const spare = totalAt - spendMonthTotal - dueForTotal - savingsCurrent;
-  if (spare > 0) {
-    chartItems.push({ amount: spare, date: endOfMonthIso(dashViewedDate), type: 'left', recurring: false });
+  // Each month gets its own fixed copy of savings and "left", so the trend
+  // reads as six month-end money cards and nothing in it moves around.
+  const end = dashViewedDate ? new Date(dashViewedDate.getFullYear(), dashViewedDate.getMonth(), 1) : new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
+    const iso = endOfMonthIso(d);
+    if (savingsCurrent > 0) chartItems.push({ amount: savingsCurrent, date: iso, type: 'savings', recurring: false });
+    if (spare > 0) chartItems.push({ amount: spare, date: iso, type: 'left', recurring: false });
   }
   // Draw simple bar chart
   drawTrendChart(chartItems, dashViewedDate);
@@ -1422,7 +1424,8 @@ function drawTrendChart(spendItems, focusDate) {
     // Zero months show nothing useful — five stacked £0.00 labels used to
     // crowd the baseline (and overlap outright in narrow windows).
     if (m.total > 0) {
-      ctx.fillText(currency(m.total), clamp(x + barWidth / 2, currency(m.total)), y - 10);
+      const totalLabel = currency(Math.round(m.total)).replace(/\.\d{2}\b/, '');
+      ctx.fillText(totalLabel, clamp(x + barWidth / 2, totalLabel), y - 10);
     }
   });
 }
