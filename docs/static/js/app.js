@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.71.0';
+const APP_VERSION = '2.72.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -815,6 +815,7 @@ async function renderDashboard(container) {
   // — what is still owed — and says so in its own sub-line. A month ahead is the
   // one place projections are the right answer, because nothing is stored for it.
   const billsThisMonth = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
+  const paidBillsAmount = Math.max(0, billsThisMonthTotal - dueTotal);
   const dashInFuture = !isBeforeThisMonth(dashViewedDate)
     && !isSameMonth(dashViewedDate, new Date());
   const dueForTotal = dashInFuture
@@ -872,8 +873,8 @@ async function renderDashboard(container) {
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
         <div class="stat-card-progress" style="position: relative;">
-          <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, (billsThisMonthTotal / 500) * 100)}%"></div>
-          <div class="stat-card-progress-fill progress-due" style="position: absolute; left: 0; top: 0; width: ${Math.min(100, (dueTotal / 500) * 100)}%;"></div>
+          <div class="stat-card-progress-fill progress-due" style="width: ${Math.min(100, (paidBillsAmount / 500) * 100)}%"></div>
+          <div class="stat-card-progress-fill progress-due progress-due--striped" style="position: absolute; right: 0; top: 0; width: ${Math.min(100, (dueTotal / 500) * 100)}%;"></div>
         </div>
         ${renderCategoryBreakdown(dueByCategory, dueTotal, 'danger')}
       </div>
@@ -5337,7 +5338,6 @@ async function unpayBill(id, store = 'due') {
     // what's owing; flipping `paid` instead would leave it as ordinary
     // spending, which is a different thing entirely.
     await deleteItem('spend', id);
-    showToast('Back to unpaid');
     await renderPage();
     refreshReminders();
     return;
@@ -5345,7 +5345,6 @@ async function unpayBill(id, store = 'due') {
   if (bill && bill.paid === true) {
     // A settled row from 2.8.3 onwards.
     await updateItem('due', { ...bill, paid: false });
-    showToast('Back to unpaid');
     await renderPage();
     refreshReminders();
     return;
@@ -5362,7 +5361,7 @@ async function unpayBill(id, store = 'due') {
     && Number(s.amount) === Number(bill?.amount));
   if (twin) {
     await deleteItem('spend', twin.id);
-    showToast('Back to unpaid');
+
   }
   await renderPage();
   refreshReminders();
@@ -5377,11 +5376,6 @@ async function markPaid(id) {
   // A recurring bill rolls to the same day next month, so it leaves the list
   // that was just tapped. Say where it went — otherwise a payment looks like
   // it deleted the bill.
-  if (item.recurring) {
-    showToast(`Paid — next due ${formatDate(nextDueDate(item.dueDate, item.frequency, dueDayValue(item)))}`);
-  } else {
-    showToast('Marked as paid');
-  }
   renderPage();
   refreshReminders();
 }

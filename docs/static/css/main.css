@@ -325,7 +325,12 @@ body {
 }
 
 .progress-spend { background: var(--accent); }
-.progress-due { background: var(--danger); }
+ .progress-due { background: var(--danger); }
+.progress-due--striped {
+  background-image: repeating-linear-gradient(45deg,
+    rgba(255, 255, 255, 0.18) 0 6px,
+    transparent 6px 12px);
+}
 .progress-savings { background: var(--success); }
 
 /* Category Breakdown */
