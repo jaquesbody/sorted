@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.77.0';
+const APP_VERSION = '2.78.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -4534,6 +4534,9 @@ function buildForm(type, editId = null, existingCategory = null) {
           <option value="">Not from an account</option>
           ${[...accountsCache.values()].map((a) => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('')}
         </select>
+        ${(type === 'spend' || type === 'due') && accountsCache.size === 0
+          ? `<p class="setting-hint" style="color: var(--danger); margin: 6px 0 0;">An account must be added, go to Savings > + Account</p>`
+          : ''}
       </div>`;
   const deleteBtn = editId == null ? '' : `
       <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${idArg}, this)">Delete</button>`;
@@ -5092,6 +5095,21 @@ async function saveItem(type, editId = null) {
   if ((type === 'spend' || type === 'due') && !category) {
     showFormError('Pick a category', 'form-category');
     return;
+  }
+
+  // Spend and bills only move money out of an account, so one has to be
+  // named — "Not from an account" is not an option for them. The message
+  // explains where to create one rather than leaving a blank field to save.
+  if (type === 'spend' || type === 'due') {
+    const allAccounts = await getAll('accounts');
+    if (!accountId) {
+      if (allAccounts.length === 0) {
+        showFormError('An account must be added, go to Savings > + Account', 'form-account');
+      } else {
+        showFormError('Pick an account', 'form-account');
+      }
+      return;
+    }
   }
 
   const fields = { title, category, personId, accountId };
