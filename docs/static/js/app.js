@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.67.0';
+const APP_VERSION = '2.68.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -866,7 +866,7 @@ async function renderDashboard(container) {
           <span class="stat-card-title">Bills</span>
           <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · ${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span>
         </div>
-        <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
+        <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal > 0 ? dueTotal : billsThisMonthTotal)}</div>
         <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
@@ -1949,7 +1949,7 @@ async function renderDue(container) {
         <span class="stat-card-title">Total Due</span>
         <span class="stat-card-sub">${outstanding.length} unpaid · ${overdueStatus(overdue, upcoming)}</span>
       </div>
-      <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
+      <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total > 0 ? total : billsThisMonthTotal)}</div>
       <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
