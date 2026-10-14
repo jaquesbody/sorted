@@ -1400,8 +1400,6 @@ function drawTrendChart(spendItems, focusDate) {
     if (m.total > 0 && spentHeight + billsHeight + savingsHeight + leftHeight < 2) {
       ctx.fillStyle = accent;
       ctx.fillRect(x, baseline - 2, barWidth, 2);
-      cursor = baseline - 2;
-    }
     }
 
     ctx.fillStyle = m.selected ? textPrimary : muted;
