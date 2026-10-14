@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.73.0';
+const APP_VERSION = '2.74.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -866,15 +866,19 @@ async function renderDashboard(container) {
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
           <span class="stat-card-title">BILLS DUE</span>
-          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · ${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span>
+          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · <span style="color: ${overdueCount > 0 ? 'var(--danger)' : 'inherit'}">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span></span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
         <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
         <div class="stat-card-progress" style="position: relative;">
-          <div class="stat-card-progress-fill progress-due" style="width: ${Math.min(100, (paidBillsAmount / 500) * 100)}%"></div>
-          <div class="stat-card-progress-fill progress-due progress-due--striped" style="position: absolute; right: 0; top: 0; width: ${Math.min(100, (dueTotal / 500) * 100)}%;"></div>
+          <div class="stat-card-progress-fill progress-due" style="position: absolute; left: 0; top: 0; width: ${Math.min(100, ((billsThisMonthTotal - dueTotal) / billsThisMonthTotal) * 100)}%;"></div>
+          <div class="stat-card-progress-fill progress-due progress-due--striped" style="position: absolute; left: ${Math.min(100, ((billsThisMonthTotal - dueTotal) / billsThisMonthTotal) * 100)}%; top: 0; width: ${Math.min(100, (dueTotal / billsThisMonthTotal) * 100)}%;"></div>
+        </div>
+        <div class="stat-card-sub">
+          <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><i style="display:inline-block;width:12px;height:6px;background:var(--danger);border-radius:2px"></i>Paid</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;"><i style="display:inline-block;width:12px;height:6px;background-color:var(--danger);background-image:repeating-linear-gradient(45deg, rgba(255,255,255,.18) 0 6px, transparent 6px 12px);border-radius:2px"></i>Due</span>
         </div>
         ${renderCategoryBreakdown(dueByCategory, dueTotal, 'danger')}
       </div>
@@ -896,14 +900,14 @@ async function renderDashboard(container) {
       <div class="chart-header chart-header--link" role="button" tabindex="0"
            onclick="navigate('reports')" title="See the Reports breakdowns">
         <h2 class="chart-title">Monthly Trend</h2>
-        <div class="chart-legend">
-          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Spent</span>
-          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>Bills</span>
-          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Savings</span>
-          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>Left</span>
-        </div>
       </div>
       <canvas id="trend-chart" class="chart-canvas"></canvas>
+      <div class="chart-legend">
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin-right:4px"></span>Spent</span>
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px;margin-right:4px"></span>Bills</span>
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:#94a3b8;border-radius:2px;margin-right:4px"></span>Left</span>
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Savings</span>
+      </div
     </div>
   `;
   
