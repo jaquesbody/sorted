@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.74.0';
+const APP_VERSION = '2.75.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -880,7 +880,7 @@ async function renderDashboard(container) {
           <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><i style="display:inline-block;width:12px;height:6px;background:var(--danger);border-radius:2px"></i>Paid</span>
           <span style="display:inline-flex;align-items:center;gap:4px;"><i style="display:inline-block;width:12px;height:6px;background-color:var(--danger);background-image:repeating-linear-gradient(45deg, rgba(255,255,255,.18) 0 6px, transparent 6px 12px);border-radius:2px"></i>Due</span>
         </div>
-        ${renderCategoryBreakdown(dueByCategory, dueTotal, 'danger')}
+        ${renderCategoryBreakdown(dueByCategory, billsThisMonthTotal, 'danger')}
       </div>
       
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('savings')">
@@ -1354,16 +1354,20 @@ function drawTrendChart(spendItems, focusDate) {
   for (let i = 5; i >= 0; i--) {
     const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
     const inMonth = spendItems.filter((item) => isSameMonth(item.date, d));
-    const sum = (list) => list.reduce((n, item) => n + item.amount, 0);
-    const recurring = sum(inMonth.filter((item) => item.recurring));
-    const oneOff = sum(inMonth.filter((item) => !item.recurring));
-    months.push({
-      label: d.toLocaleDateString('en-GB', { month: 'short' }),
-      recurring,
-      oneOff,
-      total: recurring + oneOff,
-      selected: focusDate ? isSameMonth(d, focusDate) : false
-    });
+  const sum = (list) => list.reduce((n, item) => n + item.amount, 0);
+  const spent = sum(inMonth.filter((item) => item.type === 'spend'));
+  const bills = sum(inMonth.filter((item) => item.type === 'bill'));
+  const savings = sum(inMonth.filter((item) => item.type === 'savings'));
+  const left = sum(inMonth.filter((item) => item.type === 'left'));
+  months.push({
+    label: d.toLocaleDateString('en-GB', { month: 'short' }),
+    spent,
+    bills,
+    savings,
+    left,
+    total: spent + bills + savings + left,
+    selected: focusDate ? isSameMonth(d, focusDate) : false
+  });
   }
 
   const max = Math.max(...months.map(m => m.total), 100);
