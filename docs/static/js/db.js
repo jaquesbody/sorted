@@ -543,7 +543,15 @@ function sanitizeItem(storeName, item) {
     out.category = INCOME_CATEGORIES.some(([value]) => value === str(item.category))
       ? str(item.category)
       : 'other';
-    if (item.frequency === 'monthly' || item.frequency === 'annually') out.frequency = item.frequency;
+    // Only monthly and annually recur on a schedule; anything else is a one-off
+    // income recorded for its own date. Deleting the field, rather than leaving
+    // the existing value in place (out started as a copy of the whole item), is
+    // what stops a hand-edited 'weekly' from being treated as monthly.
+    if (item.frequency === 'monthly' || item.frequency === 'annually') {
+      out.frequency = item.frequency;
+    } else {
+      delete out.frequency;
+    }
     return out;
   }
 
