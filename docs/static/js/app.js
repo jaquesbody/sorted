@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.90.0';
+const APP_VERSION = '2.91.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -218,6 +218,39 @@ function endOfMonthIso(date) {
   const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
   const pad = (n) => String(n).padStart(2, '0');
   return `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`;
+}
+
+// The first month worth showing a balance for: the oldest date anything on the
+// device carries, or the month the app was first opened, whichever is earlier.
+// Before it there is nothing to show, because the opening balance has no date of
+// its own — it is a snapshot of what an account holds now — and reading it back
+// into months that predate every record invents money that was never there.
+// That is what put a balance on the Total Money card for months before the app
+// had been used. A row a person has genuinely backdated carries its own date, so
+// a month they have actually put something in still counts.
+async function firstTrackedMonth() {
+  const [spend, due, income, topUps, goals] = await Promise.all([
+    getAll('spend'), getAll('due'), getAll('income'), getAll('savingsTopUps'), getAll('savings')
+  ]);
+  const dated = [
+    ...spendingHistory(spend).map((s) => s.date),
+    ...due.map((d) => d.dueDate),
+    ...income.map((i) => i.date),
+    ...topUps.map((t) => t.date),
+    ...goals.map((g) => g.createdAt)
+  ].filter(Boolean).map((d) => String(d).slice(0, 10));
+
+  let earliest = null;
+  for (const d of dated) {
+    const parsed = parseDateOnly(d);
+    if (parsed && (!earliest || parsed < earliest)) earliest = parsed;
+  }
+  if (!localStorage.getItem('SORTED_FIRST_USE')) {
+    localStorage.setItem('SORTED_FIRST_USE', localISO());
+  }
+  const installed = parseDateOnly(localStorage.getItem('SORTED_FIRST_USE')) || new Date();
+  const start = earliest && earliest < installed ? earliest : installed;
+  return new Date(start.getFullYear(), start.getMonth(), 1);
 }
 
 async function accountActivity(accountId) {
@@ -723,7 +756,29 @@ function goToAccounts() {
 }
 
 // Dashboard
-function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt) {
+function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt, firstMonthDate) {
+  const count = balances.length;
+  // A month that predates every record has no balance to show. The opening
+  // figure is a snapshot of now with no date on it, so reading it back this far
+  // invents money that was never there — the balance that appeared in months
+  // before the app was used. A backdated row carries its own date, so a month a
+  // person has actually put something in is past this line and still shows.
+  const beforeTracking = firstMonthDate
+    && (dashViewedDate.getFullYear() < firstMonthDate.getFullYear()
+      || (dashViewedDate.getFullYear() === firstMonthDate.getFullYear()
+        && dashViewedDate.getMonth() < firstMonthDate.getMonth()));
+  if (beforeTracking) {
+    return `
+      <div class="stat-card total-card" role="button" tabindex="0" onclick="goToAccounts()">
+        <div class="stat-card-header">
+          <span class="stat-card-title">Total money</span>
+          <span class="stat-card-sub">${count === 0 ? 'No accounts' : `${count} account${count === 1 ? '' : 's'}`}</span>
+        </div>
+        <div class="stat-card-value" style="color: var(--text-muted);">—</div>
+        <div class="stat-card-sub">No records before ${escapeHTML(formatMonth(firstMonthDate))}</div>
+      </div>`;
+  }
+
   // The balance for the month on screen, passed in. The card used to work this
   // out from the accounts, which made it today's balance whatever month was
   // showing — and a January card then carried the same figure as an October one,
@@ -731,7 +786,6 @@ function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt)
   const total = Number.isFinite(totalAt)
     ? totalAt
     : balances.reduce((n, b) => n + b.balance, 0);
-  const count = balances.length;
   const over = total < 0;
 
   // Bills still to come are drawn against the money there is. Savings is
@@ -855,6 +909,9 @@ async function renderDashboard(container) {
   // The balance the card's own month belongs to. The month on screen gets
   // today's balance, because nothing has moved since it ended.
   const totalAt = await totalMoneyAtEndOf(endOfMonthIso(dashViewedDate));
+  // Shared with the trend below, so the card and the chart agree on where the
+  // records begin.
+  const firstMonthDate = await firstTrackedMonth();
 
   if (token !== renderToken) return;
   container.innerHTML = `
@@ -865,7 +922,7 @@ async function renderDashboard(container) {
               title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
 
-    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, savingsCurrent, savingsTarget, totalAt)}
+    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, savingsCurrent, savingsTarget, totalAt, firstMonthDate)}
 
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
@@ -944,32 +1001,11 @@ async function renderDashboard(container) {
   // rewrite what an earlier one actually did. The chart is no longer driven by
   // "this month's" constants repeated across all six months (which was the
   // thing that moved every bar when the displayed month changed).
-  if (!localStorage.getItem('SORTED_FIRST_USE')) {
-    localStorage.setItem('SORTED_FIRST_USE', localISO());
-  }
-  const installedRaw = parseDateOnly(localStorage.getItem('SORTED_FIRST_USE')) || new Date();
-  const [incomeItems, savingsGoals] = await Promise.all([
-    getAll('income'), getAll('savings'),
-  ]);
+  // `firstMonthDate` is worked out with the Total Money card above, so the chart
+  // and the card start their records in the same month: the install month
+  // backstops both, and a backdated row already on the device still shows from
+  // its real month.
   const monthTopUps = await getAll('savingsTopUps');
-  const seenDates = [
-    ...realSpend.map((s) => String(s.date || '').slice(0, 10)),
-    ...dueItems.map((d) => String(d.dueDate || '').slice(0, 10)),
-    ...incomeItems.map((i) => String(i.date || '').slice(0, 10)),
-    ...monthTopUps.map((t) => String(t.date || '').slice(0, 10)),
-    ...savingsGoals.map((g) => String(g.createdAt || '').slice(0, 10)),
-  ].filter(Boolean);
-  let earliest = null;
-  for (const d of seenDates) {
-    const parsed = parseDateOnly(d);
-    if (parsed && (!earliest || parsed < earliest)) earliest = parsed;
-  }
-  const earliestRaw = earliest || installedRaw;
-  // Use whichever comes first — the install month backstops the graph, and a
-  // backdated row already on the device still shows from its real month.
-  const firstMonthDate = earliestRaw < installedRaw
-    ? new Date(earliestRaw.getFullYear(), earliestRaw.getMonth(), 1)
-    : new Date(installedRaw.getFullYear(), installedRaw.getMonth(), 1);
   const chartItems = [];
   const end = dashViewedDate ? new Date(dashViewedDate.getFullYear(), dashViewedDate.getMonth(), 1) : new Date();
   for (let i = 5; i >= 0; i--) {
@@ -2292,11 +2328,15 @@ async function renderSavings(container) {
 function renderAccountRow(row) {
   const account = accountById(row.id);
   const over = row.balance < 0;
-  const parts = [
+  // One line per movement rather than one line of them all run together with
+  // middots. Spent and Bills are the two figures a person looks for first, and
+  // reading them off a single joined-up line was the thing that got reported.
+  const detail = [
     ['Spent', row.spend],
     ['Bills', row.bills],
     ['Goals', row.savings]
-  ].filter(([, v]) => v > 0);
+  ].filter(([, v]) => v > 0).map(([k, v]) => `${k} ${currency(v)}`);
+  if (row.transferIn || row.transferOut) detail.push(transferSummary(row));
 
   return `
     <div class="item-row item-row--lines item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
@@ -2304,12 +2344,7 @@ function renderAccountRow(row) {
         <div class="item-info">
           <div class="item-title">${escapeHTML(row.name)}${personDot(personById(row.personId))}</div>
           <div class="item-meta">${escapeHTML(accountTypeLabel(row.type))}</div>
-          <div class="item-meta item-meta--sub">
-            <span class="item-timing">${[
-              parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · '),
-              (row.transferIn || row.transferOut || row.adjustment) ? transferSummary(row) : ''
-            ].filter(Boolean).join(' · ')}</span>
-          </div>
+          ${detail.map((line) => `<div class="item-meta">${line}</div>`).join('')}
         </div>
       </div>
       <div class="row-end">
@@ -2331,7 +2366,6 @@ function transferSummary(row) {
   const bits = [];
   if (row.transferIn) bits.push(`${currency(row.transferIn)} in`);
   if (row.transferOut) bits.push(`${currency(row.transferOut)} out`);
-  if (row.adjustment) bits.push(`${currency(row.adjustment)} adjusted`);
   return bits.join(' · ');
 }
 
@@ -2588,12 +2622,6 @@ function openAccountSetup(id) {
       ${account ? '<p class="setting-hint">What this account holds today. Entering a different figure corrects the balance.</p>' : ''}
     </div>
     ${account ? `
-    <div class="form-group">
-      <label class="form-label" for="account-adjustment">Adjustments</label>
-      <input type="number" class="form-input" id="account-adjustment" step="0.01"
-             value="${account ? moneyInput(account.adjustment) : ''}" placeholder="0.00">
-    </div>` : ''}
-    ${account ? `
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveAccount('${account.id}')">Save</button>
     <button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveAccount('${account.id}', this, true)">Remove account</button>`
     : '<button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveAccount()">Add account</button>'}
@@ -2607,7 +2635,6 @@ async function saveAccount(id) {
 
   if (id) {
     const account = accountById(id);
-    const adjustment = document.getElementById('account-adjustment')?.value;
     // "Balance now" is what the account holds today, so it has to mean that.
     // The stored opening balance is the baseline everything recorded since was
     // applied to, so with £100 of spend on the books, typing 100 into a field
@@ -2615,16 +2642,11 @@ async function saveAccount(id) {
     //
     // Rather than relabel the field and keep the surprise, the number is
     // converted on the way in: the figures already applied to this account are
-    // added back, so what you type is what the row then shows.
-    //
-    // And the adjustment is taken back out, because it is *also* part of the
-    // balance. The old code added `applied` back but left the adjustment where
-    // it was, so a row showing £1,040 with £100 of adjustment typed back as
-    // £1,040 came out at £1,140 — the field moved by exactly the adjustment,
-    // which is the one field whose whole purpose is making the row agree.
-    // Opening is therefore whatever is left once the adjustment the form is
-    // saving has been taken out: opening + adjustment − applied = what was
-    // typed.
+    // added back, so what you type is what the row then shows. There is no
+    // separate adjustment any more — it was a second control that nudged the
+    // same number — and any value an older row still carries is folded into the
+    // opening figure here, so the balance is unchanged and the row shows exactly
+    // what was typed.
     const balances = await accountBalances();
     const row = balances.find((b) => b.id === id);
     const applied = row
@@ -2641,8 +2663,8 @@ async function saveAccount(id) {
       type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
       cardLast4: cardLast4 || null,
       personId,
-      opening: (Number.parseFloat(opening) || 0) + applied - (Number.parseFloat(adjustment) || 0),
-      adjustment: Number.parseFloat(adjustment) || 0
+      opening: (Number.parseFloat(opening) || 0) + applied,
+      adjustment: 0
     });
     showToast('Account updated');
   } else {
