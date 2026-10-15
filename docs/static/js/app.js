@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.87.0';
+const APP_VERSION = '2.88.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -627,53 +627,16 @@ if (window.sortedBridge) {
 let renderToken = 0;
 
 
-async function dedupeDueRowsOnce() {
-  const KEY = 'SORTED_DUE_DUP_SWEEP_V1';
-  if (localStorage.getItem(KEY)) return;
-  try { await loadAccounts(); } catch (e) {}
-  const rows = await getAll('due');
-  const seen = new Map();
-  const redundant = [];
-  for (const row of rows) {
-    const iso = String(row.dueDate || '').slice(0, 10);
-    const monthKey = iso.slice(0, 7) + '::' + String(row.title || '').trim().toLowerCase();
-    if (!iso || !monthKey) continue;
-    const first = seen.get(monthKey);
-    if (first == null) {
-      seen.set(monthKey, row.id);
-    } else {
-      redundant.push(row.id);
-    }
-  }
-  for (const id of redundant) {
-    try { await deleteItem('due', id); } catch (e) {}
-  }
-  localStorage.setItem(KEY, '1');
-}
-
-async function repairOrphanDueOnce() {
-  const KEY = 'SORTED_ORPHAN_DUE_SWEEP_V1';
-  if (localStorage.getItem(KEY)) return;
-  try {
-    await loadAccounts();
-  } catch (e) {}
-  const expiredIds = new Set();
-  const rows = await getAll('due');
-  for (const row of rows) {
-    const aid = row.accountId;
-    if (aid && !accountsCache.has(aid)) {
-      if (row.id != null) expiredIds.add(row.id);
-    }
-  }
-  for (const id of expiredIds) {
-    try { await deleteItem('due', id); } catch (e) {}
-  }
-  localStorage.setItem(KEY, '1');
-}
+// The two one-time sweeps that used to run here — deleting due rows whose
+// account no longer existed, and deleting rows that shared a title and month —
+// were removed. Both deleted user data on a schedule, silently, with no way to
+// undo it: an account that happened to be missing from the cache took its bills
+// with it, and two legitimately different bills that shared a name in a month
+// lost one of them. They were treating a duplication bug in materialise (since
+// fixed, and now serialised) by throwing away the symptom's data. The read-only
+// "Check bill data" report in Settings replaces them.
 
 async function renderPage() {
-  void repairOrphanDueOnce();
-  void dedupeDueRowsOnce();
 
   const content = document.getElementById('content');
   // Both captured here, before the first await. Reading `currentPage` after the
@@ -875,7 +838,15 @@ async function renderDashboard(container) {
   
   // Category breakdowns
   const spendByCategory = groupByCategory(spendMonth, 'amount');
-  const billsThisMonthItems = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
+  // The same set the "Total bills this month" figure is built from, projections
+  // included. It used to count only rows dated in the month, so a future month
+  // whose bills were still projections showed a total with no category beside
+  // it — which is how the phantom figure was spotted in the first place. The
+  // breakdown now adds up to the total it sits under.
+  const billsThisMonthItems = [
+    ...dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate)),
+    ...projections
+  ];
   const dueByCategory = groupByCategory(billsThisMonthItems, 'amount');
 
   // What there is, and what has already been spoken for. Read once here and
@@ -1079,6 +1050,15 @@ function isBeforeThisMonth(date) {
     || (date.getFullYear() === now.getFullYear() && date.getMonth() < now.getMonth());
 }
 
+// A bill's identity across the months it recurs through. A row and the
+// projection of that same row must resolve to one key, or the bill is counted
+// as two; the name alone is enough here because it is the name the rest of the
+// code keys on too (`markDuePaid` asks whether the title is already on the next
+// date, and the Bills page draws one row per name per month).
+function billSeriesKey(item) {
+  return (frequencyOf(item) || '') + '|' + String(item.title || '').trim().toLowerCase();
+}
+
 // A future month's bills become real when you look at them.
 //
 // They used to be projections: cards with no id, that could not be tapped,
@@ -1088,65 +1068,81 @@ function isBeforeThisMonth(date) {
 // Total Due", and the fix is one rule rather than two: a recurring bill leaves
 // a real row behind for its next occurrence.
 //
-// `markDuePaid` already wrote that row when the bill before it was settled;
-// this is the same rule, applied when a month is looked at rather than when the
-// previous month is paid. Nothing is invented for a month that has already
-// happened — those bills are stored, and adding to them would rewrite history.
+// Nothing is invented for a month that has already happened — those bills are
+// stored, and adding to them would rewrite history.
 //
 // One row per bill per month, and only when that month's row is not already
-// there, so paging back and forth cannot stack duplicates and a month you have
-// already materialised is left exactly as it is.
-async function materialiseBillsForMonth(dueItems, viewDate) {
+// there. The pass is serialised, and that is the whole of the phantom-bill
+// fault: it reads the store, decides which rows are missing and writes them,
+// and two of those passes running at once — which a fast page turn or a sync
+// refresh produces — both read the same store, both decide the same row is
+// missing, and both write it. The duplicate that stacked up was invisible until
+// it fell overdue, when its sum rode into every later month as a figure with no
+// category to its name. One pass at a time, re-reading inside the lock, makes
+// each decision against rows the previous pass has already committed.
+let materialiseQueue = Promise.resolve();
+function materialiseBillsForMonth(viewDate) {
+  const run = () => materialiseBillsForMonthNow(viewDate);
+  // The queue is carried even when a pass fails, so one bad write cannot wedge
+  // every later page.
+  const queued = materialiseQueue.then(run, run);
+  materialiseQueue = queued.then(() => {}, () => {});
+  return queued;
+}
+
+async function materialiseBillsForMonthNow(viewDate) {
   const now = new Date();
   const inFuture = !isSameMonth(viewDate, now) && !isBeforeThisMonth(viewDate);
-  if (!inFuture) return dueItems;
+  if (!inFuture) return getAll('due');
+
+  const dueItems = await getAll('due');
+  // Bills the month already has a row for. A series here needs nothing added,
+  // and this is also what stops two stored occurrences of one bill from each
+  // leaving their own copy.
+  const represented = new Set(
+    dueItems
+      .filter((i) => isSameMonth(i.dueDate, viewDate))
+      .map(billSeriesKey)
+  );
+  // One entry per bill, however many of its own months are stored. Paying a
+  // bill leaves the settled row and writes the next, so a series legitimately
+  // holds several rows at once — they are still one bill.
+  const series = new Map();
+  for (const item of dueItems) {
+    if (item.paid === true) continue;
+    if (!frequencyOf(item)) continue;
+    const key = billSeriesKey(item);
+    if (!series.has(key)) series.set(key, []);
+    series.get(key).push(item);
+  }
 
   let wrote = false;
-  // Bills already served by this pass, by name. The stored list alone is not
-  // enough: a bill whose whole chain exists (October, November, ...) has a row
-  // that maps to the month being viewed for every month in the chain, and each
-  // of those would add the month again.
-  //
-  // And the key is the *name*, not the date, which matters more than it sounds.
-  // A bill due on the 31st clamps to the 30th in a shorter month, so its chain
-  // holds two rows that both land in December — one on the 30th and one on the
-  // 31st. Two different dates are the same bill appearing twice, which is how
-  // the same water bill ended up on three cards and the month's total read
-  // high until you left and came back.
-  const created = [];
-  for (const item of dueItems) {
-    if (item.paid === true || item.seededNext) continue;
-    const frequency = frequencyOf(item);
-    if (!frequency) continue;
-    const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate, item.repeatUntil, dueDayValue(item));
-    if (!occurrence || occurrence === item.dueDate) continue;
-    if (created.includes(item.title)) continue;
-    // One occurrence leaves a row for the next one; once it has left a
-    // successor (or any later row) in the store, this row must not spawn
-    // another or the chain multiplies every time the month is glanced at.
-    const endsHere = item.repeatUntil && occurrence > item.repeatUntil;
-    if (endsHere) continue;
-    if (dueItems.some((r) => r.dueDate === occurrence && r.title === item.title)) continue;
-    if (dueItems.some((r) => isSameMonth(r.dueDate, viewDate) && r.title === item.title)) continue;
-    if (dueItems.some((r) => String(r.title || '').trim() === String(item.title || '').trim()
-        && String(r.dueDate || '') > String(item.dueDate || ''))) continue;
-    created.push(item.title);
-
-    // Mark the source as having seeded this month, so a second pass (or the
-    // next month you page into) cannot make it generate again. The row stays
-    // a proper unpaid occurrence — it simply knows it has moved on.
-    if (item.id != null) {
-      try { await updateItem('due', { ...item, seededNext: true }); } catch (e) {}
+  for (const rows of series.values()) {
+    const key = billSeriesKey(rows[0]);
+    if (represented.has(key)) continue;
+    // Any stored occurrence of the bill can be the one that lands here; the
+    // chain does not have to have been walked in order. The first that lands
+    // supplies the date, so visiting a far month and then an earlier one still
+    // fills the earlier one in.
+    let occurrence = null;
+    for (const row of rows) {
+      const lands = occurrenceInMonth(row.dueDate, frequencyOf(row), viewDate, row.repeatUntil, dueDayValue(row));
+      if (lands && !isSameMonth(row.dueDate, viewDate)) { occurrence = lands; break; }
     }
+    if (!occurrence) continue;
 
-    // The stored row's receipt stays with it. A future occurrence has not been
-    // photographed yet, and copying one would attach last month's paper to it.
-    const copy = { ...item };
+    // The newest occurrence carries the fields a person would have edited most
+    // recently. A future occurrence has not been photographed yet, and copying
+    // the id or the receipt would attach them to a row they do not belong to.
+    const template = rows.slice().sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || ''))).pop();
+    const copy = { ...template };
     delete copy.id;
     delete copy.receipt;
     delete copy.createdAt;
     delete copy.updatedAt;
+    delete copy.seededNext;
     await addItem('due', Object.assign(copy, { paid: false, dueDate: occurrence }));
+    represented.add(key);
     wrote = true;
   }
   return wrote ? await getAll('due') : dueItems;
@@ -1160,21 +1156,29 @@ function billsForMonth(dueItems, date) {
   // and actually owed — a projection is not a bill.
   const projections = projectionsForMonth(dueItems, date, 'dueDate');
   const inMonth = dueItems.filter((i) => i.paid !== true && isSameMonth(i.dueDate, date));
-  // A paid bill is not overdue and is not outstanding. Left in, every future
-  // month would carry this month's settled bill *and* project the next
-  // occurrence of it — the same money twice, which is precisely what this
-  // function's separation of stored from projected exists to prevent.
-  // A bill that has not been paid still has to be payable, so it rides forward —
-  // but only until the month being viewed has a row of its own for it. Now that
-  // every month's occurrences are made real when you look at them, an unpaid
-  // recurring bill has a row in the very month it would ride into, and carrying
-  // it in as well counted the same rent twice: the rider and this month's row
-  // are one bill. It also made the pile grow without limit, so a month a year
-  // ahead held twelve months of unpaid bills.
+  // A bill that has not been paid still has to be payable, so it rides forward
+  // into the month being viewed — but only while that month has no row of its
+  // own for it. Once the month holds the bill (a stored row, or the projection
+  // standing in for one), the rider and the month's own row are the same bill,
+  // and carrying both counted the same rent twice. The rider is deduped by
+  // bill-and-date as well, so a row that got written twice cannot double the
+  // month's total. That pile of duplicates was the phantom "random bill": a sum
+  // riding into every later month with no category beside it, because the
+  // category breakdown only ever counted rows dated in that month.
+  //
+  // Looking back is different: a past month is a record of what it held, and
+  // dragging the current overdue pile into it makes the history unreadable.
   const inThisMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
-  const overdueElsewhere = lookingBack
-    ? []
-    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
+  const representedThisMonth = new Set([...inMonth, ...projections].map(billSeriesKey));
+  const seenOverdue = new Set();
+  const overdueElsewhere = lookingBack ? [] : dueItems.filter((i) => {
+    if (i.paid === true || !isOverdue(i.dueDate) || isSameMonth(i.dueDate, date)) return false;
+    if (representedThisMonth.has(billSeriesKey(i))) return false;
+    const key = billSeriesKey(i) + '@' + String(i.dueDate || '').slice(0, 10);
+    if (seenOverdue.has(key)) return false;
+    seenOverdue.add(key);
+    return true;
+  });
   // Real and projected are handed back separately, never mixed into one list:
   // anything that sums what a month costs has to be able to tell them apart,
   // and a caller that can't is how a forecast ends up in a Total Due figure.
@@ -2028,7 +2032,7 @@ async function renderDue(container) {
   
   // A future month is made real before it is read, so its bills are rows you
   // can tap, edit and pay — and so Total Due counts them like any other month.
-  const all = await materialiseBillsForMonth(await getAll('due'), dueViewedDate);
+  const all = await materialiseBillsForMonth(dueViewedDate);
   const [spendItems] = await Promise.all([getAll('spend')]);
   all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   
@@ -4052,6 +4056,11 @@ function renderSettings(container) {
              one of three choices inside Export, where it sat behind the same
              popup as two formats that are not backups at all. -->
         <button class="btn btn-ghost" onclick="exportData('json')" style="width: 100%;">Back up your data</button>
+        <!-- Reads the bills store and reports what it finds; it never changes
+             or deletes anything. It replaces the two silent sweep routines that
+             used to delete suspicious rows automatically — a report you can
+             see is worth more than a cleanup you cannot undo. -->
+        <button class="btn btn-ghost" onclick="openBillDataCheck()" style="width: 100%; margin-top: 10px;">Check bill data</button>
       </div>
 
       <div class="report-card">
@@ -4088,6 +4097,49 @@ function renderSettings(container) {
       </div>
     </div>
   `;
+}
+
+// A read-only look at what is actually in the Bills store. Nothing here writes
+// or deletes: it lists the rows so they can be understood and, if wanted,
+// changed by hand. Two things are worth seeing, both left behind by the old
+// materialise race:
+//   - a bill with no category, which the form no longer allows and which was
+//     the tell-tale on the phantom figure;
+//   - two rows for the same bill on the same date, which is the shape a lost
+//     race leaves.
+async function openBillDataCheck() {
+  const rows = await getAll('due');
+  const noCategory = rows.filter((r) => r.category == null || String(r.category).trim() === '');
+  const byBillDate = new Map();
+  for (const r of rows) {
+    const key = billSeriesKey(r) + '@' + String(r.dueDate || '').slice(0, 10);
+    if (!byBillDate.has(key)) byBillDate.set(key, []);
+    byBillDate.get(key).push(r);
+  }
+  const duplicates = [...byBillDate.values()].filter((group) => group.length > 1);
+
+  const line = (r) => {
+    const category = (r.category == null || String(r.category).trim() === '')
+      ? '<span style="color: var(--danger);">no category</span>'
+      : escapeHTML(r.category);
+    return `
+      <div class="kv-row">
+        <span class="kv-name">${escapeHTML(r.title || '(no title)')} · ${formatDate(r.dueDate)}${r.paid === true ? ' · paid' : ''}</span>
+        <span class="kv-value">${currency(Number(r.amount) || 0)} · ${category}</span>
+      </div>`;
+  };
+  const section = (heading, body) => `
+    <h3 class="report-title" style="margin-top: 14px;">${heading}</h3>
+    ${body || '<p class="setting-hint">None found.</p>'}`;
+
+  openModal('Check bill data', `
+    <p class="setting-hint" style="margin-bottom: 6px;">
+      This only reads your bills. Nothing is changed or deleted.
+    </p>
+    ${section(`Bills with no category (${noCategory.length})`, noCategory.map(line).join(''))}
+    ${section(`Bills stored twice on the same date (${duplicates.length})`,
+      duplicates.map((group) => group.map(line).join('')).join('<hr>'))}
+  `);
 }
 
 // Two taps, like every other destructive control here, and the first one says
