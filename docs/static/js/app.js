@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.84.0';
+const APP_VERSION = '2.85.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -626,6 +626,31 @@ if (window.sortedBridge) {
 // generation it started in and only the newest one is allowed to paint.
 let renderToken = 0;
 
+
+async function dedupeDueRowsOnce() {
+  const KEY = 'SORTED_DUE_DUP_SWEEP_V1';
+  if (localStorage.getItem(KEY)) return;
+  try { await loadAccounts(); } catch (e) {}
+  const rows = await getAll('due');
+  const seen = new Map();
+  const redundant = [];
+  for (const row of rows) {
+    const iso = String(row.dueDate || '').slice(0, 10);
+    const monthKey = iso.slice(0, 7) + '::' + String(row.title || '').trim().toLowerCase();
+    if (!iso || !monthKey) continue;
+    const first = seen.get(monthKey);
+    if (first == null) {
+      seen.set(monthKey, row.id);
+    } else {
+      redundant.push(row.id);
+    }
+  }
+  for (const id of redundant) {
+    try { await deleteItem('due', id); } catch (e) {}
+  }
+  localStorage.setItem(KEY, '1');
+}
+
 async function repairOrphanDueOnce() {
   const KEY = 'SORTED_ORPHAN_DUE_SWEEP_V1';
   if (localStorage.getItem(KEY)) return;
@@ -648,6 +673,7 @@ async function repairOrphanDueOnce() {
 
 async function renderPage() {
   void repairOrphanDueOnce();
+  void dedupeDueRowsOnce();
 
   const content = document.getElementById('content');
   // Both captured here, before the first await. Reading `currentPage` after the
