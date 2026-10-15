@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.91.0';
+const APP_VERSION = '2.92.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2688,12 +2688,16 @@ async function confirmRemoveAccount(id, btn, fromModal) {
   if (btn.dataset.confirming !== '1') {
     const balances = await accountBalances();
     const row = balances.find((b) => b.id === id);
-    const spent = (row.spend || 0) + (row.bills || 0) + (row.savings || 0);
+    // The confirm step used to quote the lifetime total of this account's
+    // spending, bills and goals. That is money *out* summed over every year, so
+    // it read as a balance and alarmed people — a £2,800 account offering to
+    // "Unassign £5,580". What matters is the consequence for the entries, so the
+    // confirm states that instead of a figure.
+    const hasEntries = !!row && !!(row.spend || row.bills || row.savings
+      || row.income || row.transferIn || row.transferOut);
     btn.dataset.confirming = '1';
-    // Say what happens to the money, not just that the row goes. Entries keep
-    // their history and show "Unassigned" until someone re-picks an account.
-    btn.textContent = spent > 0
-      ? `Unassign ${currency(spent)}? Tap again`
+    btn.textContent = hasEntries
+      ? 'All entries will remain, but will be unlinked to this account. Tap again'
       : 'Tap again to remove';
     setTimeout(() => {
       btn.dataset.confirming = '';
