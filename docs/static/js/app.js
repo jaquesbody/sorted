@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.86.0';
+const APP_VERSION = '2.87.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -810,8 +810,7 @@ function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt)
         ${parts.map((p) => `
           <span class="total-key"><i class="account-seg-swatch tone-${p.tone}"></i>${p.label} ${currency(p.value)}</span>`).join('')}
       </div>
-      ${savedTarget > total && total > 0 ? `
-      <div class="stat-card-sub total-note">Your goals add up to more than you have</div>` : ''}`}
+      `}
     </div>`;
 }
 
