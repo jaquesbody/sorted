@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.89.0';
+const APP_VERSION = '2.90.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1200,7 +1200,16 @@ function billsForMonth(dueItems, date) {
 // and its own projection would both appear.
 function projectionsForMonth(items, viewDate, dateKey) {
   const rows = [];
-  for (const item of items) {
+  // One projection per bill, not one per stored row. A monthly bill that has
+  // been made real month by month keeps a row for every one of those months, and
+  // each of those rows was being projected into the month on screen on its own:
+  // a year of rows put the same bill in the month twelve times over, and the
+  // Bills Due card, which sums the month, read twelve times the bill. The
+  // freshest row anchors the projection, so it lands on the bill's real day
+  // rather than being taken from some older occurrence.
+  const seen = new Set();
+  const anchors = [...items].sort((a, b) => String(b[dateKey] || '').localeCompare(String(a[dateKey] || '')));
+  for (const item of anchors) {
     // A settled bill has no future occurrences. Paying one leaves a fresh row
     // for the next date, and that row is what projects from then on — so
     // projecting the settled bill as well put the same occurrence in the month
@@ -1216,6 +1225,9 @@ function projectionsForMonth(items, viewDate, dateKey) {
     // materialised shows each of them twice — once as a row and once as the
     // projection that row has now replaced.
     if (items.some((r) => r !== item && r[dateKey] === occurrence && r.title === item.title)) continue;
+    const series = billSeriesKey(item);
+    if (seen.has(series)) continue;
+    seen.add(series);
     rows.push({
       ...item,
       [dateKey]: occurrence,
