@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.78.0';
+const APP_VERSION = '2.80.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -626,7 +626,29 @@ if (window.sortedBridge) {
 // generation it started in and only the newest one is allowed to paint.
 let renderToken = 0;
 
+async function repairOrphanDueOnce() {
+  const KEY = 'SORTED_ORPHAN_DUE_SWEEP_V1';
+  if (localStorage.getItem(KEY)) return;
+  try {
+    await loadAccounts();
+  } catch (e) {}
+  const expiredIds = new Set();
+  const rows = await getAll('due');
+  for (const row of rows) {
+    const aid = row.accountId;
+    if (aid && !accountsCache.has(aid)) {
+      if (row.id != null) expiredIds.add(row.id);
+    }
+  }
+  for (const id of expiredIds) {
+    try { await deleteItem('due', id); } catch (e) {}
+  }
+  localStorage.setItem(KEY, '1');
+}
+
 async function renderPage() {
+  void repairOrphanDueOnce();
+
   const content = document.getElementById('content');
   // Both captured here, before the first await. Reading `currentPage` after the
   // loads meant a render could be asked for one tab and draw another, and
@@ -926,11 +948,21 @@ async function renderDashboard(container) {
   // rewrite what an earlier one actually did. The chart is no longer driven by
   // "this month's" constants repeated across all six months (which was the
   // thing that moved every bar when the displayed month changed).
+  if (!localStorage.getItem('SORTED_FIRST_USE')) {
+    localStorage.setItem('SORTED_FIRST_USE', localISO());
+  }
+  const firstUseRaw = parseDateOnly(localStorage.getItem('SORTED_FIRST_USE')) || new Date();
+  const firstMonthDate = new Date(firstUseRaw.getFullYear(), firstUseRaw.getMonth(), 1);
+
   const monthTopUps = await getAll('savingsTopUps');
   const chartItems = [];
   const end = dashViewedDate ? new Date(dashViewedDate.getFullYear(), dashViewedDate.getMonth(), 1) : new Date();
   for (let i = 5; i >= 0; i--) {
     const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
+    // Nothing existed before the first time this install tracked, so do
+    // not invent a bar for it — empty months still lay out correctly, but
+    // a longer-ago imported seed cannot paint over that first real month.
+    if (d < firstMonthDate) continue;
     const iso = endOfMonthIso(d);
     const monthSpent = realSpend
       .filter((s) => isSameMonth(s.date, d))
