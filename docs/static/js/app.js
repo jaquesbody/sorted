@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.94.2';
+const APP_VERSION = '2.94.3';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -656,9 +656,11 @@ function maybeShowPrivacyNotice() {
         <a href="https://github.com/jaquesbody/sorted" target="_blank" rel="noopener">Review the code on GitHub</a></p>
       <button class="btn btn-primary" onclick="dismissPrivacyNotice()">Got it</button>
     </div>`;
+  // The card opens with the button centred and the app still visible behind
+  // it. The button is not focused on opening: focusing it is what paints a
+  // ring over the accent fill on Android, and a modal card with one button
+  // has nothing a ring could be useful against. It stays reachable by Tab.
   document.body.appendChild(overlay);
-  const focusTarget = overlay.querySelector('button');
-  if (focusTarget) focusTarget.focus();
 }
 
 // The passcode lock screen is a full-screen overlay, so nothing behind it can
@@ -1014,7 +1016,7 @@ async function renderDashboard(container) {
         </div>
         <div class="stat-card-sub">
           <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><i style="display:inline-block;width:12px;height:6px;background:var(--danger);border-radius:2px"></i>Paid</span>
-          <span style="display:inline-flex;align-items:center;gap:4px;"><i style="display:inline-block;width:12px;height:6px;background-color:var(--danger);background-image:repeating-linear-gradient(45deg, rgba(255,255,255,.18) 0 6px, transparent 6px 12px);border-radius:2px"></i>Due</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;"><i style="display:inline-block;width:12px;height:6px;background-color:var(--danger);background-image:repeating-linear-gradient(45deg, rgba(255,255,255,.34) 0 6px, transparent 6px 12px);border-radius:2px"></i>Due</span>
         </div>
         ${renderCategoryBreakdown(dueByCategory, billsThisMonthTotal, 'danger')}
       </div>

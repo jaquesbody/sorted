@@ -8,23 +8,23 @@ Try it live at [jaquesbody.github.io/sorted](https://jaquesbody.github.io/sorted
 
 ## Screenshots
 
-All six are the same household on a 412px phone viewport: Gareth and Kim, a
-current account and some cash, two goals, and a month with a bill already paid.
+All six are the same household on a 412px phone viewport: Gareth and Kim, a current account and some cash, three goals, and a month with some bills already paid and one spend left unticked.
 
 | | |
 |---|---|
-| ![Dashboard — spend, bills and savings for the month, and a 6-month trend](docs/screenshots/dashboard.png) | ![Spend — receipts, confirmation, and icons under the amount](docs/screenshots/spend.png) |
+| ![Dashboard — total money, what went where, and the month's bills and savings](docs/screenshots/dashboard.png) | ![Spend — the tick, the receipt, and who it was](docs/screenshots/spend.png) |
 | ![Bills — paid and upcoming, each counting down to its date](docs/screenshots/bills.png) | ![Savings — accounts, income and goals](docs/screenshots/savings.png) |
-| ![Reports — categories, who spent what, and the forecast](docs/screenshots/reports.png) | ![Settings](docs/screenshots/settings.png) |
+| ![Reports — forecast, categories, who spent what, and the rest](docs/screenshots/reports.png) | ![Settings](docs/screenshots/settings.png) |
 
 ## Features
 
-- Dashboard: spent, bills due and savings for whichever month you're looking at, plus a 6-month trend chart that splits recurring from one-off spend
+- Dashboard: **Total money** — the balance at the end of the month you're looking at — with a bar and a legend saying what went to spend, bills and goals, and what's left after what's still owed. Alongside it, spent, bills due and savings for the same month, and a 6-month trend chart split into Spent, Bills, Left and Savings, each month drawn as the balance it ended on
 - People: mark spend, bills and savings goals as somebody's, and see a coloured dot on each row. A chip in the top bar says who's using the app, so new entries and bill payments are marked automatically. This is attribution, not a login — anyone can switch, and there's still no account
 - Give someone a PIN and entering it instead of the app passcode both unlocks the app and switches to them, so the right person is marked without touching anything. The app passcode keeps working exactly as before, and anyone who can reach Settings can reset a PIN without knowing it — it says who you are, not that you're allowed in
 - A person filter on Spend and Bills — Everyone, or one person — sharing one selection across both. The Spend total follows it; the Bills total stays household-wide
 - Marking a bill paid records who paid it, which can be someone other than the bill's owner
-- Spent, Bills, and Savings lists — add, edit, and delete; confirm spend entries and mark bills as paid
+- Spent, Bills, and Savings lists — add, edit, and delete, and mark bills as paid
+- **The tick beside a spend entry is what says the money has actually gone.** An unticked row is spending recorded but not yet made: it appears on the Spent tab, and counts towards nothing. Not the account balance, not Total money, not the Spent card, not a report, not the month's history. Ticking it is the event that moves the money, and un-ticking it puts it back. The Spent tab still lists unticked rows under Pending, because that's the one place a pending row must not be hidden — it's where you tick it
 - A bill you tick is still a bill: it stays in the list with the date you paid it, its tick un-pays it, and it can still be edited. Deleting a repeating bill asks which you mean — this one, or this one and every month of it
 - Every row reads as a small table: the amount on the right, its timing underneath, and the receipt paperclip, the person and the tick in one 24px row beneath that. The paperclip only appears when there's actually a picture
 - Recurring: say whether something repeats monthly or annually. It rolls its due date forward by that much when paid, and projects its own next occurrences into the months ahead — twelve months for monthly, the same time next year for annual — so stepping forward shows what those months hold instead of an empty page. Projected rows are dashed, marked, and have no buttons: they're a forecast, not something to pay
@@ -34,7 +34,7 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Patterns: which days you actually spend on, averaged over the last eight weeks, and whether this week is a normal one. Averages come from the weeks you recorded in, not from empty ones — otherwise a quiet fortnight reads as you spending half as much on every day
 - Both are arithmetic on your own data. No network, no API key, no model, and nothing about your spending leaves the device — which is the whole reason they exist instead of a search API
 - Three reminders, each off until you ask for it: bills coming due or already overdue, nothing recorded today, and a savings goal going untouched. On Android these are scheduled by the system, so they arrive whether or not Sorted is open — bills in the morning, the other two at a time you pick. In a browser there's no way to wake the app at a set hour, so the same checks run when you open it and put it away, and the settings say so rather than implying more
-- Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete
+- Start Over: delete everything and start from empty, in Settings. A new install starts empty too — there's no sample data to delete. The first thing it shows instead is a card saying what the app does with your data, and then never again
 - Sync, in Settings: keep a copy of everything on a machine that stays on, and take it with you when you change phone. The whole database goes as one file, and whichever device wrote it last is what the other one gets — so a bill you delete on one device stays deleted on the other, rather than coming back on the next sync. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
 - Setting it up is **one address and one button**: pick where in the dropdown, paste the address, press **Sync now**. Before anything is replaced, the copy it replaced is kept, with a Restore button beside it
 - Underneath sits **a numbered setup guide for whichever transport is selected** — where to get the address from, in order, including the command to run. Two of the four exist and are described as they work: **Home server** over your Wi-Fi, and **Tailscale** (works, and from outside the house, over the same file). **Syncthing** and **Cloud** are in the dropdown with their picker disabled until they exist, and their steps describe what the implementation will take rather than showing nothing
@@ -52,7 +52,7 @@ current account and some cash, two goals, and a month with a bill already paid.
 - Month navigation and status filters
 - Categories: Utilities, Motor, Entertainment, Shopping, General, Travel, One-Off — the same list for bills as for spend, and anything an entry is already filed under stays offered. Savings goals have their own: Holiday, Car, Christmas, One-Off, Other
 - A savings goal you've reached turns the whole card green with the text in black and a tick beside it
-- Bank accounts, and cash as an account rather than a separate payment method. The Savings page lists them above your goals, each with a balance and the spend, bills and goal amounts that moved it. Spending, paying a bill or putting money into a goal says which account it came from, and the balance follows on its own
+- Bank accounts, and cash as an account rather than a separate payment method. The Savings page lists them above your goals, each with a balance and the spend, bills and goal amounts that moved it. Spending, paying a bill or putting money into a goal says which account it came from, and the balance follows on its own. There's no "not from an account" on those two forms: money that never left a tracked account cannot be deducted from one
 - Move money between accounts when you transfer it for real, and adjust a balance by hand for anything the app can't infer (interest, fees, a correction)
 - Reports gains a "Where Your Money Is" card and a Forecast chart
 - Receipt capture: snap or upload a receipt (image or PDF) on the Spend or Bills form and the app pre-fills the title, amount and date for you to confirm
@@ -88,7 +88,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.61.0-debug.apk`](sorted-v2-2.61.0-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.94.3-debug.apk`](sorted-v2-2.94.3-debug.apk) from this repo and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 ### Updating an installed copy
 
@@ -119,6 +119,8 @@ Note: importing JSON works on every platform and accepts only a Sorted backup �
 ## Privacy
 
 No backend, no cloud storage, no login. All data stays on your own device and only leaves it when you export it yourself.
+
+The first thing a new install shows is a card said in so many words — your spending and saving are tracked privately, everything stays on the device, nothing leaves without your say-so, and the code that backs the claim is a link away. It appears once and is remembered after that. It is deliberately not a modal with an Accept button, because a notice you have to agree to is a notice you can be held to; this one just tells you and gets out of the way.
 
 Accounts, income and their transfers are part of that: balances are worked out on your device from your own entries and never sent anywhere.
 

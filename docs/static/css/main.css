@@ -326,9 +326,14 @@ body {
 
 .progress-spend { background: var(--accent); }
  .progress-due { background: var(--danger); }
+/* The stripe over the solid red, marking the part still owed. It has to read
+   as a stripe rather than as a tint: at 18% white on --danger it all but
+   disappeared, and the Due half of the bar looked like one flat colour. The
+   same figure is drawn inline on the Bills Due card's own legend swatch, so
+   the two are changed together. */
 .progress-due--striped {
   background-image: repeating-linear-gradient(45deg,
-    rgba(255, 255, 255, 0.18) 0 6px,
+    rgba(255, 255, 255, 0.34) 0 6px,
     transparent 6px 12px);
 }
 .progress-savings { background: var(--success); }
@@ -1865,30 +1870,37 @@ body {
 }
 
 /* One button, drawn the way the reference draws it: the accent as a fill, the
-   label centred in it, black text over it, and no border — the default button
-   border from the app's own .btn is the thing that shows otherwise. */
+   label centred in it, black text over it, no border and no ring. The app's
+   own .btn brings a border, and a WebView paints a script's focus() as an
+   outline, which is what put a white line around "Got it".
+
+   This is deliberately the plainest rule that will do the job. The earlier
+   attempt was `.btn:focus:not(:focus-visible)`, on the reasoning that a
+   script's focus() never matches :focus-visible, so the keyboard ring would
+   survive — and it did, on Android too, where the outline stayed on the
+   button. That is what an unsupported pseudo-class does: it does not weaken
+   the rule, it makes the whole selector invalid and the rule is dropped. So
+   there is no pseudo-class here at all. `outline: none` on the base covers
+   every state including focus, and -webkit-tap-highlight-color disables the
+   grey box Android draws under a finger. The notice is a modal card holding
+   exactly one button, so there is nothing on it a ring could be useful
+   against. */
 .notice-box .btn {
   width: 100%;
   justify-content: center;
   border: none;
+  outline: none;
+  -webkit-tap-highlight-color: transparent;
   color: #000;
   background: var(--accent);
   font-weight: 600;
 }
 
-.notice-box .btn:hover {
+.notice-box .btn:hover,
+.notice-box .btn:focus,
+.notice-box .btn:active {
   background: var(--accent-hover);
   color: #000;
-}
-
-/* Focusing the button is right — it is the only thing on the card, and a
-   keyboard needs to be able to reach it — but Chromium paints that focus as a
-   black ring on the accent fill, and the notice is opened by a script rather
-   than by a key. `:focus-visible` is not matched by a script's focus(), so this
-   is the one case with nothing behind it; the ring stays for anyone who tabs
-   to it for real. */
-.notice-box .btn:focus:not(:focus-visible) {
-  outline: none;
 }
 
 /* Modal */
