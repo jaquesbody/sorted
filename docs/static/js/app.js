@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.93.1';
+const APP_VERSION = '2.94.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -617,10 +617,17 @@ function openModal(title, content) {
 
 // The first thing a new install shows, and once only. Everything the app
 // records stays on the device, and saying so plainly — before anything is
-// entered — is the point of the notice. It reads the way the site's own
-// privacy guide does: what the app does with your data, the line to the code
-// that proves it, and a single button to acknowledge.
+// entered — is the point of the notice. It is the site's own privacy notice
+// (jaquesbody.github.io/know) with Sorted's words: the wordmark, what the app
+// does with your data, the line to the code that proves it, and one button to
+// acknowledge. Its own overlay, not the app modal, so no title bar or close
+// cross sits on top of it.
 const PRIVACY_SEEN_KEY = 'SORTED_PRIVACY_SEEN';
+
+function dismissPrivacyNotice() {
+  const el = document.getElementById('privacy-notice');
+  if (el) el.remove();
+}
 
 function maybeShowPrivacyNotice() {
   if (localStorage.getItem(PRIVACY_SEEN_KEY)) return;
@@ -629,21 +636,24 @@ function maybeShowPrivacyNotice() {
   // once the app is actually opened.
   if (typeof isLocked === 'function' && isLocked()) return;
   localStorage.setItem(PRIVACY_SEEN_KEY, '1');
-  openModal('Welcome to Sorted', `
-    <img src="static/icons/wordmark-sorted.png" alt="Sorted"
-         style="width: 106px; height: 24px; display: block; margin: 2px 0 14px;">
-    <p style="font-size: 16px; font-weight: 600; margin-bottom: 10px;">
-      A private app to track spending and saving.
-    </p>
-    <p class="setting-hint" style="margin-bottom: 10px;">
-      Sorted stores everything locally. Nothing leaves your device without your permission.
-    </p>
-    <p class="setting-hint" style="margin-bottom: 18px;">
-      Fully open source.
-      <a href="https://github.com/jaquesbody/sorted" target="_blank" rel="noopener">Review the code on GitHub</a>
-    </p>
-    <button class="btn btn-primary" style="width: 100%;" onclick="closeModal()">Got it</button>
-  `);
+  const overlay = document.createElement('div');
+  overlay.className = 'notice-overlay';
+  overlay.id = 'privacy-notice';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Privacy');
+  overlay.innerHTML = `
+    <div class="notice-box">
+      <img src="static/icons/wordmark-sorted.png" alt="Sorted" class="notice-logo">
+      <p>A private app to track spending and saving.</p>
+      <p>Sorted stores everything locally. Nothing leaves your device without your permission.</p>
+      <p>Fully open source.
+        <a href="https://github.com/jaquesbody/sorted" target="_blank" rel="noopener">Review the code on GitHub</a></p>
+      <button class="btn btn-primary" onclick="dismissPrivacyNotice()">Got it</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const focusTarget = overlay.querySelector('button');
+  if (focusTarget) focusTarget.focus();
 }
 
 // The passcode lock screen is a full-screen overlay, so nothing behind it can
@@ -901,20 +911,20 @@ async function renderDashboard(container) {
     .reduce((sum, i) => sum + i.amount, 0)
     + projections.reduce((sum, i) => sum + i.amount, 0);
 
-  // A bill that has been paid is still a bill. `dueTotal` counts only what is
-  // outstanding, so settling one used to make the Total Money card's Bills drop
-  // to £0.00 and look as though the money had been spent instead. The card is a
-  // picture of what a month did, so it counts the month's bills whether they are
-  // settled or not; the Bills card beside it keeps answering the other question
-  // — what is still owed — and says so in its own sub-line. A month ahead is the
-  // one place projections are the right answer, because nothing is stored for it.
+  // A month gone past has no outstanding bills left, so `dueTotal` is £0.00 for
+  // every one of them — which reads as "there were no bills in January" when the
+  // truth is "they have all been paid". The Total Money card is a picture of
+  // what a month did, so a past month counts its bills either way. The current
+  // month counts only what is still owed: a bill already paid has left the
+  // balance, and drawing it against the money again took it out of the card's own
+  // "Left" a second time — a £900 total reported "Left £800.00" beside a settled
+  // £100 bill. The Bills card beside it answers the same question and says so in
+  // its own sub-line. A month ahead is the one place projections are the right
+  // answer, because nothing is stored for it.
   const billsThisMonth = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
-  const paidBillsAmount = Math.max(0, billsThisMonthTotal - dueTotal);
-  const dashInFuture = !isBeforeThisMonth(dashViewedDate)
-    && !isSameMonth(dashViewedDate, new Date());
-  const dueForTotal = dashInFuture
-    ? dueTotal
-    : billsThisMonth.reduce((sum, i) => sum + i.amount, 0);
+  const dueForTotal = isBeforeThisMonth(dashViewedDate)
+    ? billsThisMonth.reduce((sum, i) => sum + i.amount, 0)
+    : dueTotal;
   
   const savingsCurrent = savingsItems.reduce((sum, i) => sum + i.current, 0);
   const savingsTarget = savingsItems.reduce((sum, i) => sum + i.target, 0);
@@ -2332,21 +2342,30 @@ async function renderSavings(container) {
       <span class="stat-card-sub">${currency(totalBalance)}</span>
     </div>
     <div class="item-list">
-      ${balances.map(renderAccountRow).join('')}
+      ${balances.length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-state-text">No accounts yet</div>
+          <button class="btn btn-primary" onclick="openAccountSetup()">Add First Account</button>
+        </div>
+      ` : balances.map(renderAccountRow).join('')}
     </div>
 
+    ${balances.length > 1 ? `
     <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
       <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
-    </div>
+    </div>` : ''}
 
     <div class="section-head">
       <span class="section-title">Income</span>
       <span class="stat-card-sub">${currency(incomeTotal)}</span>
     </div>
     <div class="item-list">
-      ${incomeItems.length === 0
-        ? '<div class="empty-state"><div class="empty-state-text">No income recorded</div></div>'
-        : incomeItems.map(renderIncomeRow).join('')}
+      ${incomeItems.length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-state-text">No income recorded</div>
+          <button class="btn btn-primary" onclick="openIncomeSetup()">Add First Income</button>
+        </div>
+      ` : incomeItems.map(renderIncomeRow).join('')}
     </div>
   `;
 }

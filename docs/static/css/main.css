@@ -1814,6 +1814,57 @@ body {
   color: var(--accent-on-tint);
 }
 
+/* First-visit privacy notice. Its own overlay rather than the app modal: the
+   site's notice (jaquesbody.github.io/know) is a bordered card with no title
+   bar and a single full-width button, and the app modal would put a
+   "Welcome to Sorted" title and a close cross on top of it. */
+.notice-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.notice-box {
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  max-width: 28rem;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.notice-logo {
+  height: 32px;
+  width: auto;
+  align-self: center;
+}
+
+.notice-box p {
+  font-size: 1.05rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.notice-box a {
+  color: var(--accent);
+}
+
+.notice-box a:hover {
+  color: var(--accent-hover);
+}
+
+.notice-box .btn {
+  width: 100%;
+}
+
 /* Modal */
 .modal {
   display: none;
