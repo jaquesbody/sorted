@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.85.0';
+const APP_VERSION = '2.86.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1116,15 +1116,29 @@ async function materialiseBillsForMonth(dueItems, viewDate) {
   // high until you left and came back.
   const created = [];
   for (const item of dueItems) {
-    if (item.paid === true) continue;
+    if (item.paid === true || item.seededNext) continue;
     const frequency = frequencyOf(item);
     if (!frequency) continue;
     const occurrence = occurrenceInMonth(item.dueDate, frequency, viewDate, item.repeatUntil, dueDayValue(item));
     if (!occurrence || occurrence === item.dueDate) continue;
     if (created.includes(item.title)) continue;
+    // One occurrence leaves a row for the next one; once it has left a
+    // successor (or any later row) in the store, this row must not spawn
+    // another or the chain multiplies every time the month is glanced at.
+    const endsHere = item.repeatUntil && occurrence > item.repeatUntil;
+    if (endsHere) continue;
     if (dueItems.some((r) => r.dueDate === occurrence && r.title === item.title)) continue;
     if (dueItems.some((r) => isSameMonth(r.dueDate, viewDate) && r.title === item.title)) continue;
+    if (dueItems.some((r) => String(r.title || '').trim() === String(item.title || '').trim()
+        && String(r.dueDate || '') > String(item.dueDate || ''))) continue;
     created.push(item.title);
+
+    // Mark the source as having seeded this month, so a second pass (or the
+    // next month you page into) cannot make it generate again. The row stays
+    // a proper unpaid occurrence — it simply knows it has moved on.
+    if (item.id != null) {
+      try { await updateItem('due', { ...item, seededNext: true }); } catch (e) {}
+    }
 
     // The stored row's receipt stays with it. A future occurrence has not been
     // photographed yet, and copying one would attach last month's paper to it.
