@@ -1881,6 +1881,16 @@ body {
   color: #000;
 }
 
+/* Focusing the button is right — it is the only thing on the card, and a
+   keyboard needs to be able to reach it — but Chromium paints that focus as a
+   black ring on the accent fill, and the notice is opened by a script rather
+   than by a key. `:focus-visible` is not matched by a script's focus(), so this
+   is the one case with nothing behind it; the ring stays for anyone who tabs
+   to it for real. */
+.notice-box .btn:focus:not(:focus-visible) {
+  outline: none;
+}
+
 /* Modal */
 .modal {
   display: none;

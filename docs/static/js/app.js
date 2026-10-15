@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.94.1';
+const APP_VERSION = '2.94.2';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -114,7 +114,9 @@ async function accountBalances() {
     // here — otherwise every bill they have already paid would silently vanish
     // from their balances. New payments never produce one of these.
     if (item.paid) row.bills += item.amount;
-    else row.spend += item.amount;
+    // An unticked row is money that has not left yet, so it is not drawn
+    // against the balance. Ticking it is what moves it.
+    else if (item.confirmed !== false) row.spend += item.amount;
   }
   // A bill that has been paid leaves the account from Bills, which is where it
   // now stays. Only paid ones count: an unpaid bill has not been paid yet.
@@ -192,10 +194,13 @@ async function totalMoneyAtEndOf(monthEndIso) {
   //
   // Only what is attached to an account counts. `accountBalances` attributes by
   // accountId, so a row with none never moved a balance — and counting it here
-  // would make the card disagree with the figure it is derived from.
+  // would make the card disagree with the figure it is derived from. Unticked
+  // spending is held back for the same reason it is in the balance itself.
   const moves = (row) => !!row.accountId;
   let net = 0;
-  for (const s of spend) if (moves(s) && later(s.date)) net -= Number(s.amount) || 0;
+  for (const s of spend) {
+    if (moves(s) && s.confirmed !== false && later(s.date)) net -= Number(s.amount) || 0;
+  }
   for (const i of income) if (moves(i) && later(i.date)) net += Number(i.amount) || 0;
   for (const b of dueItems) {
     if (b.paid === true && moves(b) && later(b.dueDate)) net -= Number(b.amount) || 0;
@@ -830,25 +835,27 @@ function renderTotalMoneyCard(balances, spent, due, outstanding, saved, savedTar
 
   // Two different figures about the month's bills, because they answer two
   // different questions. `due` is what the month cost, which is what the card
-  // shows: a month gone past has nothing left to pay, and £0.00 there reads as
+  // shows: a bill that has been paid is still a bill, and £0.00 there reads as
   // "there were no bills in January" when the truth is "they were all settled".
   // `outstanding` is what is still owed, and that is the only part drawn
   // against the money.
   //
-  // A settled bill has already left the balance — that is what makes the total
-  // lower — so counting it as committed took the same money out of "Left" a
-  // second time: £1,000 less a £100 bill reads £900, and the card was saying
-  // £800 of that was left. Now the money can only be spent once.
+  // The same rule has to cover spending, for the same reason: money that has
+  // already left the balance is not taken out of "Left" a second time. £1,000
+  // with a £100 spend ticked off reads £800 total, and Left is £800 rather
+  // than £600 — the spend shows on the card as how the month went, not as
+  // money still owed. Only what is still owed, and what is set aside in goals,
+  // comes off what is left.
   const billsShown = Math.max(0, due);
   const committed = Math.max(0, outstanding);
   const savedPart = Math.max(0, saved);
-  const spare = total - spent - committed - savedPart;
+  const spare = total - committed - savedPart;
 
   // The bar is scaled to the biggest thing on it, so a month with no bills
   // still shows the parts it has. What is left is not the remainder of the
-  // total any more, so the scale has to hold the four parts as well: a settled
-  // bill shows on the bar and the money it took has already gone, and drawing
-  // both against a smaller total would push the last segment off the end.
+  // total any more, so the scale has to hold the four parts as well: money
+  // already spent shows on the bar, and drawing it against a smaller total
+  // would push the last segment off the end.
   const barTotal = spent + billsShown + savedPart + spare;
   const scale = Math.max(total, barTotal, 1);
   const pct = (n) => Math.max(0, Math.min(100, (Math.max(0, n) / scale) * 100));
@@ -924,19 +931,21 @@ async function renderDashboard(container) {
     .reduce((sum, i) => sum + i.amount, 0)
     + projections.reduce((sum, i) => sum + i.amount, 0);
 
-  // Two figures for the card, from one month. `dueForTotal` is what the month
-  // cost, settled or not — a month gone past has nothing left to pay, so
-  // `dueTotal` is £0.00 for all of them and reads as "there were no bills in
-  // January" when the truth is "they were all settled". `dueTotal` itself is
-  // what is still owed, and that is the only part drawn against the money: a
+  // Two figures for the card, from one month, because they answer two
+  // different questions. `dueForTotal` is what the month cost, settled or not:
+  // a paid bill is still a bill, and £0.00 there reads as "there were no bills
+  // in January" when the truth is "they were all settled". `dueTotal` is what
+  // is still owed, and that is the only part drawn against the money — a
   // settled bill has already left the balance, so counting it again took the
-  // same £100 out of "Left" a second time and left £800 beside a £900 total.
-  // A month ahead is the one place `dueTotal` alone is right, because the
-  // projections are the only bills a month ahead has.
+  // same £100 out of "Left" a second time. A month ahead is the one place
+  // `dueTotal` alone is right, because its projections are the only bills it
+  // has.
   const billsThisMonth = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
-  const dueForTotal = isBeforeThisMonth(dashViewedDate)
-    ? billsThisMonth.reduce((sum, i) => sum + i.amount, 0)
-    : dueTotal;
+  const dashInFuture = !isBeforeThisMonth(dashViewedDate)
+    && !isSameMonth(dashViewedDate, new Date());
+  const dueForTotal = dashInFuture
+    ? dueTotal
+    : billsThisMonth.reduce((sum, i) => sum + i.amount, 0);
   
   const savingsCurrent = savingsItems.reduce((sum, i) => sum + i.current, 0);
   const savingsTarget = savingsItems.reduce((sum, i) => sum + i.target, 0);
@@ -1099,9 +1108,17 @@ function billHistory(dueItems, spendItems) {
   return dueItems.concat(spendItems.filter(isSettledBillPayment));
 }
 
-// Spending, which is what is left once the bills are taken out of it.
+// Spending, which is what is left once the bills are taken out of it, and once
+// the unticked rows are taken out of that.
+//
+// The tick on the Spent tab is what says the money has actually gone: an
+// unticked row is spending recorded but not yet made, so it belongs to
+// nothing — not the balance, not the dashboard, not a report, not a
+// projection. Every row a form writes now carries the tick one way or the
+// other; a row that predates it has no `confirmed` field at all and reads as
+// ticked, so nothing already recorded stops counting.
 function spendingHistory(spendItems) {
-  return spendItems.filter((i) => !isSettledBillPayment(i));
+  return spendItems.filter((i) => !isSettledBillPayment(i) && i.confirmed !== false);
 }
 
 // Grouped by category. Built through a Map and converted once at the end,
@@ -1878,7 +1895,11 @@ function receiptChip(item, type) {
 async function renderSpend(container) {
   const token = renderToken;
 
-  const items = spendingHistory(await getAll('spend'));
+  // Everything recorded here, unticked rows included: the Spent page is where a
+  // pending row gets ticked, so it is the one place a pending row must not be
+  // hidden. Settled bill payments are the exception — those live on Bills,
+  // under Paid, and showing them here too would count the same rent twice.
+  const items = (await getAll('spend')).filter((i) => !isSettledBillPayment(i));
   items.sort((a, b) => new Date(b.date) - new Date(a.date));
   
   const inMonth = items.filter(i => isSameMonth(i.date, viewedDate));
@@ -1941,8 +1962,11 @@ async function renderSpend(container) {
 
 function applySpendFilter(items) {
   const mine = items.filter(matchesPersonFilter);
-  if (spendFilter === 'confirmed') return mine.filter(i => i.confirmed === true);
-  if (spendFilter === 'pending') return mine.filter(i => !i.confirmed);
+  // The same rule the balance uses: a row with no `confirmed` field at all
+  // predates the tick and reads as ticked, so it lands under Confirmed and not
+  // under Pending.
+  if (spendFilter === 'confirmed') return mine.filter(i => i.confirmed !== false);
+  if (spendFilter === 'pending') return mine.filter(i => i.confirmed === false);
   if (spendFilter === 'recurring') return mine.filter(i => !!i.recurring);
   return mine;
 }
