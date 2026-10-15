@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.88.0';
+const APP_VERSION = '2.89.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1162,16 +1162,21 @@ function billsForMonth(dueItems, date) {
   // standing in for one), the rider and the month's own row are the same bill,
   // and carrying both counted the same rent twice. The rider is deduped by
   // bill-and-date as well, so a row that got written twice cannot double the
-  // month's total. That pile of duplicates was the phantom "random bill": a sum
-  // riding into every later month with no category beside it, because the
-  // category breakdown only ever counted rows dated in that month.
+  // month's total.
   //
-  // Looking back is different: a past month is a record of what it held, and
-  // dragging the current overdue pile into it makes the history unreadable.
-  const inThisMonth = dueItems.filter((i) => isSameMonth(i.dueDate, date));
+  // It also has an end. It belongs to the month you are in and the one after —
+  // the two places a missed bill is still "now, and about to be missed again".
+  // With no end it rode into every month ahead without limit: a figure on a
+  // month years away, with nothing on that month to explain it, because the
+  // rider is not part of the month's own bills. That is the phantom. A past
+  // month is a third case: it is a record of what it held, and dragging the
+  // current overdue pile into it makes the history unreadable.
+  const now = new Date();
+  const monthsAhead = (date.getFullYear() - now.getFullYear()) * 12 + (date.getMonth() - now.getMonth());
+  const ridingWindow = !lookingBack && monthsAhead >= 0 && monthsAhead <= 1;
   const representedThisMonth = new Set([...inMonth, ...projections].map(billSeriesKey));
   const seenOverdue = new Set();
-  const overdueElsewhere = lookingBack ? [] : dueItems.filter((i) => {
+  const overdueElsewhere = !ridingWindow ? [] : dueItems.filter((i) => {
     if (i.paid === true || !isOverdue(i.dueDate) || isSameMonth(i.dueDate, date)) return false;
     if (representedThisMonth.has(billSeriesKey(i))) return false;
     const key = billSeriesKey(i) + '@' + String(i.dueDate || '').slice(0, 10);
@@ -4099,35 +4104,80 @@ function renderSettings(container) {
   `;
 }
 
-// A read-only look at what is actually in the Bills store. Nothing here writes
-// or deletes: it lists the rows so they can be understood and, if wanted,
-// changed by hand. Two things are worth seeing, both left behind by the old
-// materialise race:
-//   - a bill with no category, which the form no longer allows and which was
-//     the tell-tale on the phantom figure;
-//   - two rows for the same bill on the same date, which is the shape a lost
-//     race leaves.
+// A read-only look at the Bills store, and at what the Dashboard's BILLS DUE
+// card is adding up for the month it is showing. Nothing here writes or
+// deletes: it lists rows so they can be understood and, if wanted, changed by
+// hand.
+//
+// The "what BILLS DUE is made of" section exists because a figure can appear on
+// that card with no bad row behind it. A row with no category, or two rows for
+// one bill, are not the only ways a total can look wrong; the card also adds
+// older unpaid bills and projections, and a report of the store alone would
+// never show that. This section names every row the card is counting and which
+// of the three buckets it came from, so a figure with no explanation has
+// nowhere left to hide.
 async function openBillDataCheck() {
   const rows = await getAll('due');
-  const noCategory = rows.filter((r) => r.category == null || String(r.category).trim() === '');
-  const byBillDate = new Map();
-  for (const r of rows) {
-    const key = billSeriesKey(r) + '@' + String(r.dueDate || '').slice(0, 10);
-    if (!byBillDate.has(key)) byBillDate.set(key, []);
-    byBillDate.get(key).push(r);
-  }
-  const duplicates = [...byBillDate.values()].filter((group) => group.length > 1);
+  const monthLabel = formatMonth(dashViewedDate);
+  const read = billsForMonth(rows, dashViewedDate);
+  const dueTotal = read.items.reduce((n, x) => n + (Number(x.amount) || 0), 0);
 
-  const line = (r) => {
-    const category = (r.category == null || String(r.category).trim() === '')
-      ? '<span style="color: var(--danger);">no category</span>'
-      : escapeHTML(r.category);
-    return `
+  const cat = (r) => ((r.category == null || String(r.category).trim() === '')
+    ? '<span style="color: var(--danger);">no category</span>'
+    : escapeHTML(r.category));
+  const line = (r, tag) => `
       <div class="kv-row">
-        <span class="kv-name">${escapeHTML(r.title || '(no title)')} · ${formatDate(r.dueDate)}${r.paid === true ? ' · paid' : ''}</span>
-        <span class="kv-value">${currency(Number(r.amount) || 0)} · ${category}</span>
+        <span class="kv-name">${escapeHTML(r.title || '(no title)')} · ${formatDate(r.dueDate)}${r.paid === true ? ' · paid' : ''}${tag ? ' · ' + tag : ''}</span>
+        <span class="kv-value">${currency(Number(r.amount) || 0)} · ${cat(r)}</span>
       </div>`;
-  };
+
+  // Everything the Dashboard card is counting for the month on screen.
+  const composition = [
+    ...rows.filter((i) => isSameMonth(i.dueDate, dashViewedDate)).map((r) => ({ r, tag: 'in month' })),
+    ...read.overdueElsewhere.map((r) => ({ r, tag: 'overdue carried' })),
+    ...read.projections.map((r) => ({ r, tag: 'projected' }))
+  ].sort((a, b) => (Number(b.r.amount) || 0) - (Number(a.r.amount) || 0));
+
+  // The largest single rows in the store, whatever their dates.
+  const biggest = [...rows]
+    .filter((r) => Number(r.amount) > 0)
+    .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
+    .slice(0, 12);
+
+  // Unpaid rows already past their date. These are what the rider carries.
+  const overdue = rows
+    .filter((r) => r.paid !== true && isOverdue(r.dueDate))
+    .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
+  const overdueTotal = overdue.reduce((n, r) => n + (Number(r.amount) || 0), 0);
+
+  // One line per bill: how many rows it holds, and what they add up to.
+  const byName = new Map();
+  for (const r of rows) {
+    const key = String(r.title || '(no title)').trim() + '|' + (frequencyOf(r) || 'once');
+    const e = byName.get(key) || { title: String(r.title || '(no title)').trim(), n: 0, total: 0, first: '', last: '' };
+    e.n += 1;
+    e.total += Number(r.amount) || 0;
+    const d = String(r.dueDate || '').slice(0, 10);
+    if (d && (!e.first || d < e.first)) e.first = d;
+    if (d && (!e.last || d > e.last)) e.last = d;
+    byName.set(key, e);
+  }
+  const names = [...byName.values()].sort((a, b) => b.total - a.total).slice(0, 12);
+  const nameLine = (e) => `
+      <div class="kv-row">
+        <span class="kv-name">${escapeHTML(e.title)} · ${e.n} row${e.n === 1 ? '' : 's'}${e.first ? ' · ' + formatDate(e.first) + (e.last && e.last !== e.first ? ' → ' + formatDate(e.last) : '') : ''}</span>
+        <span class="kv-value">${currency(e.total)}</span>
+      </div>`;
+
+  const noCategory = rows.filter((r) => r.category == null || String(r.category).trim() === '');
+  const byBillMonth = new Map();
+  for (const r of rows) {
+    const key = String(r.title || '').trim().toLowerCase() + '@' + String(r.dueDate || '').slice(0, 7);
+    if (!byBillMonth.has(key)) byBillMonth.set(key, []);
+    byBillMonth.get(key).push(r);
+  }
+  const duplicates = [...byBillMonth.values()].filter((group) => group.length > 1);
+
   const section = (heading, body) => `
     <h3 class="report-title" style="margin-top: 14px;">${heading}</h3>
     ${body || '<p class="setting-hint">None found.</p>'}`;
@@ -4136,9 +4186,15 @@ async function openBillDataCheck() {
     <p class="setting-hint" style="margin-bottom: 6px;">
       This only reads your bills. Nothing is changed or deleted.
     </p>
-    ${section(`Bills with no category (${noCategory.length})`, noCategory.map(line).join(''))}
-    ${section(`Bills stored twice on the same date (${duplicates.length})`,
-      duplicates.map((group) => group.map(line).join('')).join('<hr>'))}
+    ${section(`What BILLS DUE is made of — ${escapeHTML(monthLabel)} (${currency(dueTotal)})`,
+      composition.map((c) => line(c.r, c.tag)).join(''))}
+    ${section(`Largest bills in the store (${rows.length} rows in total)`, biggest.map((r) => line(r)).join(''))}
+    ${section('Bills by name, biggest first', names.map(nameLine).join(''))}
+    ${section(`Unpaid and already overdue (${overdue.length} · ${currency(overdueTotal)})`,
+      overdue.map((r) => line(r, 'rides forward')).join(''))}
+    ${section(`Bills with no category (${noCategory.length})`, noCategory.map((r) => line(r)).join(''))}
+    ${section(`More than one row for a bill in one month (${duplicates.length})`,
+      duplicates.map((group) => group.map((r) => line(r)).join('')).join('<hr>'))}
   `);
 }
 
