@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.81.0';
+const APP_VERSION = '2.82.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -3621,7 +3621,6 @@ function renderForecastCard(data) {
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
-    ['Spent', 'accent', ''],
     ['Bills', 'danger', '']
   ].map(([label, tone, mod]) => `
     <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
@@ -3836,10 +3835,14 @@ function drawForecastChart(data) {
   // bold one is skipped, since the thin one is on top of it anyway.
   const costsHidden = sameSeries('costs', 'spend') && sameSeries('costs', 'bills');
 
+  // "Spent" is drawn as part of Total est costs rather than as its own
+  // third line: with it stacked under the red cost curve, the anti-aliased
+  // mix of the blue spend and red bills reads as a purple stroke that isn't
+  // a series at all, and one phantom-looking line is worse than a coloured
+  // overlap. Costs is bills plus month-to-date spend, so no data is lost.
   const lines = [
     { key: 'balance', colour: success, width: 2.5 },
     costsHidden ? null : { key: 'costs', colour: danger, width: 2.5 },
-    { key: 'spend', colour: accent, width: 1 },
     { key: 'bills', colour: danger, width: 1 }
   ].filter(Boolean);
 
