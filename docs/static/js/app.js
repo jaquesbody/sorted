@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.80.0';
+const APP_VERSION = '2.81.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -951,17 +951,33 @@ async function renderDashboard(container) {
   if (!localStorage.getItem('SORTED_FIRST_USE')) {
     localStorage.setItem('SORTED_FIRST_USE', localISO());
   }
-  const firstUseRaw = parseDateOnly(localStorage.getItem('SORTED_FIRST_USE')) || new Date();
-  const firstMonthDate = new Date(firstUseRaw.getFullYear(), firstUseRaw.getMonth(), 1);
-
+  const installedRaw = parseDateOnly(localStorage.getItem('SORTED_FIRST_USE')) || new Date();
+  const [incomeItems, savingsGoals] = await Promise.all([
+    getAll('income'), getAll('savings'),
+  ]);
   const monthTopUps = await getAll('savingsTopUps');
+  const seenDates = [
+    ...realSpend.map((s) => String(s.date || '').slice(0, 10)),
+    ...dueItems.map((d) => String(d.dueDate || '').slice(0, 10)),
+    ...incomeItems.map((i) => String(i.date || '').slice(0, 10)),
+    ...monthTopUps.map((t) => String(t.date || '').slice(0, 10)),
+    ...savingsGoals.map((g) => String(g.createdAt || '').slice(0, 10)),
+  ].filter(Boolean);
+  let earliest = null;
+  for (const d of seenDates) {
+    const parsed = parseDateOnly(d);
+    if (parsed && (!earliest || parsed < earliest)) earliest = parsed;
+  }
+  const earliestRaw = earliest || installedRaw;
+  // Use whichever comes first — the install month backstops the graph, and a
+  // backdated row already on the device still shows from its real month.
+  const firstMonthDate = earliestRaw < installedRaw
+    ? new Date(earliestRaw.getFullYear(), earliestRaw.getMonth(), 1)
+    : new Date(installedRaw.getFullYear(), installedRaw.getMonth(), 1);
   const chartItems = [];
   const end = dashViewedDate ? new Date(dashViewedDate.getFullYear(), dashViewedDate.getMonth(), 1) : new Date();
   for (let i = 5; i >= 0; i--) {
     const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
-    // Nothing existed before the first time this install tracked, so do
-    // not invent a bar for it — empty months still lay out correctly, but
-    // a longer-ago imported seed cannot paint over that first real month.
     if (d < firstMonthDate) continue;
     const iso = endOfMonthIso(d);
     const monthSpent = realSpend
