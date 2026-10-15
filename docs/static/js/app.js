@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.92.0';
+const APP_VERSION = '2.93.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -46,16 +46,6 @@ const CURRENT_PERSON_KEY = 'sorted-current-person';
    silently overwrote a manual correction, which is the one thing an editable
    number has to not do.
    -------------------------------------------------------------------------- */
-
-// The Cash account has to exist for every install, including the ones that
-// were seeded long before accounts existed — so this runs on boot rather than
-// as part of the sample data, which only ever runs once on a fresh database.
-async function ensureDefaults() {
-  const accounts = await getAll('accounts');
-  if (!accounts.some((a) => a.type === CASH_TYPE)) {
-    await addItem('accounts', { name: 'Cash', type: CASH_TYPE, opening: 0, adjustment: 0, personId: null });
-  }
-}
 
 let accountsCache = new Map();
 
@@ -615,6 +605,37 @@ function openModal(title, content) {
   focusTarget.focus();
 }
 
+// The first thing a new install shows, and once only. Everything the app
+// records stays on the device, and saying so plainly — before anything is
+// entered — is the point of the notice. It reads the way the site's own
+// privacy guide does: what the app does with your data, the line to the code
+// that proves it, and a single button to acknowledge.
+const PRIVACY_SEEN_KEY = 'SORTED_PRIVACY_SEEN';
+
+function maybeShowPrivacyNotice() {
+  if (localStorage.getItem(PRIVACY_SEEN_KEY)) return;
+  // A locked app is waiting for a PIN, and the notice belongs to a first open
+  // rather than to the lock screen. The flag is left alone so it still appears
+  // once the app is actually opened.
+  if (typeof isLocked === 'function' && isLocked()) return;
+  localStorage.setItem(PRIVACY_SEEN_KEY, '1');
+  openModal('Welcome to Sorted', `
+    <img src="static/icons/wordmark-sorted.png" alt="Sorted"
+         style="width: 106px; height: 24px; display: block; margin: 2px 0 14px;">
+    <p style="font-size: 16px; font-weight: 600; margin-bottom: 10px;">
+      A private app to track spending and saving.
+    </p>
+    <p class="setting-hint" style="margin-bottom: 10px;">
+      Sorted stores everything locally. Nothing leaves your device without your permission.
+    </p>
+    <p class="setting-hint" style="margin-bottom: 18px;">
+      Fully open source.
+      <a href="https://github.com/jaquesbody/sorted" target="_blank" rel="noopener">Review the code on GitHub</a>
+    </p>
+    <button class="btn btn-primary" style="width: 100%;" onclick="closeModal()">Got it</button>
+  `);
+}
+
 // The passcode lock screen is a full-screen overlay, so nothing behind it can
 // be reached by pointer — but the keyboard still can. Escape is the one that
 // matters: it would otherwise close whatever modal happened to be open at the
@@ -666,8 +687,7 @@ let renderToken = 0;
 // undo it: an account that happened to be missing from the cache took its bills
 // with it, and two legitimately different bills that shared a name in a month
 // lost one of them. They were treating a duplication bug in materialise (since
-// fixed, and now serialised) by throwing away the symptom's data. The read-only
-// "Check bill data" report in Settings replaces them.
+// fixed, and now serialised) by throwing away the symptom's data.
 
 async function renderPage() {
 
@@ -4099,11 +4119,6 @@ function renderSettings(container) {
              one of three choices inside Export, where it sat behind the same
              popup as two formats that are not backups at all. -->
         <button class="btn btn-ghost" onclick="exportData('json')" style="width: 100%;">Back up your data</button>
-        <!-- Reads the bills store and reports what it finds; it never changes
-             or deletes anything. It replaces the two silent sweep routines that
-             used to delete suspicious rows automatically — a report you can
-             see is worth more than a cleanup you cannot undo. -->
-        <button class="btn btn-ghost" onclick="openBillDataCheck()" style="width: 100%; margin-top: 10px;">Check bill data</button>
       </div>
 
       <div class="report-card">
@@ -4142,100 +4157,6 @@ function renderSettings(container) {
   `;
 }
 
-// A read-only look at the Bills store, and at what the Dashboard's BILLS DUE
-// card is adding up for the month it is showing. Nothing here writes or
-// deletes: it lists rows so they can be understood and, if wanted, changed by
-// hand.
-//
-// The "what BILLS DUE is made of" section exists because a figure can appear on
-// that card with no bad row behind it. A row with no category, or two rows for
-// one bill, are not the only ways a total can look wrong; the card also adds
-// older unpaid bills and projections, and a report of the store alone would
-// never show that. This section names every row the card is counting and which
-// of the three buckets it came from, so a figure with no explanation has
-// nowhere left to hide.
-async function openBillDataCheck() {
-  const rows = await getAll('due');
-  const monthLabel = formatMonth(dashViewedDate);
-  const read = billsForMonth(rows, dashViewedDate);
-  const dueTotal = read.items.reduce((n, x) => n + (Number(x.amount) || 0), 0);
-
-  const cat = (r) => ((r.category == null || String(r.category).trim() === '')
-    ? '<span style="color: var(--danger);">no category</span>'
-    : escapeHTML(r.category));
-  const line = (r, tag) => `
-      <div class="kv-row">
-        <span class="kv-name">${escapeHTML(r.title || '(no title)')} · ${formatDate(r.dueDate)}${r.paid === true ? ' · paid' : ''}${tag ? ' · ' + tag : ''}</span>
-        <span class="kv-value">${currency(Number(r.amount) || 0)} · ${cat(r)}</span>
-      </div>`;
-
-  // Everything the Dashboard card is counting for the month on screen.
-  const composition = [
-    ...rows.filter((i) => isSameMonth(i.dueDate, dashViewedDate)).map((r) => ({ r, tag: 'in month' })),
-    ...read.overdueElsewhere.map((r) => ({ r, tag: 'overdue carried' })),
-    ...read.projections.map((r) => ({ r, tag: 'projected' }))
-  ].sort((a, b) => (Number(b.r.amount) || 0) - (Number(a.r.amount) || 0));
-
-  // The largest single rows in the store, whatever their dates.
-  const biggest = [...rows]
-    .filter((r) => Number(r.amount) > 0)
-    .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0))
-    .slice(0, 12);
-
-  // Unpaid rows already past their date. These are what the rider carries.
-  const overdue = rows
-    .filter((r) => r.paid !== true && isOverdue(r.dueDate))
-    .sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
-  const overdueTotal = overdue.reduce((n, r) => n + (Number(r.amount) || 0), 0);
-
-  // One line per bill: how many rows it holds, and what they add up to.
-  const byName = new Map();
-  for (const r of rows) {
-    const key = String(r.title || '(no title)').trim() + '|' + (frequencyOf(r) || 'once');
-    const e = byName.get(key) || { title: String(r.title || '(no title)').trim(), n: 0, total: 0, first: '', last: '' };
-    e.n += 1;
-    e.total += Number(r.amount) || 0;
-    const d = String(r.dueDate || '').slice(0, 10);
-    if (d && (!e.first || d < e.first)) e.first = d;
-    if (d && (!e.last || d > e.last)) e.last = d;
-    byName.set(key, e);
-  }
-  const names = [...byName.values()].sort((a, b) => b.total - a.total).slice(0, 12);
-  const nameLine = (e) => `
-      <div class="kv-row">
-        <span class="kv-name">${escapeHTML(e.title)} · ${e.n} row${e.n === 1 ? '' : 's'}${e.first ? ' · ' + formatDate(e.first) + (e.last && e.last !== e.first ? ' → ' + formatDate(e.last) : '') : ''}</span>
-        <span class="kv-value">${currency(e.total)}</span>
-      </div>`;
-
-  const noCategory = rows.filter((r) => r.category == null || String(r.category).trim() === '');
-  const byBillMonth = new Map();
-  for (const r of rows) {
-    const key = String(r.title || '').trim().toLowerCase() + '@' + String(r.dueDate || '').slice(0, 7);
-    if (!byBillMonth.has(key)) byBillMonth.set(key, []);
-    byBillMonth.get(key).push(r);
-  }
-  const duplicates = [...byBillMonth.values()].filter((group) => group.length > 1);
-
-  const section = (heading, body) => `
-    <h3 class="report-title" style="margin-top: 14px;">${heading}</h3>
-    ${body || '<p class="setting-hint">None found.</p>'}`;
-
-  openModal('Check bill data', `
-    <p class="setting-hint" style="margin-bottom: 6px;">
-      This only reads your bills. Nothing is changed or deleted.
-    </p>
-    ${section(`What BILLS DUE is made of — ${escapeHTML(monthLabel)} (${currency(dueTotal)})`,
-      composition.map((c) => line(c.r, c.tag)).join(''))}
-    ${section(`Largest bills in the store (${rows.length} rows in total)`, biggest.map((r) => line(r)).join(''))}
-    ${section('Bills by name, biggest first', names.map(nameLine).join(''))}
-    ${section(`Unpaid and already overdue (${overdue.length} · ${currency(overdueTotal)})`,
-      overdue.map((r) => line(r, 'rides forward')).join(''))}
-    ${section(`Bills with no category (${noCategory.length})`, noCategory.map((r) => line(r)).join(''))}
-    ${section(`More than one row for a bill in one month (${duplicates.length})`,
-      duplicates.map((group) => group.map((r) => line(r)).join('')).join('<hr>'))}
-  `);
-}
-
 // Two taps, like every other destructive control here, and the first one says
 // how much would go — a number is a far better speed bump than "are you sure".
 // A third step (type-to-confirm) felt like too much ceremony for something
@@ -4262,15 +4183,9 @@ async function confirmRemoveAllData(btn) {
   // The PINs live in localStorage, not the database, and the people they
   // belonged to are gone — leaving them would lock the app against nobody.
   clearAllPersonPins();
-  // ...and Cash goes back on, here rather than at the next boot. A first launch
-  // and "delete all data" are documented as landing in the same place, and they
-  // did not: only one of them ran ensureDefaults(). The gap showed as a Savings
-  // page with "No accounts", empty From/Into dropdowns on a transfer, and
-  // nothing to allocate anything to — until the app was restarted, which is
-  // exactly the kind of "it works after a reboot" that should not exist.
-  await ensureDefaults();
-  // Nothing is put back. There is no seed to re-arm: empty is what empty means,
-  // so "delete all data" and a first launch both land in the same place.
+  // Nothing is put back. There is no seed to re-arm and no default account to
+  // re-create: empty is what empty means, so "delete all data" and a first
+  // launch both land in the same place — an app waiting for its first account.
   closeModal();
   navigate('dashboard');
   showToast(`${result.total} items deleted`);
@@ -6484,9 +6399,8 @@ async function viewItemReceipt(type, id) {
 // Initialize
 applyTheme();
 initLock();
-// Cash has to exist before anything renders, including on an install that was
-// seeded before accounts were a thing.
-ensureDefaults();
+// The first launch says, once, what the app does with the data you put in it.
+maybeShowPrivacyNotice();
 // Only starts anything if notifications were already switched on, so the
 // common case costs one function call and no listeners.
 initNotifications();
