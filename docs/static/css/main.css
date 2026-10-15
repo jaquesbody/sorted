@@ -1853,16 +1853,32 @@ body {
   color: var(--text-primary);
 }
 
+/* The link is the accent colour, and nothing else: the underline a browser
+   puts under every anchor is the one thing the reference page doesn't have. */
 .notice-box a {
   color: var(--accent);
+  text-decoration: none;
 }
 
 .notice-box a:hover {
   color: var(--accent-hover);
 }
 
+/* One button, drawn the way the reference draws it: the accent as a fill, the
+   label centred in it, black text over it, and no border — the default button
+   border from the app's own .btn is the thing that shows otherwise. */
 .notice-box .btn {
   width: 100%;
+  justify-content: center;
+  border: none;
+  color: #000;
+  background: var(--accent);
+  font-weight: 600;
+}
+
+.notice-box .btn:hover {
+  background: var(--accent-hover);
+  color: #000;
 }
 
 /* Modal */

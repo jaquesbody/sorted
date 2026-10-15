@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.94.0';
+const APP_VERSION = '2.94.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -645,7 +645,7 @@ function maybeShowPrivacyNotice() {
   overlay.innerHTML = `
     <div class="notice-box">
       <img src="static/icons/wordmark-sorted.png" alt="Sorted" class="notice-logo">
-      <p>A private app to track spending and saving.</p>
+      <p>Privately track your spending and saving.</p>
       <p>Sorted stores everything locally. Nothing leaves your device without your permission.</p>
       <p>Fully open source.
         <a href="https://github.com/jaquesbody/sorted" target="_blank" rel="noopener">Review the code on GitHub</a></p>
@@ -796,7 +796,7 @@ function goToAccounts() {
 }
 
 // Dashboard
-function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt, firstMonthDate) {
+function renderTotalMoneyCard(balances, spent, due, outstanding, saved, savedTarget, totalAt, firstMonthDate) {
   const count = balances.length;
   // A month that predates every record has no balance to show. The opening
   // figure is a snapshot of now with no date on it, so reading it back this far
@@ -828,21 +828,34 @@ function renderTotalMoneyCard(balances, spent, due, saved, savedTarget, totalAt,
     : balances.reduce((n, b) => n + b.balance, 0);
   const over = total < 0;
 
-  // Bills still to come are drawn against the money there is. Savings is
-  // different: a goal is an intention, not an invoice, so it is measured against
-  // the target the user set rather than treated as money already spoken for.
-  const committed = Math.max(0, due);
+  // Two different figures about the month's bills, because they answer two
+  // different questions. `due` is what the month cost, which is what the card
+  // shows: a month gone past has nothing left to pay, and £0.00 there reads as
+  // "there were no bills in January" when the truth is "they were all settled".
+  // `outstanding` is what is still owed, and that is the only part drawn
+  // against the money.
+  //
+  // A settled bill has already left the balance — that is what makes the total
+  // lower — so counting it as committed took the same money out of "Left" a
+  // second time: £1,000 less a £100 bill reads £900, and the card was saying
+  // £800 of that was left. Now the money can only be spent once.
+  const billsShown = Math.max(0, due);
+  const committed = Math.max(0, outstanding);
   const savedPart = Math.max(0, saved);
   const spare = total - spent - committed - savedPart;
 
-  // The bar is scaled to the biggest thing on it, so a month with no bills still
-  // shows the parts it has.
-  const scale = Math.max(total, spent + committed + savedPart, 1);
+  // The bar is scaled to the biggest thing on it, so a month with no bills
+  // still shows the parts it has. What is left is not the remainder of the
+  // total any more, so the scale has to hold the four parts as well: a settled
+  // bill shows on the bar and the money it took has already gone, and drawing
+  // both against a smaller total would push the last segment off the end.
+  const barTotal = spent + billsShown + savedPart + spare;
+  const scale = Math.max(total, barTotal, 1);
   const pct = (n) => Math.max(0, Math.min(100, (Math.max(0, n) / scale) * 100));
 
   const parts = [
     { key: 'spent', label: 'Spent', value: spent, tone: 'accent' },
-    { key: 'bills', label: 'Bills', value: committed, tone: 'danger' },
+    { key: 'bills', label: 'Bills', value: billsShown, tone: 'danger' },
     { key: 'savings', label: 'Savings', value: savedPart, tone: 'success' },
     { key: 'left', label: 'Left', value: spare, tone: 'muted' }
   ];
@@ -911,16 +924,15 @@ async function renderDashboard(container) {
     .reduce((sum, i) => sum + i.amount, 0)
     + projections.reduce((sum, i) => sum + i.amount, 0);
 
-  // A month gone past has no outstanding bills left, so `dueTotal` is £0.00 for
-  // every one of them — which reads as "there were no bills in January" when the
-  // truth is "they have all been paid". The Total Money card is a picture of
-  // what a month did, so a past month counts its bills either way. The current
-  // month counts only what is still owed: a bill already paid has left the
-  // balance, and drawing it against the money again took it out of the card's own
-  // "Left" a second time — a £900 total reported "Left £800.00" beside a settled
-  // £100 bill. The Bills card beside it answers the same question and says so in
-  // its own sub-line. A month ahead is the one place projections are the right
-  // answer, because nothing is stored for it.
+  // Two figures for the card, from one month. `dueForTotal` is what the month
+  // cost, settled or not — a month gone past has nothing left to pay, so
+  // `dueTotal` is £0.00 for all of them and reads as "there were no bills in
+  // January" when the truth is "they were all settled". `dueTotal` itself is
+  // what is still owed, and that is the only part drawn against the money: a
+  // settled bill has already left the balance, so counting it again took the
+  // same £100 out of "Left" a second time and left £800 beside a £900 total.
+  // A month ahead is the one place `dueTotal` alone is right, because the
+  // projections are the only bills a month ahead has.
   const billsThisMonth = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
   const dueForTotal = isBeforeThisMonth(dashViewedDate)
     ? billsThisMonth.reduce((sum, i) => sum + i.amount, 0)
@@ -962,7 +974,7 @@ async function renderDashboard(container) {
               title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
 
-    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, savingsCurrent, savingsTarget, totalAt, firstMonthDate)}
+    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, dueTotal, savingsCurrent, savingsTarget, totalAt, firstMonthDate)}
 
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
