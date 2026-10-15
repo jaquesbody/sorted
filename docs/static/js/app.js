@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.93.0';
+const APP_VERSION = '2.93.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -57,12 +57,17 @@ async function loadAccounts() {
     const bCash = b.type === CASH_TYPE ? 0 : 1;
     return aCash - bCash || String(a.name).localeCompare(String(b.name));
   });
-  accountsCache = new Map(accounts.map((a) => [a.id, a]));
+  // Keyed by the id as a lookup will hand it over, not as it happens to be
+  // stored: rows made before ids were UUIDs have numeric keys, and a <select>
+  // or a data attribute always gives a string back. Without this a legacy
+  // account could be chosen by name and never matched — money linked to it
+  // moved nothing.
+  accountsCache = new Map(accounts.map((a) => [normaliseId(a.id), a]));
   return accountsCache;
 }
 
 function accountById(id) {
-  return id ? accountsCache.get(id) || null : null;
+  return id ? accountsCache.get(normaliseId(id)) || null : null;
 }
 
 function accountName(id) {
@@ -94,10 +99,12 @@ async function accountBalances() {
 
   const out = new Map();
   for (const a of accounts) {
-    out.set(a.id, { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, income: 0, transferIn: 0, transferOut: 0, balance: 0 });
+    out.set(normaliseId(a.id), { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, income: 0, transferIn: 0, transferOut: 0, balance: 0 });
   }
 
-  const get = (id) => (id ? out.get(id) || null : null);
+  // Same reason the cache is keyed this way: an id can arrive as a number from
+  // a legacy row or as a string off a form, and the two have to meet.
+  const get = (id) => (id ? out.get(normaliseId(id)) || null : null);
 
   for (const item of spend) {
     const row = get(item.accountId);
@@ -251,6 +258,9 @@ async function accountActivity(accountId) {
   const add = (date, label, amount, tone, extra) => {
     entries.push(Object.assign({ date: date || '', label, amount, tone }, extra || {}));
   };
+  // A legacy row's accountId is the number the account was keyed by, while this
+  // arrives as the string off the row's own data-id: compare them the same way.
+  const wanted = normaliseId(accountId);
 
   // The opening balance and any one-off adjustment lead the list, undated. They
   // are what the account held before anything was tracked, and leaving them out
@@ -263,7 +273,7 @@ async function accountActivity(accountId) {
   }
 
   for (const item of spend) {
-    if (item.accountId !== accountId) continue;
+    if (normaliseId(item.accountId) !== wanted) continue;
     // A row written before 2.8.3 paid a bill by writing it into Spend. It is
     // read as a bill here for the same reason it is in accountBalances(), so
     // this list and the balance can't disagree about what a row was.
@@ -271,19 +281,19 @@ async function accountActivity(accountId) {
     else add(item.date, 'Spent', -Number(item.amount) || 0, 'out', { title: item.title });
   }
   for (const item of dueItems) {
-    if (item.paid !== true || item.accountId !== accountId) continue;
+    if (item.paid !== true || normaliseId(item.accountId) !== wanted) continue;
     add(item.date, 'Bill paid', -Number(item.amount) || 0, 'out', { title: item.title });
   }
   for (const item of income) {
-    if (item.accountId !== accountId) continue;
+    if (normaliseId(item.accountId) !== wanted) continue;
     add(item.date, 'Income', Number(item.amount) || 0, 'in', { title: item.title });
   }
   for (const t of transfers) {
-    if (t.fromId === accountId) add(t.date, 'Moved out', -Number(t.amount) || 0, 'out', { title: accountName(t.toId) });
-    if (t.toId === accountId) add(t.date, 'Moved in', Number(t.amount) || 0, 'in', { title: accountName(t.fromId) });
+    if (normaliseId(t.fromId) === wanted) add(t.date, 'Moved out', -Number(t.amount) || 0, 'out', { title: accountName(t.toId) });
+    if (normaliseId(t.toId) === wanted) add(t.date, 'Moved in', Number(t.amount) || 0, 'in', { title: accountName(t.fromId) });
   }
   for (const goal of savings) {
-    if (goal.accountId !== accountId) continue;
+    if (normaliseId(goal.accountId) !== wanted) continue;
     add('', 'Saved to ' + (goal.title || 'goal'), -(Number(goal.current) || 0), 'out', { title: goal.category || '' });
   }
 
@@ -2463,7 +2473,7 @@ async function openIncomeSetup(id) {
       <label class="form-label" for="income-account">Into account</label>
       <select class="form-input" id="income-account" onchange="pickPersonForAccount(this)">
         <option value="">Not into an account</option>
-        ${accounts.map((a) => `<option value="${a.id}" data-person="${a.personId || ''}"${item && item.accountId === a.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
+        ${accounts.map((a) => `<option value="${a.id}" data-person="${a.personId || ''}"${item && normaliseId(item.accountId) === normaliseId(a.id) ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
       </select>
       ${accountsCache.size === 0
         ? `<p class="setting-hint" style="color: var(--danger); margin: 6px 0 0;">An account must be added, go to Savings > + Account</p>`
@@ -2554,7 +2564,7 @@ async function confirmRemoveIncome(id, btn) {
 
 // The balance the row actually shows, so the editor and the list agree.
 function accountCurrentBalance(accountId) {
-  const cached = accountBalanceCache.get(accountId);
+  const cached = accountBalanceCache.get(normaliseId(accountId));
   if (cached) return Math.round(cached.balance * 100) / 100;
   const account = accountById(accountId);
   if (!account) return '';
@@ -2568,7 +2578,7 @@ async function openAccountActivity(id) {
   const account = accountById(id);
   if (!account) return;
   const entries = await accountActivity(id);
-  const balance = (accountBalanceCache.get(id) || {}).balance || 0;
+  const balance = (accountBalanceCache.get(normaliseId(id)) || {}).balance || 0;
 
   const rows = entries.length === 0
     ? '<div class="empty-state"><div class="empty-state-text">Nothing recorded against this account yet</div></div>'
@@ -2668,7 +2678,7 @@ async function saveAccount(id) {
     // opening figure here, so the balance is unchanged and the row shows exactly
     // what was typed.
     const balances = await accountBalances();
-    const row = balances.find((b) => b.id === id);
+    const row = balances.find((b) => normaliseId(b.id) === normaliseId(id));
     const applied = row
       ? (row.spend || 0) + (row.bills || 0) + (row.savings || 0)
         - (row.income || 0) - (row.transferIn || 0) + (row.transferOut || 0)
@@ -2707,7 +2717,7 @@ async function confirmRemoveAccount(id, btn, fromModal) {
   if (!account) return;
   if (btn.dataset.confirming !== '1') {
     const balances = await accountBalances();
-    const row = balances.find((b) => b.id === id);
+    const row = balances.find((b) => normaliseId(b.id) === normaliseId(id));
     // The confirm step used to quote the lifetime total of this account's
     // spending, bills and goals. That is money *out* summed over every year, so
     // it read as a balance and alarmed people — a £2,800 account offering to
@@ -2738,7 +2748,7 @@ function openTransferModal() {
     return;
   }
   const options = (exclude) => accounts
-    .filter((a) => a.id !== exclude)
+    .filter((a) => normaliseId(a.id) !== normaliseId(exclude))
     .map((a) => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('');
 
   openModal('Move money', `
@@ -3598,7 +3608,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   // that account's balance; one with no account never was, and was counting as
   // spendable from money that is sitting in the jar. Both come off here, once.
   const setAside = savingsItems.reduce((n, goal) => {
-    const backed = goal.accountId && balances.some((b) => b.id === goal.accountId);
+    const backed = goal.accountId && balances.some((b) => normaliseId(b.id) === normaliseId(goal.accountId));
     return backed ? n : n + (goal.current || 0);
   }, 0);
   const currentBalance = balances.reduce((n, b) => n + b.balance, 0) - setAside;
