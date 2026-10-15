@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.82.0';
+const APP_VERSION = '2.84.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2351,6 +2351,9 @@ async function openIncomeSetup(id) {
         <option value="">Not into an account</option>
         ${accounts.map((a) => `<option value="${a.id}" data-person="${a.personId || ''}"${item && item.accountId === a.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
       </select>
+      ${accountsCache.size === 0
+        ? `<p class="setting-hint" style="color: var(--danger); margin: 6px 0 0;">An account must be added, go to Savings > + Account</p>`
+        : ''}
     </div>
     <div class="form-group">
       <label class="form-label" for="income-person">Whose</label>
@@ -2388,6 +2391,13 @@ async function saveIncome(id) {
   if (!String(title || '').trim()) return showFormError('Please enter what it was for', 'income-title');
   if (!(amount > 0)) return showFormError('Please enter an amount greater than 0', 'income-amount');
   if (!date) return showFormError('Please enter a date', 'income-date');
+  if (!accountId) {
+    const accounts = await getAll('accounts');
+    if (accounts.length === 0) {
+      return showFormError('An account must be added, go to Savings > + Account', 'income-account');
+    }
+    return showFormError('Pick an account', 'income-account');
+  }
 
   const fields = {
     title: String(title).trim().slice(0, 100),
@@ -3621,6 +3631,7 @@ function renderForecastCard(data) {
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
+    ['Spent', 'accent', ''],
     ['Bills', 'danger', '']
   ].map(([label, tone, mod]) => `
     <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
@@ -3835,14 +3846,13 @@ function drawForecastChart(data) {
   // bold one is skipped, since the thin one is on top of it anyway.
   const costsHidden = sameSeries('costs', 'spend') && sameSeries('costs', 'bills');
 
-  // "Spent" is drawn as part of Total est costs rather than as its own
-  // third line: with it stacked under the red cost curve, the anti-aliased
-  // mix of the blue spend and red bills reads as a purple stroke that isn't
-  // a series at all, and one phantom-looking line is worse than a coloured
-  // overlap. Costs is bills plus month-to-date spend, so no data is lost.
+  // Keep every series on the chart. "Spent" is drawn dashed so the only
+  // line that comes out of the red/blue overlap is the one asked for:
+  // the blue dots never have to sit on a solid red stroke.
   const lines = [
     { key: 'balance', colour: success, width: 2.5 },
     costsHidden ? null : { key: 'costs', colour: danger, width: 2.5 },
+    { key: 'spend', colour: accent, width: 1, dash: [3, 4] },
     { key: 'bills', colour: danger, width: 1 }
   ].filter(Boolean);
 
@@ -3851,6 +3861,7 @@ function drawForecastChart(data) {
   for (const line of lines) {
     ctx.strokeStyle = line.colour;
     ctx.lineWidth = line.width;
+    ctx.setLineDash(Array.isArray(line.dash) ? line.dash : []);
     ctx.beginPath();
     series.forEach((p, i) => {
       const px = x(i);
@@ -3859,6 +3870,7 @@ function drawForecastChart(data) {
       else ctx.lineTo(px, py);
     });
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Date labels, thinned to whatever the width allows. A year of daily points
