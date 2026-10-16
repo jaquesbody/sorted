@@ -1,13 +1,20 @@
 // Sorted v2 - IndexedDB Database Layer
 
 const DB_NAME = 'sorted-v2-db';
-// v2 added `people`; v3 `accounts` and `transfers`; v4 `income`. None of the
-// bumps changed an existing store: new rows get their own generated id, so the
-// old stores keep the key generator they were created with and no record is
-// rewritten. Adding a store is the cheapest migration IndexedDB offers —
-// creating one touches nothing else.
-const DB_VERSION = 4;
-const STORES = ['spend', 'due', 'savings', 'recurring', 'people', 'accounts', 'transfers', 'income'];
+// v2 added `people`; v3 `accounts` and `transfers`; v4 `income`; v5
+// `savingsTopUps`. None of the bumps changed an existing store: new rows get
+// their own generated id, so the old stores keep the key generator they were
+// created with and no record is rewritten. Adding a store is the cheapest
+// migration IndexedDB offers — creating one touches nothing else.
+//
+// `savingsTopUps` exists because a balance has to be datable. A savings goal
+// stores one running total with no date on it, so "what was my balance in
+// January" cannot be answered from it — and the Total Money card is scoped by a
+// month selector, so it asks exactly that. Every rise in a goal's `current` is
+// therefore written here as a dated contribution, and the total can be walked
+// backwards.
+const DB_VERSION = 5;
+const STORES = ['spend', 'due', 'savings', 'savingsTopUps', 'recurring', 'people', 'accounts', 'transfers', 'income'];
 
 // Cash isn't a payment method, it's an account with notes in it. Same concept
 // as a bank account, so it goes through the same code rather than being a
@@ -76,6 +83,20 @@ function openDB() {
   return dbPromise;
 }
 
+// Drops the cached connection so the next read opens a fresh one. Android
+// suspends the WebView when the app goes to the background and can close the
+// database underneath it; a connection left cached after that rejects every
+// operation rather than reopening, and the app then looks like its data has
+// gone. Nothing is lost — the records are on disk — but a re-open is needed.
+function resetDbConnection() {
+  if (dbPromise) {
+    Promise.resolve(dbPromise).then((db) => { try { db.close(); } catch (err) { /* already gone */ } })
+      .catch(() => { /* never opened */ });
+  }
+  dbPromise = null;
+  return null;
+}
+
 async function getAll(storeName) {
   const db = await openDB();
   return new Promise((resolve, reject) => {
@@ -84,6 +105,7 @@ async function getAll(storeName) {
     const request = store.getAll();
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -95,6 +117,7 @@ async function getItem(storeName, id) {
     const request = store.get(normaliseId(id));
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
@@ -106,60 +129,100 @@ function normaliseId(id) {
   return (typeof id === 'string' && /^-?\d+$/.test(id)) ? Number(id) : id;
 }
 
+// Tells the sync layer that the data changed. Every write, every delete and
+// every wipe goes through here, which is the point: a deletion leaves no record
+// behind to carry a timestamp, so without this the app could not tell that
+// anything had changed and a bill deleted on one device would never travel.
+//
+// sync.js loads after this one, so the guard is load order, not a cycle.
+function dataChanged() {
+  if (typeof syncTouch === 'function') syncTouch();
+}
+
+// A write is not done when its request succeeds. `onsuccess` fires when the
+// request completes, which is strictly *before* the transaction commits — and a
+// commit can still fail, with `QuotaExceededError` being the realistic one here
+// because receipts are 1400px JPEG data URLs stored inline. When it does, the
+// promise has already resolved, the row is on no disk, the next getAll does not
+// return it, and the toast has already said it was saved.
+//
+// So these resolve on the transaction, the way txDone() does below, and reject
+// if it aborts. The larger someone's store the more likely a quota failure
+// becomes, and the more likely they are to blame the app rather than the disk.
 async function addItem(storeName, item) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    // An id is minted only if the caller didn't bring one — importing mints
-    // per row so ids stay unique to this device, and seeding follows the
-    // same path as any other add.
-    const record = { createdAt: new Date().toISOString(), ...item };
-    if (record.id === undefined || record.id === null) record.id = newId();
-    const request = store.add(record);
-    // The id the record itself carries, not request.id: that's only populated
-    // when the store's key generator made the key, and every new row now
-    // brings its own.
-    request.onsuccess = () => resolve(record.id);
-    request.onerror = () => reject(request.error);
-  });
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  // An id is minted only if the caller didn't bring one — importing mints
+  // per row so ids stay unique to this device, and seeding follows the
+  // same path as any other add.
+  const record = { createdAt: new Date().toISOString(), ...item };
+  if (record.id === undefined || record.id === null) record.id = newId();
+  const request = store.add(record);
+  const done = txDone(tx);
+  // The id the record itself carries, not request.id: that's only populated
+  // when the store's key generator made the key, and every new row now
+  // brings its own.
+  try {
+    await done;
+    dataChanged();
+    return record.id;
+  } catch (err) {
+    throw err || request.error || new Error('The write was rolled back');
+  }
 }
 
 async function updateItem(storeName, item) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    // The id has to be normalised here too, not just on read and delete. An
-    // edit arrives with the id as it came off a data attribute — a string —
-    // and putting a legacy row back under the string "3" when it was stored
-    // as the number 3 silently creates a *second* row instead of editing the
-    // first. The original keeps rendering unchanged, so the edit looks like it
-    // did nothing, and Delete then appears to do nothing too. Same trap as
-    // getItem/deleteItem, one layer up.
-    const record = { ...item, id: normaliseId(item.id), updatedAt: new Date().toISOString() };
-    const request = store.put(record);
-    request.onsuccess = () => resolve(record.id);
-    request.onerror = () => reject(request.error);
-  });
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  // The id has to be normalised here too, not just on read and delete. An
+  // edit arrives with the id as it came off a data attribute — a string —
+  // and putting a legacy row back under the string "3" when it was stored
+  // as the number 3 silently creates a *second* row instead of editing the
+  // first. The original keeps rendering unchanged, so the edit looks like it
+  // did nothing, and Delete then appears to do nothing too. Same trap as
+  // getItem/deleteItem, one layer up.
+  const record = { ...item, id: normaliseId(item.id), updatedAt: new Date().toISOString() };
+  const request = store.put(record);
+  const done = txDone(tx);
+  try {
+    await done;
+    dataChanged();
+    return record.id;
+  } catch (err) {
+    throw err || request.error || new Error('The write was rolled back');
+  }
 }
 
 async function deleteItem(storeName, id) {
   const db = await openDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(storeName, 'readwrite');
-    const store = tx.objectStore(storeName);
-    const request = store.delete(normaliseId(id));
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+  const tx = db.transaction(storeName, 'readwrite');
+  const store = tx.objectStore(storeName);
+  const request = store.delete(normaliseId(id));
+  const done = txDone(tx);
+  try {
+    await done;
+    dataChanged();
+  } catch (err) {
+    throw err || request.error || new Error('The delete was rolled back');
+  }
 }
 
 // The next date this item is due, given how often it repeats. Monthly is the
 // default: every row that predates the frequency field is simply recurring,
 // and rolling a yearly bill forward a month at a time was the old behaviour for
 // all of them.
-function nextDueDate(dueDate, frequency) {
+//
+// `day` is the day of the month to roll on. It defaults to the day of the date
+// being rolled, which is right for the first roll and wrong for every one after
+// it if the month just past was short: a bill due 31 January clamped to 28
+// February, and 28 February then rolled to 28 March. The bill never came back to
+// the 31st — a rent due at month end quietly became a rent due on the 28th,
+// permanently, after the first short month. Callers pass the day the bill was
+// actually set to, stored alongside the row, so a short month clamps only for
+// itself.
+function nextDueDate(dueDate, frequency, day) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dueDate || '');
   let y, mo, d;
   if (m) {
@@ -168,6 +231,8 @@ function nextDueDate(dueDate, frequency) {
     const t = new Date();
     y = t.getFullYear(); mo = t.getMonth() + 1; d = t.getDate();
   }
+  if (day === undefined || day === null) day = d;
+  day = Number(day) || d;
   // Annual keeps the month and the day and only moves the year, so a bill due
   // 29 February rolls to 28 February rather than into March.
   const stepMonths = frequency === 'annually' ? 12 : 1;
@@ -175,7 +240,18 @@ function nextDueDate(dueDate, frequency) {
   const ny = Math.floor(total / 12);
   const nm = (total % 12) + 1;
   const lastDay = new Date(ny, nm, 0).getDate();
-  return localISO(new Date(ny, nm - 1, Math.min(d, lastDay)));
+  return localISO(new Date(ny, nm - 1, Math.min(day, lastDay)));
+}
+
+// The day of the month a bill is really on. Stored when the row was rolled
+// forward, because the date it was clamped to is not always the day it was set
+// to — and read straight off the date for every row written before that field
+// existed, which is the honest answer for a chain that has already drifted.
+function dueDayValue(item) {
+  const day = Number(item && item.dueDay);
+  if (day >= 1 && day <= 31) return day;
+  const m = /^\d{4}-\d{2}-(\d{2})/.exec(String((item && item.dueDate) || ''));
+  return m ? Number(m[1]) : null;
 }
 
 // Paying a bill: the payment lands in Spend. A recurring bill then rolls
@@ -207,35 +283,104 @@ function nextDueDate(dueDate, frequency) {
 //     projection — nothing to tap, so next month's rent could never be
 //     settled. A recurring bill therefore becomes two rows: this one, settled,
 //     and the next one, real.
+// A rise in a savings goal is money that left an account. It is written down
+// here as a dated contribution, because the goal itself keeps one running total
+// with no date on it — and a balance that is asked for by month cannot be
+// answered from a figure that has no month.
+//
+// The same event `noteGoalSaves` in notify.js detects; that one drives a
+// reminder and records only the last date, which is not enough to walk a balance
+// backwards through.
+async function recordGoalContribution(goalId, delta, whenIso) {
+  const amount = Number(delta);
+  if (!goalId || !Number.isFinite(amount) || amount <= 0) return;
+  await addItem('savingsTopUps', {
+    goalId,
+    delta: amount,
+    date: whenIso || new Date().toISOString(),
+  });
+}
+
+// How much of a goal's total was in place by the end of `monthEndIso`. What was
+// recorded is counted exactly; what predates the record — a goal the user had
+// before this existed — is given the month the goal was created, because a goal
+// simply did not exist before then.
+function goalContributedBy(goal, topUps, monthEndIso) {
+  const mine = (topUps || []).filter((t) => String(t.goalId) === String(goal.id));
+  const loggedBefore = mine.reduce((n, t) => n
+    + (String(t.date || '').slice(0, 10) <= monthEndIso ? (Number(t.delta) || 0) : 0), 0);
+  const loggedTotal = mine.reduce((n, t) => n + (Number(t.delta) || 0), 0);
+  const shortfall = Math.max(0, (Number(goal.current) || 0) - loggedTotal);
+  const created = String(goal.createdAt || '').slice(0, 10);
+  const createdMonth = created ? created.slice(0, 7) + '-01' : '';
+  const preLogCounted = createdMonth && monthEndIso >= createdMonth ? shortfall : 0;
+  return loggedBefore + preLogCounted;
+}
+
 async function markDuePaid(dueItem, payerId) {
   const { id, ...rest } = dueItem;
   const repeats = dueItem.frequency === 'monthly'
     || dueItem.frequency === 'annually'
     || dueItem.recurring === true;
 
-  if (repeats) {
-    // Read before writing, on its own transaction. The next occurrence is only
-    // added if it is not already there: adding one unconditionally left two rows
-    // dated the same day whenever the following month had been entered by hand,
-    // and the month's total counted that bill twice.
-    const next = nextDueDate(rest.dueDate, dueItem.frequency);
-    const already = (await getAll('due')).some((r) => r.dueDate === next);
-    if (!already) {
-      await addItem('due', {
+  // One transaction, and everything inside it happens in one callback.
+  //
+  // The comment at the top of this function promises "a failure can never leave
+  // the bill in both lists or in neither", and three separate transactions do
+  // not implement that: a suspension between the add and the update — which
+  // Android does routinely to a backgrounded WebView — leaves the next
+  // occurrence created and the original bill still unpaid, so the same rent
+  // appears in this month and the next and gets paid twice. That is the
+  // double-count the single-record rule exists to prevent.
+  //
+  // The read and both writes are registered from one onsuccess, rather than
+  // across awaits: an await with no request pending is exactly what makes a
+  // readwrite transaction auto-commit, and this transaction would have ended
+  // before its own writes arrived.
+  const db = await openDB();
+  const tx = db.transaction('due', 'readwrite');
+  const store = tx.objectStore('due');
+
+  const next = repeats ? nextDueDate(rest.dueDate, dueItem.frequency, dueDayValue(dueItem)) : null;
+  // A bill told to stop stops: no fresh row is left behind for a month that
+  // is past the last one the user chose, so paying the final month ends it
+  // instead of quietly carrying it forward.
+  const pastEnd = !!(next && dueItem.repeatUntil && next > dueItem.repeatUntil);
+  const title = String(rest.title || '').trim();
+
+  const read = store.getAll();
+  read.onerror = () => { /* the transaction aborts and txDone rejects */ };
+  read.onsuccess = () => {
+    const existing = read.result || [];
+    // ...and the check is for *this bill*. It used to ask whether anything at
+    // all was due that day, so paying Rent while Council Tax already sat on next
+    // month's date left Rent with no next row and the series quietly stopped —
+    // a bill that simply never appears again, with nothing on screen to say so.
+    // materialiseBillsForMonth keys on the title for exactly this reason.
+    const already = pastEnd || (next && existing
+      .some((r) => r.dueDate === next && String(r.title || '').trim() === title));
+    if (repeats && !already) {
+      store.add({
         ...rest,
+        id: newId(),
         paid: false,
         personId: payerId || rest.personId || null,
-        dueDate: next
+        dueDate: next,
+        // The day the bill is really on — 31, not the 28th February clamped it
+        // to — so the month after a short one rolls back to the right day.
+        dueDay: dueDayValue(dueItem)
       });
     }
-  }
+    store.put({
+      ...rest,
+      id: normaliseId(id),
+      paid: true,
+      personId: payerId || rest.personId || null
+    });
+  };
 
-  await updateItem('due', {
-    ...rest,
-    id,
-    paid: true,
-    personId: payerId || rest.personId || null
-  });
+  await txDone(tx);
+  dataChanged();
 }
 
 // Everything, for the backup. Driven off STORES so a new store can't be
@@ -269,6 +414,9 @@ async function clearAllData() {
   }
 
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  // A wipe is the biggest change this database can undergo, and it leaves
+  // nothing behind to carry a timestamp.
+  dataChanged();
   return { total, counts };
 }
 
@@ -281,18 +429,46 @@ function txDone(tx) {
 }
 
 // Identity for merge dedupe: enough to tell two logical entries apart
-// (title + money + when) without relying on ids, which are reassigned on
-// import. Deliberately heuristic — same naive spirit as the OCR guesses.
-// A receipt's image is not part of the key: the same bill photographed twice
-// is one entry, not two.
-function importKeyOf(item) {
+// without relying on ids, which are reassigned on import. Deliberately
+// heuristic — same naive spirit as the OCR guesses. A receipt's image is not
+// part of the key: the same bill photographed twice is one entry, not two.
+//
+// The key has to separate entries the user means as two things, and for years it
+// did not. It was title | amount | date | current | target, so two £40 Tesco
+// shops on the same Saturday — one Groceries, one Eating out — were one row, and
+// the losing category vanished from Reports entirely. Two spends of the same
+// money on the same day by two different people collapsed the same way. A
+// transfer has no title and no current and no target, so its key was
+// `|200|2026-10-04||` and every transfer of the same money on the same day was
+// the same transfer.
+//
+// Person and account are keyed by *name* rather than id, because ids are minted
+// per device: the same person is one id here and another id there, and the name
+// is the only thing both sides of the comparison agree on. Accounts use type
+// as well, because two bank accounts can legitimately share a name — "Cash" on
+// two devices is still one Cash, two "Current" accounts are not.
+//
+// `ctx` carries those two id-to-name lookups, built once per import and covering
+// both the file's ids and this device's.
+function importKeyOf(item, ctx) {
   const norm = (v) => String(v == null ? '' : v).trim().toLowerCase();
+  const who = ctx && ctx.people ? (ctx.people[String(item.personId)] || '') : '';
+  const where = ctx && ctx.accounts ? (ctx.accounts[String(item.accountId)] || '') : '';
+  // A transfer's two ends, as one token: moving £200 current-to-savings and
+  // £200 business-to-current are different events and were the same key.
+  const from = ctx && ctx.accounts ? (ctx.accounts[String(item.fromId)] || '') : '';
+  const to = ctx && ctx.accounts ? (ctx.accounts[String(item.toId)] || '') : '';
+  const legs = from && to ? from + '>' + to : '';
   return [
     norm(item.title),
     norm(item.amount),
     norm(item.date || item.dueDate || ''),
     norm(item.current),
-    norm(item.target)
+    norm(item.target),
+    norm(item.category),
+    who,
+    where,
+    legs
   ].join('|');
 }
 
@@ -332,9 +508,11 @@ function sanitizeItem(storeName, item) {
     const name = str(item.name).slice(0, 40);
     if (!name) return null;
     out.name = name;
-    // Anything that isn't 'cash' is a bank account. An unknown type would
-    // otherwise produce an account that behaves like neither.
-    out.type = str(item.type) === CASH_TYPE ? CASH_TYPE : 'bank';
+    // Cash, business and savings are real types; anything unrecognised falls
+    // back to a plain bank account rather than behaving like neither.
+    out.type = ['cash', 'business', 'savings'].includes(str(item.type))
+      ? str(item.type)
+      : 'bank';
     // Opening and adjustment are the two things a person types; the balance
     // shown is derived from them plus activity, so neither is ever stored as
     // a result. Coerced here so a hand-edited file can't make a balance NaN.
@@ -342,7 +520,10 @@ function sanitizeItem(storeName, item) {
     out.opening = money(item.opening);
     out.adjustment = money(item.adjustment);
     if ('personId' in item) out.personId = item.personId || null;
-    if (typeof item.archived === 'boolean') out.archived = item.archived;
+    // No `archived` here. It used to be accepted through and read nowhere, which
+    // meant a hand-edited file could set a flag that did nothing — and the next
+    // person to read it would have to go and find out that nothing did. Archiving
+    // is a UI feature when there is one.
     return out;
   }
 
@@ -357,8 +538,20 @@ function sanitizeItem(storeName, item) {
     out.title = title;
     out.amount = amount;
     out.date = date;
-    out.category = ['salary', 'sale', 'other'].includes(str(item.category)) ? str(item.category) : 'other';
-    if (item.frequency === 'monthly' || item.frequency === 'annually') out.frequency = item.frequency;
+    // Whatever the form can offer survives the trip; anything else falls back
+    // to 'other', which is a real category rather than a hole.
+    out.category = INCOME_CATEGORIES.some(([value]) => value === str(item.category))
+      ? str(item.category)
+      : 'other';
+    // Only monthly and annually recur on a schedule; anything else is a one-off
+    // income recorded for its own date. Deleting the field, rather than leaving
+    // the existing value in place (out started as a copy of the whole item), is
+    // what stops a hand-edited 'weekly' from being treated as monthly.
+    if (item.frequency === 'monthly' || item.frequency === 'annually') {
+      out.frequency = item.frequency;
+    } else {
+      delete out.frequency;
+    }
     return out;
   }
 
@@ -391,7 +584,13 @@ function sanitizeItem(storeName, item) {
   out.accountId = item.accountId || null;
 
   out.title = str(item.title).slice(0, 100);
-  if (!out.title) return null;
+  // A title is required of the entries that are shown as lines — spend and
+  // bills. It used to be required of *everything*, which quietly meant the
+  // savings top-ups were thrown away on every import and every sync pull: a
+  // top-up is a note against somebody else's row and has no title of its own,
+  // so every one was dropped and the Total Money card forgot which month each
+  // contribution arrived in. The stores that need a name say so themselves.
+  if ((storeName === 'spend' || storeName === 'due') && !out.title) return null;
   out.category = str(item.category).slice(0, 60) || 'General';
 
   if (storeName === 'spend' || storeName === 'due') {
@@ -431,6 +630,21 @@ function sanitizeItem(storeName, item) {
     if (typeof item.monthly === 'number' && Number.isFinite(item.monthly) && item.monthly >= 0) {
       out.monthly = Math.round(item.monthly * 100) / 100;
     }
+  } else if (storeName === 'savingsTopUps') {
+    // A record of money actually put into a goal, and the only thing that tells
+    // the Total Money card which month it arrived in. It carries no title — it
+    // is a note against somebody else's row — and the generic tail below
+    // requires one, so without this branch every one of these was dropped on
+    // every import and every sync pull, and the card silently forgot the month
+    // of every contribution. The goal it names is remapped by stripSourceId.
+    const delta = num(item.delta);
+    const date = isoDate(item.date);
+    // A top-up with no money in it is not a top-up. A goal it can't name is not
+    // a note about anything.
+    if (delta === null || delta <= 0 || !item.goalId) return null;
+    out.delta = delta;
+    out.goalId = String(item.goalId);
+    if (date) out.date = date;
   }
 
   if ('notes' in item) out.notes = str(item.notes).slice(0, 1000);
@@ -440,6 +654,19 @@ function sanitizeItem(storeName, item) {
 // Identity colours for people. Deliberately not the app's semantic colours
 // (accent blue, danger red, success green, warning amber) — a person isn't a
 // state, and a red dot beside a number would be read as "overdue".
+// The categories income can be filed under. Defined here, next to the code
+// that validates an import, and not next to the form that offers them — it used
+// to be in both places, and the two drifted: the form offered 'Business' while
+// the sanitiser accepted only salary, sale and other, so exporting and importing
+// a backup quietly rewrote every business income row to 'Other'. There is no
+// form inside this file to keep in step with, so there is exactly one list.
+const INCOME_CATEGORIES = [
+  ['salary', 'Salary'],
+  ['sale', 'Sale'],
+  ['business', 'Business'],
+  ['other', 'Other']
+];
+
 const PERSON_COLOURS = [
   '#8b5cf6', // violet
   '#14b8a6', // teal
@@ -529,6 +756,14 @@ async function importDataToDB(data, mode = 'merge') {
   const personMap = idMaps.people.idMap;
   const accountMap = idMaps.accounts.idMap;
 
+  // A savings top-up names the goal it was paid into, and every goal is given a
+  // fresh id on import. The translation is filled in as the goals are written,
+  // because stripSourceId() mints each new id itself: a map built beforehand
+  // would hold ids nothing was ever stored under, and the notes would point at
+  // goals that don't exist — the same failure as losing them.
+  const goalIdMap = {};
+  const rememberGoalId = (from, to) => { if (from && to) goalIdMap[from] = to; };
+
   const remaining = STORES.filter((name) => name !== 'people' && name !== 'accounts');
 
   if (mode === 'replace') {
@@ -538,18 +773,39 @@ async function importDataToDB(data, mode = 'merge') {
       const store = tx.objectStore(storeName);
       store.clear();
       (usable[storeName] || []).forEach((item) => {
-        const record = stripSourceId(item, personMap, accountMap);
+        const record = stripSourceId(item, personMap, accountMap, goalIdMap);
         if (storeName === 'transfers' && (!record.fromId || !record.toId)) { skipped++; return; }
         store.add(record);
+        if (storeName === 'savings') rememberGoalId(item._sourceId, record.id);
         imported++;
       });
       await txDone(tx);
     }
   } else {
+    // Both id spaces, so a row from the file and a row already here agree on
+    // what they are rather than on an id that means something different on each
+    // device. Built once, before the loop that uses it.
+    const keyCtx = {
+      people: {},
+      accounts: {}
+    };
+    for (const p of (await getAll('people'))) keyCtx.people[String(p.id)] = String(p.name || '').toLowerCase();
+    for (const a of (await getAll('accounts'))) {
+      keyCtx.accounts[String(a.id)] = String(a.type || 'bank') + '|' + String(a.name || '').toLowerCase();
+    }
+    for (const p of (usable.people || [])) {
+      if (p && p._sourceId) keyCtx.people[String(p._sourceId)] = String(p.name || '').toLowerCase();
+    }
+    for (const a of (usable.accounts || [])) {
+      if (a && a._sourceId) {
+        keyCtx.accounts[String(a._sourceId)] = String(a.type || 'bank') + '|' + String(a.name || '').toLowerCase();
+      }
+    }
+
     for (const storeName of fileStores.filter((n) => remaining.includes(n))) {
       // Read existing keys on their own transaction first — mixing an await
       // into the readwrite transaction below would let it auto-commit early.
-      const seen = new Set((await getAll(storeName)).map(importKeyOf));
+      const seen = new Set((await getAll(storeName)).map((i) => importKeyOf(i, keyCtx)));
 
       const tx = db.transaction(storeName, 'readwrite');
       const store = tx.objectStore(storeName);
@@ -560,22 +816,24 @@ async function importDataToDB(data, mode = 'merge') {
         // transfer is visible and fixable, a balance that silently drifts
         // because of one is neither.
         if (storeName === 'transfers') {
-          const mapped = stripSourceId(item, personMap, accountMap);
+          const mapped = stripSourceId(item, personMap, accountMap, goalIdMap);
           if (!mapped.fromId || !mapped.toId || mapped.fromId === mapped.toId) { skipped++; return; }
-          const key = importKeyOf(mapped);
+          const key = importKeyOf(mapped, keyCtx);
           if (seen.has(key)) { skipped++; return; }
           seen.add(key);
           store.add(mapped);
           imported++;
           return;
         }
-        const key = importKeyOf(item);
+        const key = importKeyOf(item, keyCtx);
         if (seen.has(key)) {
           skipped++;
           return;
         }
         seen.add(key);
-        store.add(stripSourceId(item, personMap, accountMap));
+        const record = stripSourceId(item, personMap, accountMap, goalIdMap);
+        store.add(record);
+        if (storeName === 'savings') rememberGoalId(item._sourceId, record.id);
         imported++;
       });
 
@@ -631,7 +889,7 @@ async function writeNamedStore(storeName, keyOf, rows, mode, inFile) {
 // new rows on this device, so they get a fresh id from the same generator
 // addItem() uses — leaving them to the store's counter would put numbers back
 // into a store that's meant to hold UUIDs.
-function stripSourceId(item, personMap, accountMap) {
+function stripSourceId(item, personMap, accountMap, goalIdMap) {
   const { _sourceId, ...rest } = item;
   if (personMap && 'personId' in rest) rest.personId = personMap[item.personId] || null;
   if (accountMap) {
@@ -641,6 +899,14 @@ function stripSourceId(item, personMap, accountMap) {
     // dropped rather than half-applied.
     if (rest.fromId !== undefined) rest.fromId = accountMap[rest.fromId] || null;
     if (rest.toId !== undefined) rest.toId = accountMap[rest.toId] || null;
+  }
+  // A savings top-up names the goal it was paid into, and every goal gets a
+  // fresh id on import. Left alone, every note points at a goal that no longer
+  // exists and the Total Money card's month walk-back is wrong for each of them
+  // — which is the same failure as losing the notes entirely, just quieter.
+  if ('goalId' in rest) {
+    rest.goalId = goalIdMap ? goalIdMap[item.goalId] || null : item.goalId;
+    if (!rest.goalId) return null;
   }
   return { id: newId(), ...rest };
 }

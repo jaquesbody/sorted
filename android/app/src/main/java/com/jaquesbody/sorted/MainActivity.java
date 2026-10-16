@@ -25,8 +25,12 @@ public class MainActivity extends BridgeActivity {
    * Re-applied on focus change because the bars come back after a swipe, after
    * the permission dialog, and after returning from another app.
    */
+  // Before super.onCreate(), because that is what builds and loads the bridge —
+  // registerPlugin() only queues the class on the builder, so a plugin named
+  // after it is not there is a name the web side can reach and nothing else.
   @Override
   public void onCreate(Bundle savedInstanceState) {
+    registerPlugin(SaveFilePlugin.class);
     super.onCreate(savedInstanceState);
     hideSystemBars();
   }

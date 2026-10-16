@@ -31,6 +31,14 @@ async function pdfFirstPageToImageBlob(file) {
 
 // Pure file inspection — no pdf.js needed to answer this, which is why the
 // app can decide whether to fetch the library at all.
+//
+// The name is optional. Everything the app hands here comes from a file input or
+// the camera, so it always has one — but a Blob made in code doesn't, and the
+// assumption turned "no filename" into a crash inside receipt handling rather
+// than a plain "not a PDF".
 function isPDF(file) {
-  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  if (!file) return false;
+  if (file.type === 'application/pdf') return true;
+  const name = String(file.name || '');
+  return name.toLowerCase().endsWith('.pdf');
 }
