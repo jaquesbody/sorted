@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.95.0';
+const APP_VERSION = '2.96.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1003,7 +1003,7 @@ async function renderDashboard(container) {
       
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
-          <span class="stat-card-title">BILLS DUE</span>
+          <span class="stat-card-title">Bills due</span>
           <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · <span style="color: ${overdueCount > 0 ? 'var(--danger)' : 'inherit'}">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span></span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
@@ -1037,7 +1037,7 @@ async function renderDashboard(container) {
     <div class="chart-container">
       <div class="chart-header chart-header--link" role="button" tabindex="0"
            onclick="navigate('reports')" title="See the Reports breakdowns">
-        <h2 class="chart-title">Monthly Trend</h2>
+        <h2 class="chart-title">Monthly trend</h2>
       </div>
       <canvas id="trend-chart" class="chart-canvas"></canvas>
       <div class="chart-legend">
@@ -1771,7 +1771,7 @@ function syncSettingsHtml() {
   return `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label setting-label--title">Sync</div>
+        <div class="setting-label">Sync</div>
       </div>
       <div class="setting-control">
         <select class="form-input form-input--mini" id="sync-transport"
@@ -1950,7 +1950,7 @@ async function renderSpend(container) {
     
     <div class="stat-card" style="margin-bottom: 20px;">
       <div class="stat-card-header">
-        <span class="stat-card-title">Monthly Total</span>
+        <span class="stat-card-title">Monthly total</span>
       </div>
       <div class="stat-card-value">${currency(monthTotal)}</div>
       <!-- Under the amount, not beside the title. Bills puts "Nothing overdue"
@@ -2004,7 +2004,7 @@ function renderSpendItems(items, total) {
     return `
       <div class="empty-state">
         <div class="empty-state-text">No spend recorded for this month</div>
-        <button class="btn btn-primary" onclick="openAddModal('spend')">Add First Item</button>
+        <button class="btn btn-primary" onclick="openAddModal('spend')">Add first item</button>
       </div>
     `;
   }
@@ -2227,7 +2227,7 @@ async function renderDue(container) {
     
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
       <div class="stat-card-header">
-        <span class="stat-card-title">Total Due</span>
+        <span class="stat-card-title">Total due</span>
         <span class="stat-card-sub">${outstanding.length} unpaid · ${overdueStatus(overdue, upcoming)}</span>
       </div>
       <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
@@ -2257,7 +2257,7 @@ async function renderDue(container) {
           }</div>
           ${all.length > 0 || paid.length > 0
             ? '<p class="setting-hint" style="margin-bottom: 20px;">Use ◀ ▶ to see other months</p>'
-            : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add First Bill</button>'}
+            : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add first bill</button>'}
         </div>
       ` : rows.map(({ item, paid: isPaid, projected }) => {
         const days = daysUntil(item.dueDate);
@@ -2333,7 +2333,7 @@ async function renderSavings(container) {
     
     <div class="stat-card" style="margin-bottom: 20px;">
       <div class="stat-card-header">
-        <span class="stat-card-title">Total Saved</span>
+        <span class="stat-card-title">Total saved</span>
         <span class="stat-card-sub">${pct}% of target</span>
       </div>
       <div class="stat-card-value" style="color: var(--success)">${currency(totalCurrent)}</div>
@@ -2350,7 +2350,7 @@ async function renderSavings(container) {
       ${items.length === 0 ? `
         <div class="empty-state">
           <div class="empty-state-text">No savings goals yet</div>
-          <button class="btn btn-primary" onclick="openAddModal('savings')">Add First Goal</button>
+          <button class="btn btn-primary" onclick="openAddModal('savings')">Add first goal</button>
         </div>
       ` : items.map(item => {
         const goalPct = item.target > 0 ? Math.round((item.current / item.target) * 100) : 0;
@@ -2396,7 +2396,7 @@ async function renderSavings(container) {
       ${balances.length === 0 ? `
         <div class="empty-state">
           <div class="empty-state-text">No accounts yet</div>
-          <button class="btn btn-primary" onclick="openAccountSetup()">Add First Account</button>
+          <button class="btn btn-primary" onclick="openAccountSetup()">Add first account</button>
         </div>
       ` : balances.map(renderAccountRow).join('')}
     </div>
@@ -2414,7 +2414,7 @@ async function renderSavings(container) {
       ${incomeItems.length === 0 ? `
         <div class="empty-state">
           <div class="empty-state-text">No income recorded</div>
-          <button class="btn btn-primary" onclick="openIncomeSetup()">Add First Income</button>
+          <button class="btn btn-primary" onclick="openIncomeSetup()">Add first income</button>
         </div>
       ` : incomeItems.map(renderIncomeRow).join('')}
     </div>
@@ -3160,22 +3160,22 @@ async function renderReports(container) {
       </div>
 
       <div class="report-card">
-        ${reportHead('<h2 class="report-title">Spending by Category</h2>', totalSpend, 'accent')}
+        ${reportHead('<h2 class="report-title">Spending by category</h2>', totalSpend, 'accent')}
         ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
       </div>
       
       <div class="report-card">
-        ${reportHead('<h2 class="report-title">Bills by Category</h2>', totalDue, 'danger')}
+        ${reportHead('<h2 class="report-title">Bills by category</h2>', totalDue, 'danger')}
         ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue, 'danger')}
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Who Spent What</h2>
+        <h2 class="report-title">Who spent what</h2>
         ${renderPersonBreakdown(rangedSpend, rangedDue)}
       </div>
 
       <div class="report-card">
-        ${reportHead('<h2 class="report-title">Where Your Money Is</h2>',
+        ${reportHead('<h2 class="report-title">Where your money is</h2>',
           balances.reduce((n, b) => n + b.balance, 0), null)}
         ${renderBalanceBreakdown(balances)}
       </div>
@@ -3187,14 +3187,14 @@ async function renderReports(container) {
       <div class="report-card">
         ${reportHead(`<h2 class="report-title report-title--link" role="button" tabindex="0"
             onclick="goToGoals()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToGoals();}"
-            title="Go to your goals">Savings by Goal</h2>`, totalSavings, 'success')}
+            title="Go to your goals">Savings by goal</h2>`, totalSavings, 'success')}
         ${renderSavingsBreakdown(savingsItems)}
       </div>
     </div>
 
     <div class="save-report" style="margin-top: 20px; margin-bottom: 6px;">
       <button class="btn btn-primary" style="width: 100%;"
-              onclick="openSaveReportModal()">Save Report</button>
+              onclick="openSaveReportModal()">Save report</button>
       <!-- The period is a choice made three chips up the page and not a choice
            made in this dialog, so the dialog cannot show it. The sentence says
            so once, here, rather than leaving someone to wonder which period the
@@ -4164,7 +4164,7 @@ function renderSettings(container) {
       <div class="report-card">
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
-            <div class="setting-label setting-label--title">Currency</div>
+            <div class="setting-label">Currency</div>
           </div>
           <div class="setting-control setting-control--split">
             <span class="currency-code">${escapeHTML(getCurrencyCode())}</span>
@@ -4181,7 +4181,7 @@ function renderSettings(container) {
       <div class="report-card">
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
-            <div class="setting-label setting-label--title">Appearance</div>
+            <div class="setting-label">Appearance</div>
           </div>
           <div class="setting-control">
             ${themeSegment()}
@@ -4194,8 +4194,8 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Data Management</h2>
-        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
+        <h2 class="report-title">Data management</h2>
+        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export data</button>
         <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%; margin-bottom: 10px;">Import your back up file (.json)</button>
         <!-- Last, because it is the button that does one thing with no menu in
              front of it: the .json backup, written straight out. It used to be
@@ -4357,7 +4357,7 @@ function notifySettingsHtml() {
 
     <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
-        <div class="setting-label">Savings Goal</div>
+        <div class="setting-label">Savings goal</div>
       </div>
       <div class="setting-control">
         ${picker('notify-goal-cadence', cadenceOptions, 'changeGoalCadence(this.value)',
@@ -4452,7 +4452,7 @@ function peopleSettingsHtml() {
     ${rows}
     <div class="setting-row setting-row--add setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label setting-label--title">Add someone</div>
+        <div class="setting-label">Add someone</div>
       </div>
       <div class="setting-control">
         <input type="text" class="form-input" id="new-person-name" placeholder="Name" maxlength="40" style="width: 118px;">
@@ -4478,7 +4478,7 @@ function passcodeBlockHtml() {
   return `
     <div class="setting-row setting-row--inline setting-row--tight passcode-row">
       <div class="setting-text">
-        <div class="setting-label setting-label--title">Passcode</div>
+        <div class="setting-label">Passcode</div>
       </div>
       <div class="setting-control">
         <button class="switch" role="switch" aria-checked="${on}"
@@ -4489,7 +4489,7 @@ function passcodeBlockHtml() {
     ${isLockEnabled() ? `
       <div class="setting-block">
         <div class="setting-row setting-row--inline setting-row--tight">
-          <div class="setting-text"><div class="setting-label setting-label--title">Lock after</div></div>
+          <div class="setting-text"><div class="setting-label">Lock after</div></div>
           <div class="setting-control">
             <select class="form-input" id="lock-timeout" style="width: auto;"
                     onchange="setLockTimeoutMinutes(Number(this.value))">
@@ -4498,7 +4498,7 @@ function passcodeBlockHtml() {
           </div>
         </div>
         <div class="setting-row setting-row--inline setting-row--tight">
-          <div class="setting-text"><div class="setting-label setting-label--title">Lock now</div></div>
+          <div class="setting-text"><div class="setting-label">Lock now</div></div>
           <div class="setting-control">
             <button class="btn btn-ghost" onclick="lockApp()">Lock</button>
           </div>
@@ -4823,7 +4823,7 @@ function buildForm(type, editId = null, existingCategory = null) {
           <input type="number" class="form-input" id="form-amount" step="0.01" min="0">
         </div>
         <div class="form-group">
-          <label class="form-label">Due Date</label>
+          <label class="form-label">Due date</label>
           <input type="date" class="form-input" id="form-dueDate">
         </div>
       </div>
@@ -4855,7 +4855,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     `,
     savings: `
       <div class="form-group">
-        ${titleInput('Goal Name', 'e.g., Holiday fund')}
+        ${titleInput('Goal name', 'e.g., Holiday fund')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -5961,14 +5961,14 @@ async function buildReport() {
     generated: localISO(),
     sections: [
       reportSection('Forecast', { rows: forecastRows, chart: series }),
-      reportSection('Spending by Category', {
+      reportSection('Spending by category', {
         total: totalSpend, rows: catRows(groupByCategory(rangedSpend, 'amount'), totalSpend)
       }),
-      reportSection('Bills by Category', {
+      reportSection('Bills by category', {
         total: totalDue, rows: catRows(groupByCategory(rangedDue, 'amount'), totalDue)
       }),
-      reportSection('Who Spent What', { total: peopleTotal, rows: personRows }),
-      reportSection('Where Your Money Is', {
+      reportSection('Who spent what', { total: peopleTotal, rows: personRows }),
+      reportSection('Where your money is', {
         total: balances.reduce((n, b) => n + b.balance, 0),
         rows: balances.map(b => ({ label: b.name, amount: b.balance }))
       }),
@@ -5979,7 +5979,7 @@ async function buildReport() {
           : 'Nothing recorded this month yet.',
         rows: patternRows
       }),
-      reportSection('Savings by Goal', { total: totalSavings, rows: goalRows })
+      reportSection('Savings by goal', { total: totalSavings, rows: goalRows })
     ]
   };
 }
@@ -6091,8 +6091,8 @@ function reportPdf(rep) {
       doc.y = y0 + rowLead;
       if (barH) {
         pdfBar(doc, doc.ml, doc.y, Math.max(1.5, barMax * Math.min(1, r.pct)), barH,
-          sec.title === 'Bills by Category' ? [0.94, 0.27, 0.27]
-            : sec.title === 'Savings by Goal' ? [0.13, 0.77, 0.37]
+          sec.title === 'Bills by category' ? [0.94, 0.27, 0.27]
+            : sec.title === 'Savings by goal' ? [0.13, 0.77, 0.37]
               : [0.24, 0.55, 0.99]);
         doc.y += barH + gapH;
       }

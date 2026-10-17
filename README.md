@@ -12,9 +12,9 @@ All six are the same household on a 412px phone viewport: Gareth and Kim, a curr
 
 | | |
 |---|---|
-| ![Dashboard — total money, what went where, and the month's bills and savings](docs/screenshots/dashboard.png) | ![Spend — the tick, the receipt, and who it was](docs/screenshots/spend.png) |
-| ![Bills — paid and upcoming, each counting down to its date](docs/screenshots/bills.png) | ![Savings — accounts, income and goals](docs/screenshots/savings.png) |
-| ![Reports — forecast, categories, who spent what, and the rest](docs/screenshots/reports.png) | ![Settings](docs/screenshots/settings.png) |
+| ![Dashboard — total money, what went where, and the month's bills and savings](screenshots/dashboard.png) | ![Spend — the tick, the receipt, and who it was](screenshots/spend.png) |
+| ![Bills — paid and upcoming, each counting down to its date](screenshots/bills.png) | ![Savings — accounts, income and goals](screenshots/savings.png) |
+| ![Reports — forecast, categories, who spent what, and the rest](screenshots/reports.png) | ![Settings](screenshots/settings.png) |
 
 ## Features
 
@@ -88,7 +88,7 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.95.0-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.95.0/sorted-v2-2.95.0-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.96.0-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.96.0/sorted-v2-2.96.0-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 APKs are build artefacts, so they live in releases rather than in this repo — every past build is still on the releases page.
 
@@ -101,9 +101,14 @@ Exported before upgrading is the belt to that braces: the export is a JSON file 
 To rebuild it yourself (needs JDK 21 and the Android SDK):
 
     npm install
-    npx cap sync android
+    npm run sync:android
     cd android
     ./gradlew assembleDebug
+
+`npm run sync:android` is `cap sync` with the staged bundle wiped first. Capacitor
+copies `docs/` into `android/app/src/main/assets/public/` but never removes what is no
+longer there, so a plain `npx cap sync android` grows the APK with every file the web
+build has ever had — a deleted screenshot stays in the bundle for good.
 
 The signing key is committed at `android/debug.keystore` and pinned in `build.gradle`, so any machine can build an APK that installs as an update over an existing one. Android rejects an update signed with a different key, so if you ever change that file the next install will be refused and the only fix would be an uninstall — which deletes the data. Its fingerprint is recorded in `build.gradle`; if a build ever starts failing to install, check that the APK's certificate still matches the keystore's.
 

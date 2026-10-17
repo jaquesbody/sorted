@@ -113,6 +113,14 @@
   --lh-tight: 1.15;     /* big figures only, so they don't clip or drift apart */
   --lh-base: 1.45;      /* body and lists */
   --lh-loose: 1.6;      /* long-form: the setup guide and the privacy text */
+
+  /* Letter-spacing. One role: the uppercase micro-label. Nothing else is
+     tracked — sentence case never is. Four different values in two different
+     units (0.5px, 0.06em, 0.04em, 0.03em) used to sit behind the same label
+     treatment, so the same kind of label was a different width depending on
+     which screen it appeared on. Use em, not px: tracking that does not scale
+     with the type it is tracking is a second, hidden size. */
+  --tracking-label: 0.06em;
 }
 
 html[data-theme="light"] {
@@ -306,11 +314,16 @@ body {
   margin-bottom: 15px;
 }
 
+/* The uppercase micro-label — the same role as .section-title further down,
+   and deliberately the same treatment. It was 14px/400/0.5px while its sibling
+   was 13px/700/0.06em, so "TOTAL MONEY" and "GOALS" were one idea set two
+   different ways, in two different tracking units. */
 .stat-card-title {
-  font-size: var(--fs-base);
+  font-size: var(--fs-sm);
+  font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--tracking-label);
 }
 
 .stat-card-value {
@@ -632,19 +645,6 @@ body {
   margin: 0;
 }
 
-/* A card's heading sitting on the same line as its control. */
-/* The default row gives its text a 200px basis and wraps, which put the
-   control under the heading — the Add-someone box by 50px, Appearance by 5px,
-   so it looked like it worked on my phone and not on yours. These rows have no
-   hint long enough to need a wrap, so they don't wrap at all. */
-
-
-.setting-label--title {
-  font-size: var(--fs-md);
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
 /* Icon-only segmented control. Fixed squares so three of them are the same
    size whichever one is selected, and the selection reads by colour rather than
    by the control changing width. */
@@ -766,7 +766,6 @@ body {
 .setup-steps-head {
   font-size: var(--fs-sm);
   font-weight: 600;
-  letter-spacing: 0.04em;
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
@@ -822,7 +821,7 @@ body {
   background: transparent;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   font-style: italic;
   line-height: var(--lh-tight);
   display: inline-flex;
@@ -1514,11 +1513,14 @@ body {
   margin-top: 4px;
 }
 
+/* See .stat-card-title: the one uppercase micro-label treatment. 700 was
+   wrong here for two reasons — a 13px label is not display type, and its
+   near-twin on the dashboard carried no weight at all. */
 .section-title {
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   color: var(--text-secondary);
 }
 
@@ -2487,7 +2489,7 @@ body {
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-secondary);
-  letter-spacing: 0.03em;
+  letter-spacing: var(--tracking-label);
 }
 
 /* A control that needs room for an address rather than a word. */
@@ -2711,7 +2713,7 @@ body.is-locked {
   justify-content: center;
   flex: 0 0 auto;
   border-radius: 50%;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0;
   line-height: var(--lh-tight);
   user-select: none;
