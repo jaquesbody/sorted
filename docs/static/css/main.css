@@ -1,5 +1,38 @@
 /* Sorted v2 - Modern Finance Tracker */
 
+/* Inter, self-hosted, per protocol.md Section 4.3. The files are the
+   rsms.me/inter distribution, byte-identical to the release (checked by hash),
+   so the three weights are the same version.
+
+   The semibold is here because the app emphasises with 600 in 22 places and
+   neither the system stack nor a 400/700 pair supplies it: 600 was either
+   synthesised by the browser or snapped down to 700, and it did that
+   differently on Android, iOS and desktop. Swapping the family and leaving the
+   weight unresolved would have made that inconsistency permanent. */
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/inter-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/inter-semibold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Inter';
+  src: url('../fonts/inter-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* Every colour in the app comes from these tokens — dark is the default and
    the only theme [data-theme] has to override. The Settings toggle sets the
    attribute, index.html sets it before first paint so nothing flashes. */
@@ -56,6 +89,30 @@
   --chart-highlight: #2b2b33;
   --shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
   --overlay: rgba(0, 0, 0, 0.6);
+
+  /* Type. One scale for the whole app, replacing nineteen ad-hoc sizes, six of
+     which sat inside the 12-16px band less than a pixel apart. Named --fs-*
+     because --text-* is already the colour scale (--text-primary and friends),
+     so a size token under that prefix would read as a colour.
+
+     The root font size is left at the browser default 16px, so every rem here
+     is predictable. Nothing may go below --fs-2xs: the nav labels used to run
+     at 9.3px on a narrow phone, which is text nobody should have to read. */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --fs-2xs: 0.6875rem;  /* 11px - the floor: nav labels, badges */
+  --fs-xs: 0.75rem;     /* 12px - meta lines, captions, legend keys */
+  --fs-sm: 0.8125rem;   /* 13px - dense secondary text */
+  --fs-base: 0.875rem;  /* 14px - body and list rows */
+  --fs-md: 1rem;        /* 16px - emphasised body, form fields */
+  --fs-lg: 1.25rem;     /* 20px - section figures */
+  --fs-xl: 1.5rem;      /* 24px - headings */
+  --fs-2xl: 2rem;       /* 32px - the hero figure */
+
+  /* Line height. Only seven declarations existed, so almost all copy ran at
+     the browser default (about 1.2), which is tight for 14px text. */
+  --lh-tight: 1.15;     /* big figures only, so they don't clip or drift apart */
+  --lh-base: 1.45;      /* body and lists */
+  --lh-loose: 1.6;      /* long-form: the setup guide and the privacy text */
 }
 
 html[data-theme="light"] {
@@ -95,7 +152,16 @@ html[data-theme="light"] {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
+  /* The one line-height that most of the app inherits. Before this, most copy
+     ran at the browser default: about 1.2, which is tight for 14px text. */
+  line-height: var(--lh-base);
+  /* Every figure in the app lines up. Amounts, balances and progress sit in
+     columns, and proportional digits make those columns jitter as values
+     change — the one thing a finance app must not do. Inherited, so it covers
+     the whole app rather than a list of classes someone has to remember to
+     extend. */
+  font-variant-numeric: tabular-nums;
   background: var(--bg);
   color: var(--text-primary);
   display: flex;
@@ -120,7 +186,7 @@ body {
 }
 
 .logo {
-  font-size: 1.5rem;
+  font-size: var(--fs-xl);
   font-weight: 700;
   color: var(--accent);
 }
@@ -195,7 +261,7 @@ body {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   transition: all 0.15s ease;
 }
 
@@ -241,20 +307,20 @@ body {
 }
 
 .stat-card-title {
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .stat-card-value {
-  font-size: 2rem;
+  font-size: var(--fs-2xl);
   font-weight: 700;
   margin-bottom: 5px;
 }
 
 .stat-card-sub {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
@@ -301,7 +367,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -357,7 +423,7 @@ body {
 }
 
 .category-name {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
   min-width: 0;
   overflow: hidden;
@@ -422,7 +488,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   white-space: nowrap;
   color: var(--text-secondary);
 }
@@ -536,7 +602,7 @@ body {
 
 .choice-or {
   text-align: center;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
 }
 
@@ -557,7 +623,7 @@ body {
 }
 
 .choice-label {
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -574,7 +640,7 @@ body {
 
 
 .setting-label--title {
-  font-size: 1.05rem;
+  font-size: var(--fs-md);
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -658,7 +724,7 @@ body {
 .report-card .account-total-name,
 .report-card .pattern-name,
 .report-card .category-name {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text-secondary);
 }
@@ -666,7 +732,7 @@ body {
 .report-card .account-total-amount,
 .report-card .pattern-amount,
 .report-card .category-amount {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
 }
 
@@ -698,7 +764,7 @@ body {
 }
 
 .setup-steps-head {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
@@ -708,7 +774,7 @@ body {
 .setup-steps-list {
   margin: 0;
   padding-left: 20px;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
@@ -721,7 +787,7 @@ body {
 }
 
 .setup-steps-list code {
-  font-size: 0.95em;
+  font-size: var(--fs-md);
 }
 
 .setting-row--add {
@@ -755,10 +821,10 @@ body {
   border: 1px solid var(--border-strong);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   font-weight: 700;
   font-style: italic;
-  line-height: 1;
+  line-height: var(--lh-tight);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -785,8 +851,8 @@ body {
   background: var(--bg-elevated, var(--bg-surface));
   border: 1px solid var(--border);
   color: var(--text-primary);
-  font-size: 0.78rem;
-  line-height: 1.45;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
   text-align: left;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   opacity: 0;
@@ -863,8 +929,8 @@ body {
   width: 40px;
   height: 40px;
   padding: 0;
-  font-size: 1.1rem;
-  line-height: 1;
+  font-size: var(--fs-lg);
+  line-height: var(--lh-tight);
   justify-content: center;
 }
 
@@ -896,13 +962,13 @@ body {
 }
 
 .forecast-span {
-  font-size: 0.72rem;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   margin-top: 3px;
 }
 
 .category-amount {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   min-width: 62px;
   text-align: right;
@@ -918,12 +984,12 @@ body {
 }
 
 .kv-name {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
 .kv-value {
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   font-weight: 600;
 }
 
@@ -1030,7 +1096,7 @@ body {
   gap: 8px;
   padding: 10px 16px;
   border-radius: var(--radius);
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -1207,7 +1273,7 @@ body {
 }
 
 .ocr-status {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
   min-height: 1.2em;
   margin-bottom: 12px;
@@ -1241,7 +1307,7 @@ body {
 }
 
 .receipt-name {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1257,7 +1323,7 @@ body {
 
 .receipt-actions .btn {
   padding: 6px 10px;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
 }
 
 /* Full-size receipt viewer. Bigger than the modal (which caps at 500px) and
@@ -1286,7 +1352,7 @@ body {
 }
 
 .viewer-caption {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1398,7 +1464,7 @@ body {
 }
 
 .item-meta {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
@@ -1426,7 +1492,7 @@ body {
 }
 
 .item-amount {
-  font-size: 1.25rem;
+  font-size: var(--fs-lg);
   font-weight: 700;
   min-width: 100px;
   text-align: right;
@@ -1449,7 +1515,7 @@ body {
 }
 
 .section-title {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -1476,12 +1542,12 @@ body {
 }
 
 .account-total-name {
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
 .account-total-amount {
-  font-size: 1.1rem;
+  font-size: var(--fs-lg);
   font-weight: 700;
   color: var(--text-primary);
 }
@@ -1495,7 +1561,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
 }
 
@@ -1612,7 +1678,7 @@ body {
 }
 
 .report-head-total {
-  font-size: 1.15rem;
+  font-size: var(--fs-lg);
   font-weight: 700;
   color: var(--text-primary);
   white-space: nowrap;
@@ -1652,12 +1718,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
 }
 
 .pattern-amount {
   grid-area: amount;
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   white-space: nowrap;
   text-align: right;
@@ -1686,10 +1752,10 @@ body {
 
 
 .pattern-note {
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
   margin: 10px 0 14px;
-  line-height: 1.45;
+  line-height: var(--lh-base);
 }
 
 .pattern-note strong {
@@ -1704,7 +1770,7 @@ body {
    figure is, so it carries no margins of its own — the row's baseline does
    the aligning. */
 .pattern-sub {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
 }
 
@@ -1714,7 +1780,7 @@ body {
 .item-sub {
   flex-basis: 100%;
   text-align: right;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
   margin-top: 8px;
   /* The last flex line, so it has to be allowed to wrap onto its own. */
@@ -1765,7 +1831,7 @@ body {
   border: none;
   background: transparent;
   font: inherit;
-  font-size: 1.05rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-primary);
   text-align: center;
@@ -1805,7 +1871,7 @@ body {
 .filter-chip {
   padding: 6px 12px;
   border-radius: 20px;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   cursor: pointer;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -1853,8 +1919,8 @@ body {
 }
 
 .notice-box p {
-  font-size: 1.05rem;
-  line-height: 1.5;
+  font-size: var(--fs-md);
+  line-height: var(--lh-loose);
   color: var(--text-primary);
 }
 
@@ -1942,9 +2008,9 @@ body {
   background: none;
   border: none;
   color: var(--text-secondary);
-  font-size: 1.5rem;
+  font-size: var(--fs-xl);
   cursor: pointer;
-  line-height: 1;
+  line-height: var(--lh-tight);
 }
 
 .modal-body {
@@ -1958,7 +2024,7 @@ body {
 
 .form-label {
   display: block;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
@@ -1970,7 +2036,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text-primary);
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   outline: none;
   transition: border-color 0.15s ease;
 }
@@ -2001,7 +2067,7 @@ body {
   border: none;
   border-bottom: 1px solid var(--border);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -2033,7 +2099,7 @@ body {
   min-width: 64px;
   max-width: 116px;
   padding: 6px 8px;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   flex: 0 1 auto;
 }
 
@@ -2043,7 +2109,7 @@ body {
   display: inline-flex;
   align-items: center;
   padding: 4px 10px;
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   margin-top: 4px;
 }
 
@@ -2060,7 +2126,7 @@ body {
 
 .form-error {
   color: var(--danger);
-  font-size: 0.875rem;
+  font-size: var(--fs-base);
   margin: 0 0 12px;
   padding: 9px 12px;
   background: var(--danger-muted);
@@ -2105,7 +2171,7 @@ body {
 }
 
 .chart-title {
-  font-size: 1rem;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -2121,7 +2187,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -2172,7 +2238,7 @@ body {
 }
 
 .report-title {
-  font-size: 1rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   margin-bottom: 15px;
 }
@@ -2186,7 +2252,7 @@ body {
 
 
 .empty-state-text {
-  font-size: 1.1rem;
+  font-size: var(--fs-lg);
   margin-bottom: 20px;
 }
 
@@ -2196,7 +2262,7 @@ body {
   align-items: center;
   padding: 4px 8px;
   border-radius: 12px;
-  font-size: 0.75rem;
+  font-size: var(--fs-xs);
   font-weight: 600;
 }
 
@@ -2233,7 +2299,7 @@ body {
   border-radius: 6px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
@@ -2371,7 +2437,7 @@ body {
 }
 
 .setting-label {
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   font-weight: 600;
 }
 
@@ -2383,7 +2449,7 @@ body {
 }
 
 .setting-hint {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   color: var(--text-secondary);
   margin-top: 3px;
 }
@@ -2418,7 +2484,7 @@ body {
    Without the code the dropdown is the only thing saying which one is in use,
    and it has to be opened to find out. */
 .currency-code {
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text-secondary);
   letter-spacing: 0.03em;
@@ -2531,7 +2597,7 @@ body {
 }
 
 .lock-prompt {
-  font-size: 1rem;
+  font-size: var(--fs-md);
   color: var(--text-secondary);
   margin-bottom: 18px;
 }
@@ -2558,7 +2624,7 @@ body {
 
 .lock-error {
   min-height: 1.2em;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   color: var(--danger);
   margin-bottom: 14px;
 }
@@ -2591,8 +2657,11 @@ body {
   background: var(--bg-surface);
   color: var(--text-primary);
   font-family: inherit;
-  font-size: 1.4rem;
-  font-weight: 500;
+  font-size: var(--fs-xl);
+  /* 600, not 500: Inter ships 400/600/700, so a requested 500 was resolved to
+     the nearest heavier weight anyway — the declaration now says what the
+     browser actually painted. */
+  font-weight: 600;
   cursor: pointer;
   transition: all 0.12s ease;
   -webkit-tap-highlight-color: transparent;
@@ -2615,7 +2684,7 @@ body {
 
 .key-muted {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--fs-base);
 }
 
 .key-muted svg {
@@ -2644,7 +2713,7 @@ body.is-locked {
   border-radius: 50%;
   font-weight: 700;
   letter-spacing: 0;
-  line-height: 1;
+  line-height: var(--lh-tight);
   user-select: none;
 }
 
@@ -2672,7 +2741,7 @@ body.is-locked {
   background: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--fs-base);
   font-weight: 600;
   cursor: pointer;
   white-space: nowrap;
@@ -2726,7 +2795,7 @@ body.is-locked {
   background: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
-  font-size: 0.95rem;
+  font-size: var(--fs-md);
   font-weight: 600;
   text-align: left;
   cursor: pointer;
@@ -2822,7 +2891,7 @@ body.is-locked {
 
   .page-toolbar .btn {
     padding: 9px 12px;
-    font-size: 0.85rem;
+    font-size: var(--fs-base);
   }
 
   /* Same width on every page, just a little narrower to leave room for the
@@ -2836,7 +2905,7 @@ body.is-locked {
   }
 
   .month-label {
-    font-size: 0.95rem;
+    font-size: var(--fs-md);
   }
 
   .page-toolbar .month-nav .btn-icon {
@@ -2844,15 +2913,20 @@ body.is-locked {
     height: 32px;
   }
 
-  /* Category bar: keep the bar itself readable on a narrow screen. */
+  /* Category bar: the name column narrows here so the bar stays readable on a
+     narrow screen — but not to 84px any more. The column has to hold the
+     longest built-in category name, and Inter is wider than the system stack it
+     replaced: "Entertainment" measures 85.6px at --fs-sm, against the 84px of
+     room the old font fitted in. Shrinking the type to fit the box would be the
+     squeeze this column exists to avoid, so the box grew instead. */
   .category-row {
-    grid-template-columns: 84px minmax(30px, 1fr) auto;
+    grid-template-columns: 92px minmax(30px, 1fr) auto;
     gap: 8px;
   }
 
   .category-amount {
     min-width: 56px;
-    font-size: 0.8rem;
+    font-size: var(--fs-sm);
   }
 
   .item-row {
@@ -2869,7 +2943,7 @@ body.is-locked {
 
   .item-amount {
     min-width: 78px;
-    font-size: 1.1rem;
+    font-size: var(--fs-lg);
   }
 
   .item-actions {
@@ -2957,7 +3031,7 @@ body.is-native .bottom-nav {
   justify-content: center;
   gap: 3px;
   padding: 8px 0 7px;
-  font-size: 0.65rem;
+  font-size: var(--fs-2xs);
   text-align: center;
 }
 
@@ -2993,17 +3067,17 @@ body.is-native .bottom-nav {
      Spending by Category is the standard; the rest now follow it. */
   .report-head .report-title,
   .report-card > .report-title {
-    font-size: 0.9rem;
+    font-size: var(--fs-base);
   }
 
   .report-head-total {
-    font-size: 0.95rem;
+    font-size: var(--fs-md);
   }
 }
 
 @media (max-width: 380px) {
   .bottom-nav .nav-item {
-    font-size: 0.58rem;
+    font-size: var(--fs-2xs);
   }
 
 }
@@ -3023,7 +3097,7 @@ body.is-native .bottom-nav {
    The card heading line is where it belongs, so it is read with the title and
    not under it in a paragraph of its own. */
 .report-head-note {
-  font-size: 0.8rem;
+  font-size: var(--fs-sm);
   font-weight: 400;
   color: var(--text-secondary);
   text-align: right;

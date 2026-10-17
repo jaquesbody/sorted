@@ -9,6 +9,12 @@
 <title>Sorted</title>
 <link rel="icon" type="image/png" href="static/icons/favicon-32.png">
 <link rel="apple-touch-icon" href="static/icons/apple-touch-icon.png">
+<!-- The regular weight is the one every screen uses; swapping it in after
+     first paint is the flash font-display: swap implies, so it is fetched
+     while the stylesheet is still parsing. `crossorigin` is required on a font
+     preload even same-origin, or the preload is ignored and the font fetched
+     twice. -->
+<link rel="preload" href="static/fonts/inter-regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="static/css/main.css">
 <script>
 // Apply the saved theme before first paint — a light-theme user must not see

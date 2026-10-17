@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.94.3';
+const APP_VERSION = '2.95.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1540,6 +1540,15 @@ function renderCategoryBreakdown(totals, grandTotal, tone) {
   `;
 }
 
+// A CSS token read as a pixel number. Canvas text cannot take a var(), so the
+// token is resolved against the root font size — the same 16px the rem scale
+// assumes. `css` is the computed style of the document element.
+function remPx(css, token, fallback) {
+  const n = parseFloat(css.getPropertyValue(token));
+  if (!Number.isFinite(n)) return fallback;
+  return n * (parseFloat(css.fontSize) || 16);
+}
+
 function drawTrendChart(spendItems, focusDate) {
   const canvas = document.getElementById('trend-chart');
   if (!canvas) return;
@@ -1571,6 +1580,10 @@ function drawTrendChart(spendItems, focusDate) {
   // --bg-surface left a visible inset rectangle of a different shade.
   const surface = css.getPropertyValue('--bg-card').trim() || '#222228';
   const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  // Chart text follows the type scale like everything else. These were the last
+  // hardcoded sizes in the app, and the axis ran at 10px — below the --fs-2xs
+  // floor the scale sets.
+  const axisPx = remPx(css, '--fs-xs', 12);
 
   // The window ends on the month being looked at, so stepping back shows the
   // six months that led to it, and the month in question is marked.
@@ -1637,7 +1650,7 @@ function drawTrendChart(spendItems, focusDate) {
     }
 
     ctx.fillStyle = m.selected ? textPrimary : muted;
-    ctx.font = `12px ${bodyFont}`;
+    ctx.font = `${axisPx}px ${bodyFont}`;
     ctx.textAlign = 'center';
     // Keep labels inside the canvas even when the window is narrow.
     const clamp = (cx, text) => {
@@ -3923,6 +3936,9 @@ function drawForecastChart(data) {
   const muted = css.getPropertyValue('--text-secondary').trim() || '#8b8b96';
   const grid = css.getPropertyValue('--border').trim() || '#2b2b33';
   const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  // Axis and point labels come from the type scale rather than a literal: 10px
+  // sat below the --fs-2xs floor the scale sets.
+  const labelPx = remPx(css, '--fs-2xs', 11);
 
   ctx.fillStyle = surface;
   ctx.fillRect(0, 0, w, h);
@@ -3972,7 +3988,7 @@ function drawForecastChart(data) {
 
   // Faint grey lines every step, each with its figure. This is what makes a
   // value readable off the chart rather than guessed at.
-  ctx.font = `10px ${bodyFont}`;
+  ctx.font = `${labelPx}px ${bodyFont}`;
   ctx.textBaseline = 'middle';
   for (let v = min; v <= max + 0.5; v += step) {
     const py = Math.round(y(v)) + 0.5;
@@ -4005,7 +4021,7 @@ function drawForecastChart(data) {
     ctx.restore();
     ctx.fillStyle = muted;
     ctx.textAlign = 'left';
-    ctx.font = `10px ${bodyFont}`;
+    ctx.font = `${labelPx}px ${bodyFont}`;
     ctx.fillText('today', Math.min(tx + 4, w - padR - 26), padT + 7);
   }
 
@@ -4052,7 +4068,7 @@ function drawForecastChart(data) {
   const every = Math.max(1, Math.ceil(series.length / targetLabels));
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  ctx.font = `10px ${bodyFont}`;
+  ctx.font = `${labelPx}px ${bodyFont}`;
   for (let i = 0; i < series.length; i += every) {
     const label = series[i].label;
     const half = ctx.measureText(label).width / 2;
