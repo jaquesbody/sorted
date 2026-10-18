@@ -86,9 +86,11 @@ Serve the `docs` folder with any static file server:
 
 Then open `http://localhost:8000` in your browser. Same app, minus the native export dialogs (export downloads a JSON file instead).
 
+Served over HTTPS, Chrome will also offer to install it — there's a web manifest, so it gets its own window and its own icon instead of a bookmark. Installing is optional and there's still no service worker: nothing is cached, and the app behaves exactly the same either way.
+
 ### Android (APK)
 
-Grab [`sorted-v2-2.96.0-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.96.0/sorted-v2-2.96.0-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.97.0-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.97.0/sorted-v2-2.97.0-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 APKs are build artefacts, so they live in releases rather than in this repo — every past build is still on the releases page.
 
