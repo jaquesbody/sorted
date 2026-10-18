@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.97.0';
+const APP_VERSION = '2.98.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -2228,7 +2228,10 @@ async function renderDue(container) {
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
       <div class="stat-card-header">
         <span class="stat-card-title">Total due</span>
-        <span class="stat-card-sub">${outstanding.length} unpaid · ${overdueStatus(overdue, upcoming)}</span>
+        <span class="stat-card-sub stat-card-sub--stack">
+          <span>${outstanding.length} unpaid</span>
+          <span>${overdueStatus(overdue, upcoming)}</span>
+        </span>
       </div>
       <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
       <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>

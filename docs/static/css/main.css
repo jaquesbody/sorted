@@ -340,6 +340,19 @@ body {
   color: var(--text-secondary);
 }
 
+/* Two facts, one per line. Both cards that pair a count with a status used to
+   run them together with a middot — "0 unpaid · Nothing due this month" — which
+   is 31 characters and has no room beside the card's own label on a 412px
+   phone, so it broke wherever it landed rather than where the copy breaks. The
+   stack puts the break on the boundary the sentence already has. */
+.stat-card-sub--stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  gap: 2px;
+}
+
 /* Total money, and the four parts it is already spoken for. Full width above the
    four summary cards because it is the question they are all about; the bar is
    one row so the whole figure reads at a glance rather than by addition. */
@@ -2441,9 +2454,24 @@ body {
   min-width: 0;
 }
 
+/* A row label is body text, not a heading — and it was a heading. It carried
+   --fs-md/600, which is exactly .report-title's treatment: the same size and the
+   same weight as the name of the card it sits inside. That only read as a
+   hierarchy while the two really were equal, and they are not — at ≤430px every
+   card heading drops to 14px (the media query at the end of this file) and this
+   stayed at 16px, so on a phone the rows were louder than the heading above
+   them. "Notifications" at 14/600 over "Bills due" at 16/600 was the inversion.
+
+   A settings row is a label and a control. The label leads the row by being the
+   only text in it, not by outweighing its card: 400 is the body weight and
+   --fs-base the body size, so this is the standard's existing Body role rather
+   than a sixth heading treatment. It also settles the pairing that the sweep
+   documented as *the* visible Settings inconsistency — Currency and Appearance
+   against Data management and Danger zone — by making them different roles
+   instead of two spellings of one. */
 .setting-label {
-  font-size: var(--fs-md);
-  font-weight: 600;
+  font-size: var(--fs-base);
+  font-weight: 400;
 }
 
 /* An empty one must cost nothing. It is the element checkForUpdate writes its

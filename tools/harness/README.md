@@ -102,6 +102,29 @@ matches OpenCode's crashpad handler, the user's Brave, and any shell that merely
 mentions the word — including the one running the check. That reported a leak when
 there was none, and would have refused a healthy run.
 
+## Check `/tmp` too, and this one is not optional
+
+`/tmp` is a tmpfs on this machine: memory-backed, 3.9 GB, and shared with everything else that
+uses it. A browser that is **killed** rather than closed never removes its profile directory,
+and each one is about 140 MB. Fifty of them had quietly filled the filesystem to 80%, and the
+next run died part-way through with this, from the browser's own IndexedDB:
+
+```
+FILE_ERROR_FAILED (ChromeMethodBFE: 3::WritableFileAppend::1)
+```
+
+That reads exactly like a bug in the app — the suite stops mid-way, several hundred checks in,
+with a stack trace — and it is not one. `timeout 60 node test.js` leaves a profile behind every
+time it fires, which is how they accumulated. Check before blaming the code:
+
+```
+df -h /tmp
+ls -d /tmp/org.chromium.Chromium.scoped_dir.* 2>/dev/null | wc -l
+```
+
+They are safe to delete once no browser is running: each one belongs to a browser that is
+already gone. Do not kill a run to tidy up — let it finish, or the tidying makes more of them.
+
 ## The traps in here, all of them paid for
 
 - **`\s` inside a `run()` template literal loses its backslash.** `\s`→`s`,
