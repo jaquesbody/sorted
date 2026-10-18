@@ -96,7 +96,7 @@ Served over HTTPS, Chrome will also offer to install it — there's a web manife
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.99.4-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.99.4/sorted-v2-2.99.4-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.99.5-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.99.5/sorted-v2-2.99.5-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 APKs are build artefacts, so they live in releases rather than in this repo — every past build is still on the releases page.
 
