@@ -5787,6 +5787,84 @@ async function runSuite(driverBase) {
       check('a file that is not a snapshot is a failure',
         settings.detail.aFileThatIsNotASnapshotIsAFailure.pass, settings);
 
+      // 6. "Test the address", and the message it exists to replace. Every way
+      //    of getting the address wrong reaches the user as the same sentence —
+      //    "Failed to fetch" — which is the browser's wording and names none of
+      //    them. Two are visible without asking the host anything; the rest are
+      //    what the host's own /health is for.
+      const diagnosis = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: got, want: want, pass: got === want }; };
+        const realFetch = window.fetch;
+        window.__asked = [];
+        window.__host = null;          // null stands for "nothing is listening"
+        window.fetch = async (url) => {
+          window.__asked.push(String(url));
+          if (window.__host === null) throw new TypeError('Failed to fetch');
+          return { ok: true, status: 200, text: async () => JSON.stringify(window.__host) };
+        };
+
+        setSyncSettings({ transport: 'lan', url: '' });
+        t('noAddressIsSaidPlainly', (await syncTestAddress()).state, 'empty');
+
+        setSyncSettings({ url: '192.168.1.10:8787/sorted-snapshot.json' });
+        t('junkIsNotAnAddress', (await syncTestAddress()).state, 'malformed');
+
+        setSyncSettings({ url: 'http://192.168.1.10:8787/' });
+        t('theWrongFileIsNamed', (await syncTestAddress()).state, 'wrong-path');
+
+        setSyncSettings({ url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        t('aDeadHostIsUnreachable', (await syncTestAddress()).state, 'unreachable');
+
+        window.__host = { ok: true, snapshot: false, dir: '/home/x/sorted-sync' };
+        t('aHostWithAnEmptyFolder', (await syncTestAddress()).state, 'ready-empty');
+        window.__host = { ok: true, snapshot: true, dir: '/home/x/sorted-sync' };
+        t('aHostThatAlreadyHasTheFile', (await syncTestAddress()).state, 'ready-with-file');
+        t('theProbeAsksHealthNotTheFile',
+          window.__asked[window.__asked.length - 1], 'http://192.168.1.10:8787/health');
+
+        // Something else entirely on that port — the wrong address rather than
+        // the wrong network, and the one case a reachability test cannot tell
+        // from success.
+        window.__host = { hello: 'a web server, but not this one' };
+        t('somethingElseOnThatPort', (await syncTestAddress()).state, 'not-the-host');
+        window.__host = null;
+
+        // And what a dead host produces, which is the whole point: the address
+        // it could not reach, and what to check, instead of the browser's words.
+        const dead = await syncNow();
+        t('aDeadHostNamesTheAddress', /No answer from http:\\/\\/192\\.168\\.1\\.10:8787/.test(dead.error), true);
+        t('andItSaysWhatToCheck', /Is the host running/.test(dead.error), true);
+        t('andTheBrowserWordingIsNotShown', /Failed to fetch/.test(dead.error), false);
+        t('andTheRawWordingIsKeptAsideRatherThanThrownAway', dead.detail, 'Failed to fetch');
+
+        // An ordinary failure of the host's own is left as it is: it says
+        // something specific, and rewriting it would only make it vaguer.
+        t('aRealAnswerIsPassedThrough', syncReachMessage('http://x/y', new Error('The host answered 500.')), 'The host answered 500.');
+
+        window.fetch = realFetch;
+        localStorage.removeItem('sorted-sync-settings');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('the address is read before anything is sent to it',
+        diagnosis.detail.noAddressIsSaidPlainly.pass
+        && diagnosis.detail.junkIsNotAnAddress.pass
+        && diagnosis.detail.theWrongFileIsNamed.pass, diagnosis);
+      check('and the host is asked, so a dead machine, an empty folder and somebody else\'s server are told apart',
+        diagnosis.detail.aDeadHostIsUnreachable.pass
+        && diagnosis.detail.aHostWithAnEmptyFolder.pass
+        && diagnosis.detail.aHostThatAlreadyHasTheFile.pass
+        && diagnosis.detail.somethingElseOnThatPort.pass, diagnosis);
+      check('the probe asks /health, not the snapshot',
+        diagnosis.detail.theProbeAsksHealthNotTheFile.pass, diagnosis);
+      check('a host that cannot be reached names the address, not the browser',
+        diagnosis.detail.aDeadHostNamesTheAddress.pass
+        && diagnosis.detail.andItSaysWhatToCheck.pass
+        && diagnosis.detail.andTheBrowserWordingIsNotShown.pass
+        && diagnosis.detail.andTheRawWordingIsKeptAsideRatherThanThrownAway.pass, diagnosis);
+      check('an answer that does say something is left alone',
+        diagnosis.detail.aRealAnswerIsPassedThrough.pass, diagnosis);
+
     console.log('\n# notifications: the plan, the memory, and the native route');
 
       // ---------------------------------------------------------------

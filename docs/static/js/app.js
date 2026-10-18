@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.99.3';
+const APP_VERSION = '2.99.4';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1795,6 +1795,9 @@ function syncSettingsHtml() {
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
+    ${ready ? `
+    <button class="btn btn-ghost" onclick="syncTestFromSettings(this)"
+            style="width: 100%; margin-top: 8px;">Test the address</button>` : ''}
     <div class="setup-steps">
       <div class="setup-steps-head">Setup</div>
       <ol class="setup-steps-list">
@@ -1827,6 +1830,25 @@ async function syncFromSettings(btn) {
   }
   await renderPage();
   if (message) showToast(message, 6000);
+}
+
+// The Test button, and the reason it exists: the transport can only ever say
+// "Failed to fetch" for a dead host, a wrong network and a refused request
+// alike. Asking the host what it is turns that one sentence into the one thing
+// that is actually wrong.
+async function syncTestFromSettings(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
+  let result;
+  try {
+    result = await syncTestAddress();
+  } catch (err) {
+    result = { message: String((err && err.message) || err) };
+  }
+  // No renderPage() here, unlike the two buttons above: nothing about the page
+  // has changed, and rebuilding the card would take the button that is being
+  // pressed out from under the cursor.
+  if (btn) { btn.disabled = false; btn.textContent = 'Test the address'; }
+  if (result && result.message) showToast(result.message, 8000);
 }
 
 async function restoreSyncBackupFromSettings(btn) {

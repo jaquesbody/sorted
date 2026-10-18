@@ -97,8 +97,8 @@ const SYNC_SETUP_STEPS = {
     'Put this phone and the computer on the same Wi-Fi.',
     'On the computer, get the app folder if you have not already got it: <code>git clone https://github.com/jaquesbody/sorted.git</code> and <code>cd sorted</code>. <code>tools/sync-host.mjs</code> is inside it.',
     'Run <code>node tools/sync-host.mjs --dir ~/sorted-sync</code> and leave it running. <code>--dir</code> is the folder the one synced file lives in — pick one that survives a reboot, rather than the temp folder it falls back to.',
-    'It prints one line beginning <code>http://</code>. Copy that whole line.',
-    'Paste it above, then tap <strong>Sync now</strong>.'
+    'It prints one address for each network the computer is on. The Wi-Fi one starts <code>192.168.</code>; a Tailscale one, if that is installed, starts <code>100.</code> For this route, copy the <code>192.168.</code> line.',
+    'Paste it above, tap <strong>Test the address</strong> to hear what the host says, then tap <strong>Sync now</strong>.'
   ],
   tailscale: [
     'Install Tailscale on the computer that stays on, and sign in.',
@@ -106,7 +106,7 @@ const SYNC_SETUP_STEPS = {
     'On the computer, get the app folder if you have not already got it: <code>git clone https://github.com/jaquesbody/sorted.git</code> and <code>cd sorted</code>. <code>tools/sync-host.mjs</code> is inside it.',
     'Run <code>node tools/sync-host.mjs --dir ~/sorted-sync</code> and leave it running. <code>--dir</code> is the folder the one synced file lives in — pick one that survives a reboot, rather than the temp folder it falls back to.',
     'Open Tailscale on the computer and copy its IP — it starts <code>100.</code>',
-    'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above, then tap <strong>Sync now</strong>.'
+    'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above, tap <strong>Test the address</strong>, then tap <strong>Sync now</strong>.'
   ],
   syncthing: [
     'Install Syncthing on the computer and on this phone, and pair them.',
@@ -248,7 +248,7 @@ function syncStamp(value) {
 async function readSyncSnapshot(url) {
   const res = await syncFetch(url, { method: 'GET' });
   if (res.status === 404) return null;          // nothing there yet
-  if (!res.ok) throw new Error('Host said ' + res.status);
+  if (!res.ok) throw new Error('The host answered ' + res.status + '.');
   const text = await res.text();
   let parsed;
   try { parsed = JSON.parse(text); } catch (err) {
@@ -258,13 +258,19 @@ async function readSyncSnapshot(url) {
   return parsed;
 }
 
+// A write can only fail at the address, and the host answers exactly one path,
+// so the two cases are "wrong path" and "something else went wrong over there".
+// "Host said 404" named neither.
 async function writeSyncSnapshot(url, snapshot) {
   const res = await syncFetch(url, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(snapshot)
   });
-  if (!res.ok) throw new Error('Host said ' + res.status);
+  if (res.status === 404) {
+    throw new Error('Nothing at that address on the host. It should end with /sorted-snapshot.json.');
+  }
+  if (!res.ok) throw new Error('The host answered ' + res.status + ', so nothing was saved.');
   return true;
 }
 
@@ -278,17 +284,24 @@ async function writeSyncSnapshot(url, snapshot) {
 // two. The browser build has none of this and goes straight to fetch.
 async function syncFetch(url, options) {
   const cap = window.Capacitor;
+  const opts = options || {};
+  // A probe has to report, not hang. fetch() has no timeout of its own, and an
+  // address that silently drops packets — a machine that is off, a phone on the
+  // wrong network — leaves the browser sitting there for over a minute before it
+  // finally says "Failed to fetch". Only the probe passes a limit; syncing
+  // itself does not, so a slow but working sync is never cut short.
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 0;
   if (cap && cap.isNativePlatform && cap.isNativePlatform() && cap.CapacitorHttp) {
     const response = await cap.CapacitorHttp.request({
       url: url,
-      method: options.method || 'GET',
-      headers: options.headers || {},
-      data: options.body,
+      method: opts.method || 'GET',
+      headers: opts.headers || {},
+      data: opts.body,
       // Without this a PUT body arrives as form-encoded and the host reads
       // garbage rather than JSON.
       serializer: 'json',
-      connectTimeout: 4000,
-      readTimeout: 8000
+      connectTimeout: timeoutMs || 4000,
+      readTimeout: timeoutMs || 8000
     });
     return {
       ok: response.status >= 200 && response.status < 300,
@@ -297,7 +310,75 @@ async function syncFetch(url, options) {
         ? response.data : JSON.stringify(response.data))
     };
   }
-  return fetch(url, options);
+  if (timeoutMs && typeof AbortController === 'function') {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, Object.assign({}, opts, { signal: controller.signal }));
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return fetch(url, opts);
+}
+
+// ---------------------------------------------------------------- diagnosis
+
+// fetch() says "Failed to fetch" for every one of: nothing listening, the wrong
+// network, and a request the platform refused. Three different problems, one
+// sentence that names none of them — and the address is the common cause. So
+// name the address, and say what to look at.
+function syncHostBase(url) {
+  try { return new URL(url).origin; } catch (err) { return null; }
+}
+
+function syncReachMessage(url, err) {
+  const raw = String((err && err.message) || err);
+  const isTransport = /failed to fetch|networkerror|network error|load failed|timed? ?out|abort/i.test(raw);
+  if (!isTransport) return raw;
+  return 'No answer from ' + (syncHostBase(url) || url)
+    + '. Is the host running, and can this device reach it?';
+}
+
+// What "Test the address" asks: is there a Sorted host at the other end, and
+// what does it hold? The host answers /health with exactly that, and it is the
+// difference between "the machine is not running", "something else is on that
+// port" and "the host is fine, the address is not its file" — three outcomes
+// that reach the user today as the same sentence.
+async function syncTestAddress() {
+  const settings = syncSettings();
+  const transport = SYNC_TRANSPORTS[settings.transport];
+  if (!transport || !transport.available) {
+    return { state: 'unavailable', message: 'That sync option is not available yet.' };
+  }
+  const url = settings.url;
+  if (!url) return { state: 'empty', message: 'Put the address in first.' };
+  const base = syncHostBase(url);
+  if (!base) {
+    return { state: 'malformed', message: 'That is not a web address. Copy the whole line the host printed.' };
+  }
+  // The host answers two paths: the snapshot and /health. Two of the ways this
+  // is got wrong are visible without asking it anything, and they are the two
+  // cheapest to fix.
+  if (!/\/sorted-snapshot\.json$/.test(new URL(url).pathname)) {
+    return { state: 'wrong-path', message: 'The address has to end with /sorted-snapshot.json — that is the only file the host serves.' };
+  }
+
+  let res;
+  try {
+    res = await syncFetch(base + '/health', { method: 'GET', timeoutMs: 6000 });
+  } catch (err) {
+    return { state: 'unreachable', message: 'No answer from ' + base + '. Is the host running, and can this device reach it?' };
+  }
+  let body = null;
+  try { body = JSON.parse(await res.text()); } catch (err) { body = null; }
+  if (!res.ok || !body || body.ok !== true) {
+    return { state: 'not-the-host', message: 'Something answered at ' + base + ', but it is not the Sorted host.' };
+  }
+  if (body.snapshot) {
+    return { state: 'ready-with-file', message: 'The host is running, and it already holds a snapshot. Sync now compares the two.' };
+  }
+  return { state: 'ready-empty', message: 'The host is running, with nothing in its folder yet. Sync now puts your data there.' };
 }
 
 // ---------------------------------------------------------------- syncing
@@ -318,7 +399,14 @@ async function syncNow() {
   try {
     remote = await readSyncSnapshot(settings.url);
   } catch (err) {
-    return { ok: false, error: String((err && err.message) || err), where: 'host' };
+    return {
+      ok: false,
+      error: syncReachMessage(settings.url, err),
+      where: 'host',
+      // The words the transport actually used, kept for the gate rather than
+      // shown: it is the one thing that is not worth reading.
+      detail: String((err && err.message) || err)
+    };
   }
 
   const local = await buildSyncSnapshot();
