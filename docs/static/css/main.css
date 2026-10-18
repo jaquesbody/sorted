@@ -45,6 +45,11 @@
   --content-pad: 30px;
   --toolbar-chrome: 0px;
   --toolbar-top: calc(var(--toolbar-chrome) + var(--content-pad));
+  /* The height of a page's leading row, and of the controls that stand in one —
+     see .page-toolbar. It is the height of the tallest of them: in this layout
+     the action buttons and the month navigator's arrows both come out at 36px.
+     The phone rule narrows the buttons, and this narrows with them. */
+  --toolbar-h: 36px;
   --bg-surface: #1a1a1f;
   --bg-card: #222228;
   --text-primary: #f0f0f5;
@@ -1034,6 +1039,16 @@ body {
   align-items: center;
   gap: 10px;
   margin-bottom: 15px;
+  /* One height on every page, so the page below starts at the same y whichever
+     tab you are on. Left to themselves the rows disagree: in this layout the
+     action buttons and the month navigator's arrows are 36px while the report
+     range chips are 34.297, and on a phone the buttons drop to 34 and the arrows
+     to 32 — so each page's content started at its own row's height, which is the
+     jump between tabs. This reserves the tallest control a row can hold
+     (`--toolbar-h`), and `.filter-chip` is pinned to the same height below. It is
+     on the row itself rather than on `--fixed`, which stays a paint-and-sticky
+     modifier that does not touch the box. */
+  min-height: var(--toolbar-h);
 }
 
 /* The page's own top row, kept on screen while the page moves.
@@ -1904,8 +1919,15 @@ body {
   flex-wrap: wrap;
 }
 
+/* A chip is as tall as the controls it stands beside. The leading row reserves
+   `--toolbar-h`, but a chip left to the line-height it inherits came out at
+   34.297px — a hair taller than a phone's buttons and 1.7px shorter than the
+   browser's, which is the "smaller buttons" on the Reports tab. The 14px is the
+   chip's own 6px padding and 1px border, top and bottom. A label that wraps
+   still grows the chip, so nothing is clipped. */
 .filter-chip {
   padding: 6px 12px;
+  line-height: calc(var(--toolbar-h) - 14px);
   border-radius: 20px;
   font-size: var(--fs-base);
   cursor: pointer;
@@ -2923,6 +2945,9 @@ body.is-locked {
     --content-pad: 15px;
     --toolbar-chrome: calc(52px + env(safe-area-inset-top, 0px));
     --toolbar-top: calc(var(--toolbar-chrome) + var(--content-pad));
+    /* The toolbar buttons are 9px of padding around a line of text on a phone
+       rather than 10, so they are 34px here and the leading row is too. */
+    --toolbar-h: 34px;
   }
   
   .dashboard-grid {
