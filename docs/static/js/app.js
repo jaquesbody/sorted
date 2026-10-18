@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.99.0';
+const APP_VERSION = '2.99.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -923,7 +923,7 @@ async function renderDashboard(container) {
   const dueTotal = dueShown.reduce((sum, i) => sum + i.amount, 0);
   const overdueCount = dueShown.filter(i => isOverdue(i.dueDate)).length;
 
-  // "Total bills this month", the figure the Bills page shows beside its own
+  // "Monthly total", the figure the Bills page shows beside its own
   // total. Everything landing in the month on screen, settled or not, plus the
   // projections a month ahead carries because nothing is stored for it yet.
   // Without the projections a future month would read the bills of whichever
@@ -955,7 +955,7 @@ async function renderDashboard(container) {
   
   // Category breakdowns
   const spendByCategory = groupByCategory(spendMonth, 'amount');
-  // The same set the "Total bills this month" figure is built from, projections
+  // The same set the "Monthly total" figure is built from, projections
   // included. It used to count only rows dated in the month, so a future month
   // whose bills were still projections showed a total with no category beside
   // it — which is how the phantom figure was spotted in the first place. The
@@ -1007,7 +1007,7 @@ async function renderDashboard(container) {
           <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · <span style="color: ${overdueCount > 0 ? 'var(--danger)' : 'inherit'}">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span></span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
-        <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
+        <div class="stat-card-sub">Monthly total = ${currency(billsThisMonthTotal)}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
         <div class="stat-card-progress" style="position: relative;">
@@ -1948,22 +1948,21 @@ async function renderSpend(container) {
 
     </div>
     
-    <div class="stat-card" style="margin-bottom: 20px;">
+    <div class="stat-card stat-card--page-total" style="margin-bottom: 20px;">
       <div class="stat-card-header">
         <span class="stat-card-title">Monthly total</span>
       </div>
       <div class="stat-card-value">${currency(monthTotal)}</div>
       <!-- Under the amount, not beside the title. Both cards put their one line
-           of explanation here — "Year: …" and "Total bills this month = …" — and
-           having the two cards of the same app disagree about where that line
-           goes is what makes the top of the screen jump as you move between
-           tabs. Same shape, same place.
+           of explanation here — "Year: …" and "Monthly total = …" — and having
+           the two cards of the same app disagree about where that line goes is
+           what makes the top of the screen jump as you move between tabs. Same
+           shape, same place.
 
-           The Bills card's count and status are the exception, and they sit
-           beside the amount instead (see .stat-card-row): two lines cannot go
-           under the amount without making that card taller than this one, and
-           the amount's own row is tall enough to hold both without costing
-           anything. Same height, one aside different. -->
+           The Bills card puts its count beside the amount instead (see
+           .stat-card-row) and its status up on the header line. The two cards
+           still measure the same, because the headers are levelled as well (see
+           .stat-card--page-total). -->
       <div class="stat-card-sub">Year: ${currency(yearTotal)}</div>
     </div>
     
@@ -2232,18 +2231,22 @@ async function renderDue(container) {
       </span>
     </div>
     
-    <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
+    <div class="stat-card stat-card--page-total" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
+      <!-- The status is the first thing read, so it goes top-right beside the
+           card's own name; the count follows it, beside the amount. Both in the
+           header would cost a line and make this card taller than the Spent one
+           — they are the same card in the same place on their pages, and a
+           difference between them moves everything below it. See .stat-card-row
+           and .stat-card--page-total. -->
       <div class="stat-card-header">
         <span class="stat-card-title">Total due</span>
+        <span class="stat-card-sub">${overdueStatus(overdue, upcoming)}</span>
       </div>
       <div class="stat-card-row">
         <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
-        <span class="stat-card-sub stat-card-sub--stack">
-          <span>${outstanding.length} unpaid</span>
-          <span>${overdueStatus(overdue, upcoming)}</span>
-        </span>
+        <span class="stat-card-sub">${outstanding.length} unpaid</span>
       </div>
-      <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
+      <div class="stat-card-sub">Monthly total = ${currency(billsThisMonthTotal)}</div>
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
     </div>

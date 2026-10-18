@@ -317,6 +317,17 @@ body {
   margin-bottom: 15px;
 }
 
+/* The two cards that lead the Spent and Bills pages. They sit in the same place
+   on their pages, so they have to measure the same, and on their own they do
+   not: one header carries a 14px status line beside the card's name and the
+   other carries only the 13px name, and a sub's line box is 1.45px taller than
+   a title's. That is enough to move everything below a card when you change
+   tab, which is the jump that was reported. Reserving the line in both headers
+   costs one line of nothing and makes the two cards agree exactly. */
+.stat-card--page-total .stat-card-header {
+  min-height: calc(var(--fs-base) * var(--lh-base));
+}
+
 /* The uppercase micro-label — the same role as .section-title further down,
    and deliberately the same treatment. It was 14px/400/0.5px while its sibling
    was 13px/700/0.06em, so "TOTAL MONEY" and "GOALS" were one idea set two
@@ -335,12 +346,12 @@ body {
   margin-bottom: 5px;
 }
 
-/* The value and a two-line aside share one row — the Bills card's count and
-   status. A two-line block in the *header* made that card 24px taller than the
-   Spent card's, and the two sit in the same place on their pages, so moving
-   between them moved everything below. The value's row is 46px tall and the
-   pair is 43px, so the second line costs nothing: it fits in a row that was
-   already there. */
+/* The amount and a short aside share one row — the Bills card's count of what is
+   still unpaid. That count on the header line, beside the card's own name and its
+   status, would make the card a line taller than the Spent card's; the two sit in
+   the same place on their pages, so any difference between them moves everything
+   below when you change tab. The amount's row is 46px tall and the count is 20px,
+   so the aside costs nothing — it fits in a row that was already there. */
 .stat-card-row {
   display: flex;
   align-items: center;
@@ -358,19 +369,6 @@ body {
 .stat-card-sub {
   font-size: var(--fs-base);
   color: var(--text-secondary);
-}
-
-/* Two facts, one per line. Both Bills cards — this one and the Dashboard's —
-   used to run the pair together with a middot: "0 unpaid · Nothing due this
-   month" is 31 characters and has no room beside a card's own label on a 412px
-   phone, so it broke wherever it landed rather than where the copy breaks. The
-   stack puts the break on the boundary the sentence already has. */
-.stat-card-sub--stack {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  text-align: right;
-  gap: 2px;
 }
 
 /* Total money, and the four parts it is already spoken for. Full width above the

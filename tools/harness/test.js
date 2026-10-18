@@ -4823,7 +4823,7 @@ async function runSuite(driverBase) {
     // Ordinary spending still counts.
     t('ordinarySpendStillCounts', spent.textContent.indexOf('£50.00') >= 0, true);
 
-    // 2. Total bills this month, on both cards, and they agree.
+    // 2. Monthly total, on both cards, and they agree.
     await wipe();
     await loadPeople(); await loadAccounts();
     await addItem('due', { title: 'Rent', amount: 900, dueDate: '2027-03-01', category: 'Housing', frequency: 'monthly', recurring: true });
@@ -4841,16 +4841,16 @@ async function runSuite(driverBase) {
     // eaten-backslash guard has nothing to complain about.
     const billsLine = (card) => (card.textContent.split(String.fromCharCode(10))
       .map((l) => l.trim())
-      .find((l) => l.indexOf('Total bills this month') === 0) || '');
-    t('billsPageHasTheLine', billsLine(billsCard) === 'Total bills this month = £1,080.00', true);
+      .find((l) => l.indexOf('Monthly total') === 0) || '');
+    t('billsPageHasTheLine', billsLine(billsCard) === 'Monthly total = £1,080.00', true);
     // And it sits under the main total, before the overdue line.
-    t('lineIsUnderTheTotal', billsCard.textContent.indexOf('£1,020.00') < billsCard.textContent.indexOf('Total bills this month'), true);
+    t('lineIsUnderTheTotal', billsCard.textContent.indexOf('£1,020.00') < billsCard.textContent.indexOf('Monthly total'), true);
     dashViewedDate = new Date(2027, 2, 1);
     currentPage = 'dashboard';
     await renderPage();
     await new Promise(r => setTimeout(r, 1400));
     const dBills = [...document.querySelectorAll('.stat-card')].find((c) => /^Bills due/.test(c.textContent.trim()));
-    t('dashboardHasTheSameLine', billsLine(dBills) === 'Total bills this month = £1,080.00', true);
+    t('dashboardHasTheSameLine', billsLine(dBills) === 'Monthly total = £1,080.00', true);
 
     // 3. Whose defaults to whoever is signed in, on a new account and new
     //    income, and an existing row keeps its own answer.
@@ -4889,7 +4889,7 @@ async function runSuite(driverBase) {
     fixes.detail.spendPageExcludesLegacyBill.pass, fixes.detail);
   check('nor on the Dashboard', fixes.detail.dashboardExcludesLegacyBill.pass, fixes.detail);
   check('and ordinary spending still counts', fixes.detail.ordinarySpendStillCounts.pass, fixes.detail);
-  check('both cards show Total bills this month, and they agree',
+  check('both cards show Monthly total, and they agree',
     fixes.detail.billsPageHasTheLine.pass && fixes.detail.dashboardHasTheSameLine.pass, fixes.detail);
   check('the line sits under the total, before the overdue line',
     fixes.detail.lineIsUnderTheTotal.pass, fixes.detail);
