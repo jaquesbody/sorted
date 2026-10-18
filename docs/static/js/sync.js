@@ -95,15 +95,16 @@ const SYNC_TRANSPORTS = {
 const SYNC_SETUP_STEPS = {
   lan: [
     'Put this phone and the computer on the same Wi-Fi.',
-    'On the computer, open a terminal in the Sorted folder.',
-    'Run <code>node tools/sync-host.mjs</code> and leave it running.',
+    'On the computer, get the app folder if you have not already got it: <code>git clone https://github.com/jaquesbody/sorted.git</code> and <code>cd sorted</code>. <code>tools/sync-host.mjs</code> is inside it.',
+    'Run <code>node tools/sync-host.mjs --dir ~/sorted-sync</code> and leave it running. <code>--dir</code> is the folder the one synced file lives in — pick one that survives a reboot, rather than the temp folder it falls back to.',
     'It prints one line beginning <code>http://</code>. Copy that whole line.',
     'Paste it above, then tap <strong>Sync now</strong>.'
   ],
   tailscale: [
     'Install Tailscale on the computer that stays on, and sign in.',
     'Install Tailscale on this phone, and sign in to the same account.',
-    'On the computer, run <code>node tools/sync-host.mjs</code> and leave it running.',
+    'On the computer, get the app folder if you have not already got it: <code>git clone https://github.com/jaquesbody/sorted.git</code> and <code>cd sorted</code>. <code>tools/sync-host.mjs</code> is inside it.',
+    'Run <code>node tools/sync-host.mjs --dir ~/sorted-sync</code> and leave it running. <code>--dir</code> is the folder the one synced file lives in — pick one that survives a reboot, rather than the temp folder it falls back to.',
     'Open Tailscale on the computer and copy its IP — it starts <code>100.</code>',
     'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above, then tap <strong>Sync now</strong>.'
   ],

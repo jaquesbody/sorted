@@ -826,6 +826,12 @@ body {
 
 .setup-steps-list code {
   font-size: var(--fs-md);
+  /* A step can carry a command too long to fit the card — the clone address and
+     the address to paste both are — and to the line breaker `code` is one
+     unbreakable run of characters, so those ran off the card and were cut off
+     mid-address instead of wrapping. This breaks one only when it has to, and
+     leaves every shorter command on its own line. */
+  overflow-wrap: break-word;
 }
 
 .setting-row--add {
