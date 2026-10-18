@@ -9,6 +9,13 @@
 <title>Sorted</title>
 <link rel="icon" type="image/png" href="static/icons/favicon-32.png">
 <link rel="apple-touch-icon" href="static/icons/apple-touch-icon.png">
+<!-- Name, icons, start_url and display are the whole of Chrome's install
+     criteria; there is deliberately no theme_color, because the meta above
+     already carries it and moves with the theme, where a manifest copy would
+     be a second source frozen at the dark default. `purpose` is spelled out
+     as "any" so nobody adds "maskable" later: these icons run to their own
+     edges, and a mask would crop the S. -->
+<link rel="manifest" href="manifest.json">
 <!-- The regular weight is the one every screen uses; swapping it in after
      first paint is the flash font-display: swap implies, so it is fetched
      while the stylesheet is still parsing. `crossorigin` is required on a font
@@ -47,7 +54,7 @@ try {
 
 <nav class="sidebar" id="sidebar">
   <div class="sidebar-header">
-    <h1 class="logo">Sorted</h1>
+    <h1 class="logo"><img src="static/icons/wordmark-sorted.png" alt="Sorted" width="106" height="24"></h1>
     <!-- Desktop counterpart of the top bar's person chip: the top bar is
          hidden above 768px, so the rail needs its own. -->
     <div class="sidebar-person" id="sidebar-person"></div>

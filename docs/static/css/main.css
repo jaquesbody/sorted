@@ -193,10 +193,13 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-.logo {
-  font-size: var(--fs-xl);
-  font-weight: 700;
-  color: var(--accent);
+/* The rail's wordmark, and the same image as the top bar's: §4.4.1 wants the
+   mark with its split effect and trailing colon, which a text stand-in cannot
+   carry — the h1 remains for the document outline, the image is its content. */
+.logo img {
+  display: block;
+  height: 24px;
+  width: auto;
 }
 
 /* Top bar — keeps the brand visible when the sidebar collapses (narrow/phone) */
