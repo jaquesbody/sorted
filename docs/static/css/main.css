@@ -335,14 +335,34 @@ body {
   margin-bottom: 5px;
 }
 
+/* The value and a two-line aside share one row — the Bills card's count and
+   status. A two-line block in the *header* made that card 24px taller than the
+   Spent card's, and the two sit in the same place on their pages, so moving
+   between them moved everything below. The value's row is 46px tall and the
+   pair is 43px, so the second line costs nothing: it fits in a row that was
+   already there. */
+.stat-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+
+/* The margin belongs to the row now. Kept on the value inside it, it would
+   offset the value against the aside beside it, by half of itself. */
+.stat-card-row .stat-card-value {
+  margin-bottom: 0;
+}
+
 .stat-card-sub {
   font-size: var(--fs-base);
   color: var(--text-secondary);
 }
 
-/* Two facts, one per line. Both cards that pair a count with a status used to
-   run them together with a middot — "0 unpaid · Nothing due this month" — which
-   is 31 characters and has no room beside the card's own label on a 412px
+/* Two facts, one per line. Both Bills cards — this one and the Dashboard's —
+   used to run the pair together with a middot: "0 unpaid · Nothing due this
+   month" is 31 characters and has no room beside a card's own label on a 412px
    phone, so it broke wherever it landed rather than where the copy breaks. The
    stack puts the break on the boundary the sentence already has. */
 .stat-card-sub--stack {

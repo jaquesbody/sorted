@@ -21,14 +21,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SEED = `
   const d = new Date();
   const y = d.getFullYear(), m = d.getMonth();
-  const gareth = await addItem('people', { name: 'Gareth', colour: PERSON_COLOURS[0] });
-  const kim = await addItem('people', { name: 'Kim', colour: PERSON_COLOURS[3] });
+  // Every seeded row brings its own id. db.js mints a random UUID otherwise,
+  // and a list the app does not sort comes out in key order — so the goals and
+  // the accounts landed in a different order on every run. That put a
+  // different picture in the README each regeneration, and worse, it meant a
+  // screenshot diff could not tell a real change from a shuffle: regenerating
+  // to check a one-card edit reported four changed images. Zero-padded strings
+  // sort in the order they are written.
+  //
+  // Strings, not numbers, deliberately. db.js normaliseId turns a numeric id
+  // into a Number, and the current person's id takes a trip through
+  // localStorage (setCurrentPersonId) and comes back a string — so a numeric id
+  // never matches the id in peopleCache and the person chip reads "Anyone".
+  // That caught this change the first time: every shot came out with a
+  // different top-right corner.
+  let nextId = 0;
+  const newSeedId = () => 'seed-' + String(++nextId).padStart(3, '0');
+  const gareth = await addItem('people', { id: newSeedId(), name: 'Gareth', colour: PERSON_COLOURS[0] });
+  const kim = await addItem('people', { id: newSeedId(), name: 'Kim', colour: PERSON_COLOURS[3] });
   // Opening figures chosen so the household stays comfortably solvent after
   // the bills below have been paid and the goals filled — a README showing a
   // negative total tells the wrong story about the app.
-  const current = await addItem('accounts', { name: 'Current account', type: 'bank', opening: 5350 });
-  const cash = await addItem('accounts', { name: 'Cash', type: 'cash', opening: 120 });
-  await addItem('income', { title: 'Salary', amount: 2140, category: 'salary',
+  const current = await addItem('accounts', { id: newSeedId(), name: 'Current account', type: 'bank', opening: 5350 });
+  const cash = await addItem('accounts', { id: newSeedId(), name: 'Cash', type: 'cash', opening: 120 });
+  await addItem('income', { id: newSeedId(), title: 'Salary', amount: 2140, category: 'salary',
     frequency: 'monthly', date: localISO(new Date(y, m, 1)), accountId: current, personId: gareth });
 
   // A month with bills already paid, and two still to come.
@@ -39,7 +55,7 @@ const SEED = `
     ['Broadband', 32, 22, false, gareth]
   ];
   for (const [title, amount, day, paid, person] of bills) {
-    const made = await addItem('due', { title, amount,
+    const made = await addItem('due', { id: newSeedId(), title, amount,
       dueDate: localISO(new Date(y, m, day)), frequency: 'monthly',
       category: title === 'Rent' ? 'General' : 'Utilities', accountId: current,
       paid: false, personId: person });
@@ -56,18 +72,18 @@ const SEED = `
     ['Cinema', 22.00, 'Entertainment', current, kim, true, 12]
   ];
   for (const [title, amount, category, accountId, person, confirmed, day] of spends) {
-    await addItem('spend', { title, amount, category, accountId, personId: person,
+    await addItem('spend', { id: newSeedId(), title, amount, category, accountId, personId: person,
       date: localISO(new Date(y, m, day)), confirmed });
   }
 
-  await addItem('savings', { title: 'Japan 2027', category: 'Holiday',
+  await addItem('savings', { id: newSeedId(), title: 'Japan 2027', category: 'Holiday',
     target: 4200, current: 850, accountId: current });
-  await addItem('savings', { title: 'Living room', category: 'Home',
+  await addItem('savings', { id: newSeedId(), title: 'Living room', category: 'Home',
     target: 1400, current: 1400, accountId: current });
-  await addItem('savings', { title: 'Christmas', category: 'Christmas',
+  await addItem('savings', { id: newSeedId(), title: 'Christmas', category: 'Christmas',
     target: 600, current: 240, accountId: cash });
 
-  await addItem('transfers', { amount: 250, fromId: current, toId: cash,
+  await addItem('transfers', { id: newSeedId(), amount: 250, fromId: current, toId: cash,
     date: localISO(new Date(y, m, 2)) });
   await loadAccounts();
   setCurrentPersonId(gareth);

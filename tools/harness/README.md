@@ -15,7 +15,14 @@ rather than the current directory, so moving it again cannot quietly break the s
 - `driver.js` — starts and stops chromedriver. Everything else goes through it.
 - `harness.js` — session helpers, for scripts that need a driver outside the suite.
 - `leak-check.js` — proves all three teardown paths leave nothing running.
-- `screenshots.js` — regenerates the six README shots into `screenshots/`.
+- `screenshots.js` — regenerates the six README shots into `screenshots/`. Its seed
+  gives every row its own id, so the output is byte-identical run to run; without
+  that, the lists the app does not sort (goals, accounts) came out in a different
+  order every time, and a screenshot diff could not tell a real change from a
+  shuffle. Two things you should expect in a diff: `settings.png` contains the
+  app's version string, so it changes on every release; and every shot contains
+  the current month and the days counting down to each bill, so they drift as the
+  calendar moves.
 - `test-pdf.js`, `test-people.js` — the PDF export, and the people and split suites.
 - `ocr-bench.js`, `receipts.js` — the receipt-OCR benchmark and its synthetic receipts.
 - `README.md` — this file: the traps, and all of them were paid for.

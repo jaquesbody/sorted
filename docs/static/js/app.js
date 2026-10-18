@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.98.0';
+const APP_VERSION = '2.99.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1953,10 +1953,17 @@ async function renderSpend(container) {
         <span class="stat-card-title">Monthly total</span>
       </div>
       <div class="stat-card-value">${currency(monthTotal)}</div>
-      <!-- Under the amount, not beside the title. Bills puts "Nothing overdue"
-           on this line, and having the two cards of the same app disagree about
-           where their second line goes is what makes the top of the screen jump
-           as you move between tabs. Same shape, same place. -->
+      <!-- Under the amount, not beside the title. Both cards put their one line
+           of explanation here — "Year: …" and "Total bills this month = …" — and
+           having the two cards of the same app disagree about where that line
+           goes is what makes the top of the screen jump as you move between
+           tabs. Same shape, same place.
+
+           The Bills card's count and status are the exception, and they sit
+           beside the amount instead (see .stat-card-row): two lines cannot go
+           under the amount without making that card taller than this one, and
+           the amount's own row is tall enough to hold both without costing
+           anything. Same height, one aside different. -->
       <div class="stat-card-sub">Year: ${currency(yearTotal)}</div>
     </div>
     
@@ -2228,12 +2235,14 @@ async function renderDue(container) {
     <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
       <div class="stat-card-header">
         <span class="stat-card-title">Total due</span>
+      </div>
+      <div class="stat-card-row">
+        <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
         <span class="stat-card-sub stat-card-sub--stack">
           <span>${outstanding.length} unpaid</span>
           <span>${overdueStatus(overdue, upcoming)}</span>
         </span>
       </div>
-      <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
       <div class="stat-card-sub">Total bills this month = ${currency(billsThisMonthTotal)}</div>
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
