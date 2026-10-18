@@ -88,6 +88,12 @@ Then open `http://localhost:8000` in your browser. Same app, minus the native ex
 
 Served over HTTPS, Chrome will also offer to install it — there's a web manifest, so it gets its own window and its own icon instead of a bookmark. Installing is optional and there's still no service worker: nothing is cached, and the app behaves exactly the same either way.
 
+### Tests
+
+    npm test
+
+673 functional checks, and none of them are unit tests: it drives the real UI in headless Chromium, adds accounts and bills and goals, and asserts on what appears. It needs a static server on `docs` (see above, on port 8141) and `chromedriver` on your PATH, and it exits non-zero if any check fails. The suite lives in `tools/harness/` — including the README of traps it has caught, which is the more useful half.
+
 ### Android (APK)
 
 Grab [`sorted-v2-2.97.0-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.97.0/sorted-v2-2.97.0-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.

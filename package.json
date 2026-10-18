@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "sync:android": "rm -rf android/app/src/main/assets/public && npx cap sync android"
+    "sync:android": "rm -rf android/app/src/main/assets/public && npx cap sync android",
+    "test": "node tools/harness/test.js"
   },
   "license": "MIT",
   "devDependencies": {
