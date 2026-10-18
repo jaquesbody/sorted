@@ -4393,7 +4393,7 @@ async function runSuite(driverBase) {
   check('each one is a single line', narrow.oneLineEach === true, narrow);
   check('and nothing spills out of the card', narrow.inCard === true, narrow);
   check('no settings row carries a hint underneath it', narrow.hints === 0, narrow);
-  check('the steps are headed "Setup", not "SETUP"', /Setup/.test(narrow.stepsHead) && !/SETUP/.test(narrow.stepsHead), narrow);
+  check('the steps are folded under a heading in plain words, not a shouted one', /How to set this up/.test(narrow.stepsHead) && !/SETUP/.test(narrow.stepsHead), narrow);
 
   console.log('\n# 360px: the balance card heading fits a five-figure total');
   const narrowReports = await run(`
@@ -5787,11 +5787,11 @@ async function runSuite(driverBase) {
       check('a file that is not a snapshot is a failure',
         settings.detail.aFileThatIsNotASnapshotIsAFailure.pass, settings);
 
-      // 6. "Test the address", and the message it exists to replace. Every way
-      //    of getting the address wrong reaches the user as the same sentence —
-      //    "Failed to fetch" — which is the browser's wording and names none of
-      //    them. Two are visible without asking the host anything; the rest are
-      //    what the host's own /health is for.
+      // 6. The failure that says which failure it was. Every way of getting the
+      //    address wrong reaches the user as the same sentence — "Failed to
+      //    fetch", the browser's wording — and it names none of them. Two are
+      //    visible without asking the host anything; the rest are what its own
+      //    /health is for, and a failed sync asks it rather than a button.
       const diagnosis = await run(`
         const out = {};
         const t = (label, got, want) => { out[label] = { got: got, want: want, pass: got === want }; };
@@ -5864,6 +5864,99 @@ async function runSuite(driverBase) {
         && diagnosis.detail.andTheRawWordingIsKeptAsideRatherThanThrownAway.pass, diagnosis);
       check('an answer that does say something is left alone',
         diagnosis.detail.aRealAnswerIsPassedThrough.pass, diagnosis);
+
+      // 7. What a failed sync says, and the card it says it on. The diagnosis
+      //    moved into the failure: a button that answers a question only a
+      //    failure asks made the card longer for everybody, and the first thing
+      //    a new user does is paste an address and press the one button there is.
+      const failure = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: got, want: want, pass: got === want }; };
+        const realFetch = window.fetch;
+
+        // A host that answers /health but will not serve the file: the address is
+        // wrong, and the file's own 404 cannot say so.
+        window.__host = { ok: true, snapshot: true, dir: '/home/x/sorted-sync' };
+        window.fetch = async (url) => {
+          if (/\\/health$/.test(String(url))) {
+            return { ok: true, status: 200, text: async () => JSON.stringify(window.__host) };
+          }
+          throw new TypeError('Failed to fetch');
+        };
+        setSyncSettings({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        const hostUp = await syncNow();
+        t('aFailureAsksTheHost', hostUp.ok, false);
+        t('andReportsThatTheHostIsRunning', /The host is running at http:\\/\\/192\\.168\\.1\\.10:8787/.test(hostUp.error), true);
+        t('andStillKeepsTheRawWording', hostUp.detail, 'Failed to fetch');
+
+        // Nothing answering at all: the one message the four faults used to share
+        // still names the address, which is the part that makes it fixable.
+        window.fetch = async () => { throw new TypeError('Failed to fetch'); };
+        const dead = await syncNow();
+        t('aDeadHostSaysSo', /No answer from http:\\/\\/192\\.168\\.1\\.10:8787/.test(dead.error), true);
+        t('andNeverShowsTheBrowserWording', /Failed to fetch/.test(dead.error), false);
+        window.fetch = realFetch;
+
+        // And the card, at the only size it is read on: one field, one button,
+        // and the steps folded away once that button can work.
+        localStorage.removeItem('sorted-sync-backup');
+        const draw = async (url) => {
+          setSyncSettings({ transport: 'lan', url: url });
+          currentPage = 'settings'; await renderPage();
+          await new Promise((r) => setTimeout(r, 400));
+          const c = [...document.querySelectorAll('.report-card')]
+            .find((x) => /set this up/i.test(x.textContent) && /Address/.test(x.textContent));
+          return c;
+        };
+        const cardOf = (c) => ({
+          details: c.querySelector('details.setup-steps'),
+          buttons: [...c.querySelectorAll('button')].map((b) => b.textContent.trim()),
+          syncDisabled: c.querySelector('.btn-primary').disabled
+        });
+
+        let shape = cardOf(await draw(''));
+        t('withNoAddressTheStepsAreOpen', shape.details.open, true);
+        t('andThereIsOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
+        t('andItIsOffUntilThereIsAnAddress', shape.syncDisabled, true);
+
+        shape = cardOf(await draw('http://192.168.1.10:8787/sorted-snapshot.json'));
+        t('anAddressFoldsThemAway', shape.details.open, false);
+        t('andStillOnlyOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
+        t('andTheStepsSurviveToBeOpened', /node tools\\/sync-host/.test(shape.details.textContent), true);
+
+        // The field re-renders on change. Without it the first thing a new user
+        // does — paste the address the host printed — leaves them looking at a
+        // Sync now that will not press, with nothing saying why.
+        await draw('');
+        const input = document.getElementById('sync-url');
+        input.value = 'http://192.168.1.10:8787/sorted-snapshot.json';
+        input.dispatchEvent(new Event('change'));
+        await new Promise((r) => setTimeout(r, 400));
+        const after = cardOf([...document.querySelectorAll('.report-card')]
+          .find((x) => /set this up/i.test(x.textContent) && /Address/.test(x.textContent)));
+        t('pastingAnAddressTurnsTheButtonOn', after.syncDisabled, false);
+        t('andTheAddressIsKept', syncSettings().url, 'http://192.168.1.10:8787/sorted-snapshot.json');
+
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('a failed sync asks the host, rather than reporting the browser\'s wording',
+        failure.detail.aFailureAsksTheHost.pass
+        && failure.detail.andReportsThatTheHostIsRunning.pass
+        && failure.detail.aDeadHostSaysSo.pass
+        && failure.detail.andNeverShowsTheBrowserWording.pass
+        && failure.detail.andStillKeepsTheRawWording.pass, failure);
+      check('the Sync card is one field and one button, with the steps folded away once they have been followed',
+        failure.detail.withNoAddressTheStepsAreOpen.pass
+        && failure.detail.andThereIsOneButton.pass
+        && failure.detail.andItIsOffUntilThereIsAnAddress.pass
+        && failure.detail.anAddressFoldsThemAway.pass
+        && failure.detail.andStillOnlyOneButton.pass
+        && failure.detail.andTheStepsSurviveToBeOpened.pass, failure);
+      check('and pasting the address turns the button on — it used not to',
+        failure.detail.pastingAnAddressTurnsTheButtonOn.pass
+        && failure.detail.andTheAddressIsKept.pass, failure);
 
     console.log('\n# notifications: the plan, the memory, and the native route');
 

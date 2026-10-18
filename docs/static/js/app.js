@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.99.4';
+const APP_VERSION = '2.99.5';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1768,6 +1768,17 @@ function syncSettingsHtml() {
   // something the two controls already said. What was asked for was the simplest
   // version that works: pick where, paste the address the host printed, press
   // Sync now.
+  //
+  // The steps are the exception, and they are folded away rather than deleted:
+  // they are how the address is found, so a card with no address needs them
+  // open and a card that has one does not. An address in the box means that
+  // question was answered once already, and answering it again on every visit is
+  // what made this card read as homework.
+  //
+  // The address field re-renders the card on change, for a smaller version of
+  // the same thing: the button's enabled state is worked out when the card is
+  // drawn, so without it the first thing a new user does — paste the address the
+  // host printed — leaves them looking at a Sync now that will not press.
   return `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -1789,21 +1800,18 @@ function syncSettingsHtml() {
                value="${escapeHTML(s.url)}"
                style="text-align: left;"
                ${active && active.available ? '' : 'disabled'}
-               onchange="setSyncSettings({url: this.value.trim()})">
+               onchange="setSyncSettings({url: this.value.trim()}); renderPage();">
       </div>
     </div>
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
-    ${ready ? `
-    <button class="btn btn-ghost" onclick="syncTestFromSettings(this)"
-            style="width: 100%; margin-top: 8px;">Test the address</button>` : ''}
-    <div class="setup-steps">
-      <div class="setup-steps-head">Setup</div>
+    <details class="setup-steps"${s.url ? '' : ' open'}>
+      <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[s.transport] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
-    </div>
+    </details>
     ${hasBackup ? `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -1829,26 +1837,10 @@ async function syncFromSettings(btn) {
     message = String((err && err.message) || err);
   }
   await renderPage();
-  if (message) showToast(message, 6000);
-}
-
-// The Test button, and the reason it exists: the transport can only ever say
-// "Failed to fetch" for a dead host, a wrong network and a refused request
-// alike. Asking the host what it is turns that one sentence into the one thing
-// that is actually wrong.
-async function syncTestFromSettings(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Testing…'; }
-  let result;
-  try {
-    result = await syncTestAddress();
-  } catch (err) {
-    result = { message: String((err && err.message) || err) };
-  }
-  // No renderPage() here, unlike the two buttons above: nothing about the page
-  // has changed, and rebuilding the card would take the button that is being
-  // pressed out from under the cursor.
-  if (btn) { btn.disabled = false; btn.textContent = 'Test the address'; }
-  if (result && result.message) showToast(result.message, 8000);
+  // Longer than the default, and longer than the other cards': a sync that
+  // cannot reach the host now says which of the four things went wrong and names
+  // the address it tried, which is a sentence rather than a word.
+  if (message) showToast(message, 8000);
 }
 
 async function restoreSyncBackupFromSettings(btn) {

@@ -802,10 +802,35 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* The steps are a <details>, folded away unless the card has no address yet:
+   they are how the address is found, so a card that needs one shows them and a
+   card that has one keeps the question and its answer apart. The marker is
+   replaced rather than styled — the default triangle is drawn outside the
+   summary's own box, which is why it cannot be moved — and `list-style: none`
+   plus the vendor rule is what hides it on every WebView this app runs in. */
 .setup-steps-head {
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text-secondary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.setup-steps-head::-webkit-details-marker {
+  display: none;
+}
+
+.setup-steps-head::before {
+  content: '▸ ';
+}
+
+.setup-steps[open] .setup-steps-head::before {
+  content: '▾ ';
+}
+
+/* The gap belongs under the heading when the list is showing, and not when it
+   is a folded row on its own. */
+.setup-steps[open] .setup-steps-head {
   margin-bottom: 8px;
 }
 

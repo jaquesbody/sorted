@@ -94,19 +94,16 @@ const SYNC_TRANSPORTS = {
 // afternoon.
 const SYNC_SETUP_STEPS = {
   lan: [
-    'Put this phone and the computer on the same Wi-Fi.',
-    'On the computer, get the app folder if you have not already got it: <code>git clone https://github.com/jaquesbody/sorted.git</code> and <code>cd sorted</code>. <code>tools/sync-host.mjs</code> is inside it.',
-    'Run <code>node tools/sync-host.mjs --dir ~/sorted-sync</code> and leave it running. <code>--dir</code> is the folder the one synced file lives in — pick one that survives a reboot, rather than the temp folder it falls back to.',
-    'It prints one address for each network the computer is on. The Wi-Fi one starts <code>192.168.</code>; a Tailscale one, if that is installed, starts <code>100.</code> For this route, copy the <code>192.168.</code> line.',
-    'Paste it above, tap <strong>Test the address</strong> to hear what the host says, then tap <strong>Sync now</strong>.'
+    'On the computer that stays on: you need <strong>Node</strong> installed, and the Sorted app folder — <code>git clone https://github.com/jaquesbody/sorted.git</code>.',
+    'In that folder, run <code>node tools/sync-host.mjs</code> and leave it running. This route needs that computer switched on and on the same Wi-Fi as this phone.',
+    'It prints an address for each network. Copy the one starting <code>192.168.</code> — the Wi-Fi one.',
+    'Paste it above and tap <strong>Sync now</strong>. If it cannot reach the host, the message says which part failed.'
   ],
   tailscale: [
-    'Install Tailscale on the computer that stays on, and sign in.',
-    'Install Tailscale on this phone, and sign in to the same account.',
-    'On the computer, get the app folder if you have not already got it: <code>git clone https://github.com/jaquesbody/sorted.git</code> and <code>cd sorted</code>. <code>tools/sync-host.mjs</code> is inside it.',
-    'Run <code>node tools/sync-host.mjs --dir ~/sorted-sync</code> and leave it running. <code>--dir</code> is the folder the one synced file lives in — pick one that survives a reboot, rather than the temp folder it falls back to.',
+    'Install Tailscale on the computer that stays on, and on this phone, and sign in to both.',
+    'On the computer, run <code>node tools/sync-host.mjs</code> in the Sorted app folder and leave it running.',
     'Open Tailscale on the computer and copy its IP — it starts <code>100.</code>',
-    'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above, tap <strong>Test the address</strong>, then tap <strong>Sync now</strong>.'
+    'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above and tap <strong>Sync now</strong>.'
   ],
   syncthing: [
     'Install Syncthing on the computer and on this phone, and pair them.',
@@ -340,11 +337,14 @@ function syncReachMessage(url, err) {
     + '. Is the host running, and can this device reach it?';
 }
 
-// What "Test the address" asks: is there a Sorted host at the other end, and
-// what does it hold? The host answers /health with exactly that, and it is the
+// What a failed sync asks: is there a Sorted host at the other end, and what
+// does it hold? The host answers /health with exactly that, and it is the
 // difference between "the machine is not running", "something else is on that
 // port" and "the host is fine, the address is not its file" — three outcomes
-// that reach the user today as the same sentence.
+// that reach the user as one sentence if nobody asks.
+//
+// There is no button for this any more. Adding one made the card longer for
+// everybody to answer a question only a failure asks, so the failure asks it.
 async function syncTestAddress() {
   const settings = syncSettings();
   const transport = SYNC_TRANSPORTS[settings.transport];
@@ -399,14 +399,22 @@ async function syncNow() {
   try {
     remote = await readSyncSnapshot(settings.url);
   } catch (err) {
-    return {
-      ok: false,
-      error: syncReachMessage(settings.url, err),
-      where: 'host',
-      // The words the transport actually used, kept for the gate rather than
-      // shown: it is the one thing that is not worth reading.
-      detail: String((err && err.message) || err)
-    };
+    // The transport can only say "Failed to fetch" — the browser's words, the
+    // same for a dead machine, a wrong network and a refused request. So before
+    // reporting anything, ask the host itself, which knows which of those it is.
+    // A failure is rare and the answer is what makes it fixable, so the extra
+    // round trip is worth it; the probe gives up after six seconds either way.
+    const detail = String((err && err.message) || err);
+    let message = syncReachMessage(settings.url, err);
+    if (message !== detail) {
+      const found = await syncTestAddress();
+      message = found.state === 'ready-with-file' || found.state === 'ready-empty'
+        // It answered, so the host is up and the file is the problem, which is
+        // not a state any of the four messages describes.
+        ? 'The host is running at ' + (syncHostBase(settings.url) || settings.url) + ', but it did not serve that file. Try Sync now again.'
+        : found.message;
+    }
+    return { ok: false, error: message, where: 'host', detail: detail };
   }
 
   const local = await buildSyncSnapshot();
