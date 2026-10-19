@@ -5920,12 +5920,12 @@ async function runSuite(driverBase) {
         });
 
         let shape = cardOf(await draw(''));
-        t('withNoAddressTheStepsAreOpen', shape.details.open, true);
+        t('theStepsStartFolded', shape.details.open, false);
         t('andThereIsOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
         t('andItIsOffUntilThereIsAnAddress', shape.syncDisabled, true);
 
         shape = cardOf(await draw('http://192.168.1.10:8787/sorted-snapshot.json'));
-        t('anAddressFoldsThemAway', shape.details.open, false);
+        t('andStayFoldedOnceTheQuestionIsAnswered', shape.details.open, false);
         t('andStillOnlyOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
         t('andTheStepsSurviveToBeOpened', /node sorted\\/tools\\/sync-host\\.mjs/.test(shape.details.textContent), true);
 
@@ -5952,11 +5952,11 @@ async function runSuite(driverBase) {
         && failure.detail.aDeadHostSaysSo.pass
         && failure.detail.andNeverShowsTheBrowserWording.pass
         && failure.detail.andStillKeepsTheRawWording.pass, failure);
-      check('the Sync card is one field and one button, with the steps folded away once they have been followed',
-        failure.detail.withNoAddressTheStepsAreOpen.pass
+      check('the Sync card is one field and one button, with the steps folded away on every route',
+        failure.detail.theStepsStartFolded.pass
         && failure.detail.andThereIsOneButton.pass
         && failure.detail.andItIsOffUntilThereIsAnAddress.pass
-        && failure.detail.anAddressFoldsThemAway.pass
+        && failure.detail.andStayFoldedOnceTheQuestionIsAnswered.pass
         && failure.detail.andStillOnlyOneButton.pass
         && failure.detail.andTheStepsSurviveToBeOpened.pass, failure);
       check('and pasting the address turns the button on — it used not to',
@@ -6021,7 +6021,7 @@ async function runSuite(driverBase) {
         t('aFolderRouteDrawsNoAddressBox', document.getElementById('sync-url') === null, true);
         t('andSaysWhatToDoInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
         t('andCannotSyncYet', c.querySelector('.btn-primary').disabled, true);
-        t('andShowsTheStepsThatAnswerIt', c.querySelector('details.setup-steps').open, true);
+        t('andKeepsTheStepsThatAnswerItFolded', c.querySelector('details.setup-steps').open, false);
 
         // (c) No folder, no sync — in words, rather than a request to nowhere.
         setSyncSettings({ transport: 'cloud' });
@@ -6094,7 +6094,7 @@ async function runSuite(driverBase) {
         && folderRoute.detail.aFolderRouteDrawsNoAddressBox.pass
         && folderRoute.detail.andSaysWhatToDoInstead.pass
         && folderRoute.detail.andCannotSyncYet.pass
-        && folderRoute.detail.andShowsTheStepsThatAnswerIt.pass
+        && folderRoute.detail.andKeepsTheStepsThatAnswerItFolded.pass
         && folderRoute.detail.syncRefusesWithoutAFolder.pass, folderRoute);
       check('choosing a folder is the whole setup, and the steps fold away once it is done',
         folderRoute.detail.theChosenFolderIsKept.pass
@@ -6198,13 +6198,31 @@ async function runSuite(driverBase) {
         t('andTheSecondStartsTheHost', copies[1].querySelector('code').textContent.trim(), 'node sorted/tools/sync-host.mjs');
         t('noCommandIsLeftAsBareCode', [...details.querySelectorAll('code')].every((el) => !!el.closest('.setup-copy')), true);
         t('andTheStepsSayWhereNodeComesFrom', /nodejs\\.org/.test(details.textContent), true);
-        t('andGiveTheWindowsAnswerForGit', /git is not recognised|Git from git-scm\\.com/.test(details.textContent), true);
-        // The other thing that goes wrong, in the place it goes wrong: Node not
-        // installed, or too old for the module prefix the host uses.
-        t('andTheAnswerForNodeBeingMissingOrOld', /Cannot find module/.test(details.textContent), true);
+        t('andGiveTheWindowsAnswerForGit', /git is not recognised/.test(details.textContent), true);
+
+        // Both downloads are links to the page they are installed from, on the
+        // user's ask. nodejs.org was set in bold, which names the site without
+        // going there, and "install Git from git-scm.com" read the same way.
+        const linkTo = (text, href) => [...details.querySelectorAll('a')]
+          .some((a) => a.textContent.trim() === text && a.getAttribute('href') === href);
+        t('andNodeIsALinkToItsDownloadPage', linkTo('nodejs.org', 'https://nodejs.org/en/download'), true);
+        t('andSoIsGit', linkTo('git-scm.com', 'https://git-scm.com/install/'), true);
+
+        // One line under each command and nothing more. Two explanations were
+        // taken out at the user's ask, as wordy: why the terminal has to be new,
+        // and what to do when Node is missing or too old.
+        t('oneLineUnderEachCommand', [...details.querySelectorAll('.setup-aside')]
+          .map((a) => a.textContent.trim()),
+          ['If it says git is not recognised, install Git from git-scm.com first, then run it again.',
+            'Then leave it running.']);
+        t('andNoLeftoverExplanations', /so it can see|Cannot find module/.test(details.textContent), false);
 
         // Copying. With a clipboard it writes to it; without one the command is
-        // selected and the button stops claiming it copied.
+        // selected and the button stops claiming it copied. The reader has the
+        // steps open by the time they press it, and a selection can only be made
+        // over rendered content, so they are unfolded here rather than clicked
+        // inside a folded panel.
+        details.open = true;
         window.__copied = null;
         Object.defineProperty(navigator, 'clipboard', {
           configurable: true,
@@ -6231,8 +6249,35 @@ async function runSuite(driverBase) {
         t('theFolderRoutesAskForNoTerminal', /node|git |terminal/i.test(cloudSteps.textContent), false);
         t('andHaveNothingToCopy', cloudSteps.querySelectorAll('.setup-copy').length, 0);
         t('andTheCloudStepsNameTheDrivesTheUserNames', /Proton Drive/.test(cloudSteps.textContent), true);
+        t('andSayWhatToDoToTheFolder',
+          /Tap Choose folder above and then create\\/locate a specific Sorted folder inside that drive\\./
+            .test(cloudSteps.textContent), true);
         c = await draw({ transport: 'syncthing' });
         t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
+        window.syncFolderPlugin = realLookup;
+
+        // Tailscale carries its own setup rather than pointing at Home server's
+        // steps, which sent the reader back and forth between two lists.
+        const tsCard = await draw({ transport: 'tailscale' });
+        const tsSteps = tsCard.querySelector('details.setup-steps');
+        t('tailscaleCarriesItsOwnTwoCommands', tsSteps.querySelectorAll('.setup-copy').length, 2);
+        t('andSendsTheReaderNowhereElse', /steps 1 and 2|Home server steps/.test(tsSteps.textContent), false);
+        // The address there is the one thing that has to be built by hand rather
+        // than pasted, so the shape stays under the step: a Tailscale address is
+        // an IP with the port and the file's path after it.
+        t('andShowsTheAddressShapeToCopy',
+          /http:\\/\\/100\\.101\\.102\\.103:8787\\/sorted-snapshot\\.json/.test(tsSteps.textContent), true);
+
+        // No em dashes in the card, on any route. The user asked for them out of
+        // the steps in as many words; the rest of the card is swept with them
+        // because the same hand writes both.
+        const dashed = [];
+        window.syncFolderPlugin = () => ({});
+        for (const route of ['lan', 'tailscale', 'syncthing', 'cloud']) {
+          const rc = await draw({ transport: route });
+          if (/—/.test(rc.textContent)) dashed.push(route);
+        }
+        t('andNoEmDashOnAnyRoute', dashed, []);
         window.syncFolderPlugin = realLookup;
 
         // The placeholder has to say it is an example. The Tailscale one used to
@@ -6250,7 +6295,7 @@ async function runSuite(driverBase) {
         localStorage.removeItem('sorted-sync-backup');
         return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
       `);
-      check('each setup command is boxed with its own Copy button, and says where it goes wrong',
+      check('each setup command is boxed with its own Copy button, and one line follows it',
         stepsUi.detail.theCommandsAreSetApartFromTheSentence.pass
         && stepsUi.detail.andEachHasACopyButton.pass
         && stepsUi.detail.andTheFirstIsTheClone.pass
@@ -6258,7 +6303,10 @@ async function runSuite(driverBase) {
         && stepsUi.detail.noCommandIsLeftAsBareCode.pass
         && stepsUi.detail.andTheStepsSayWhereNodeComesFrom.pass
         && stepsUi.detail.andGiveTheWindowsAnswerForGit.pass
-        && stepsUi.detail.andTheAnswerForNodeBeingMissingOrOld.pass, stepsUi);
+        && stepsUi.detail.andNodeIsALinkToItsDownloadPage.pass
+        && stepsUi.detail.andSoIsGit.pass
+        && stepsUi.detail.oneLineUnderEachCommand.pass
+        && stepsUi.detail.andNoLeftoverExplanations.pass, stepsUi);
       check('and Copy copies it — or selects it and says so where there is no clipboard',
         stepsUi.detail.theCopyButtonCopiesTheCommandBesideIt.pass
         && stepsUi.detail.andWithoutAClipboardItSelectsInstead.pass
@@ -6267,7 +6315,13 @@ async function runSuite(driverBase) {
         stepsUi.detail.theFolderRoutesAskForNoTerminal.pass
         && stepsUi.detail.andHaveNothingToCopy.pass
         && stepsUi.detail.andTheCloudStepsNameTheDrivesTheUserNames.pass
+        && stepsUi.detail.andSayWhatToDoToTheFolder.pass
         && stepsUi.detail.andTheSyncthingStepsUseTheFolderButton.pass, stepsUi);
+      check('and Tailscale\'s steps stand on their own, and no route uses an em dash',
+        stepsUi.detail.tailscaleCarriesItsOwnTwoCommands.pass
+        && stepsUi.detail.andSendsTheReaderNowhereElse.pass
+        && stepsUi.detail.andShowsTheAddressShapeToCopy.pass
+        && stepsUi.detail.andNoEmDashOnAnyRoute.pass, stepsUi);
       check('the address boxes show an example, and no longer spell out x.y.z',
         stepsUi.detail.theAddressPlaceholderSaysItIsAnExample.pass
         && stepsUi.detail.andTheTailscaleOneNoLongerSpellsOutXyz.pass

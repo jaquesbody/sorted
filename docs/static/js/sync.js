@@ -87,7 +87,7 @@ const SYNC_TRANSPORTS = {
   cloud: {
     label: 'Cloud',
     available: true,
-    blurb: 'A folder in your own drive — Google Drive, Proton Drive, OneDrive',
+    blurb: 'A folder in your own drive: Google Drive, Proton Drive, OneDrive',
     needsFolder: true
   }
 };
@@ -101,9 +101,16 @@ const SYNC_TRANSPORTS = {
 // Written to be followed by someone who has never opened a terminal, which is
 // where the first pass failed: it named the two things to install without saying
 // where from, and gave a command that only works from inside a folder nobody had
-// been told to stand in. The text below is the user's, with the gaps filled and
-// the two OS differences handled where they actually bite (Node must be
-// installed before the terminal is opened, and Git is not there on Windows).
+// been told to stand in. The text below is the user's, with the gaps filled.
+//
+// Two things were taken out at his ask and are worth not putting back: the
+// aside that explained why the terminal has to be new (the word "new" stays;
+// the reason reads as homework), and the aside about Node being missing or too
+// old, which he called wordy. What is left under each command is one line.
+//
+// The steps are his own wording, tidied: he asked for no em dashes in them, for
+// nodejs.org and git-scm.com to be links, and for Tailscale to carry its own
+// instructions rather than sending the reader back to Home server.
 
 // A line inside a step, set below the line above it. "Install two things" is not
 // one sentence, and run together it read like one.
@@ -137,15 +144,14 @@ function setupAside(html) {
 const SYNC_SETUP_STEPS = {
   lan: [
     'On a computer that stays on, and on the same Wi-Fi as this phone, install two things:'
-      + setupPart('<strong>Node.js</strong> — get it from <strong>nodejs.org</strong> and run the installer. It is the same download on Windows, Mac and Linux.')
-      + setupPart('<strong>The Sorted folder</strong> — open a <strong>new</strong> terminal (new, so it can see what you have just installed), paste this in and press enter:'
+      + setupPart('<strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.')
+      + setupPart('<strong>The Sorted folder</strong>: open a <strong>new</strong> terminal, paste this in and press enter:'
         + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
-        + setupAside('If it says <strong>git</strong> is not recognised, install Git from git-scm.com first, then run it again.')),
+        + setupAside('If it says <strong>git</strong> is not recognised, install Git from <a href="https://git-scm.com/install/" target="_blank" rel="noopener">git-scm.com</a> first, then run it again.')),
 
     'Start the sync host, in that same terminal:'
       + setupCommand('node sorted/tools/sync-host.mjs')
-      + setupAside('Then leave it running — it is what this phone talks to. Ctrl-C stops it.'
-        + ' If it says <strong>node</strong> is not recognised, or <strong>Cannot find module</strong>, install the current Node.js from nodejs.org and try again.'),
+      + setupAside('Then leave it running.'),
 
     'It prints an address for each network it can see. Copy the Wi-Fi one: the address starting <strong>192.168.</strong>',
 
@@ -156,12 +162,20 @@ const SYNC_SETUP_STEPS = {
   tailscale: [
     'Install and set up <strong>Tailscale</strong> on the computer that stays on and on this phone, sign in on both, and connect them.',
 
-    'On the computer, do <strong>steps 1 and 2 of Home server</strong> — install Node.js, get the Sorted folder, and start the sync host, leaving it running.',
+    'On that computer, install two things:'
+      + setupPart('<strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer.')
+      + setupPart('<strong>The Sorted folder</strong>: open a <strong>new</strong> terminal, paste this in and press enter:'
+        + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
+        + setupAside('If it says <strong>git</strong> is not recognised, install Git from <a href="https://git-scm.com/install/" target="_blank" rel="noopener">git-scm.com</a> first, then run it again.')),
+
+    'Start the sync host, in that same terminal:'
+      + setupCommand('node sorted/tools/sync-host.mjs')
+      + setupAside('Then leave it running.'),
 
     'In Tailscale, find that computer\'s IP address. It starts with <strong>100.</strong>',
 
-    'Paste it into the <strong>Address</strong> box above like this, changing the example numbers for the ones you found:'
-      + setupPart('<code>http://100.101.102.103:8787/sorted-snapshot.json</code>'),
+    'Paste it into the <strong>Address</strong> box above:'
+      + setupPart('<code>http://100.101.102.103:8787/<wbr>sorted-snapshot.json</code>'),
 
     'Tap <strong>Sync now</strong>. Done.'
   ],
@@ -175,9 +189,9 @@ const SYNC_SETUP_STEPS = {
     'Repeat step 2 on the other devices. Done.'
   ],
   cloud: [
-    'Install and set up the drive you use — <strong>Google Drive</strong>, <strong>Proton Drive</strong>, <strong>OneDrive</strong> — and sign in.',
+    'Install and set up the drive you use: <strong>Google Drive</strong>, <strong>Proton Drive</strong> or <strong>OneDrive</strong>, and sign in.',
 
-    'Tap <strong>Choose folder</strong> above and locate a specific <strong>Sorted</strong> folder inside that drive.',
+    'Tap <strong>Choose folder</strong> above and then create/locate a specific <strong>Sorted</strong> folder inside that drive.',
 
     'Tap <strong>Sync now</strong>.',
 

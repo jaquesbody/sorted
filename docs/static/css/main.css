@@ -799,9 +799,10 @@ body {
   padding-top: 8px;
 }
 
-/* The steps are a <details>, folded away unless the card has no address yet:
-   they are how the address is found, so a card that needs one shows them and a
-   card that has one keeps the question and its answer apart. The marker is
+/* The steps are a <details>, folded away until the reader opens them. It used to
+   open itself on a route that had no address yet, since the steps are where the
+   address comes from; the user asked for it closed on every route instead, so
+   the card is one field and one button plus a line to unfold. The marker is
    replaced rather than styled — the default triangle is drawn outside the
    summary's own box, which is why it cannot be moved — and `list-style: none`
    plus the vendor rule is what hides it on every WebView this app runs in. */
@@ -854,6 +855,20 @@ body {
      mid-address instead of wrapping. This breaks one only when it has to, and
      leaves every shorter command on its own line. */
   overflow-wrap: break-word;
+}
+
+/* The two links in the steps — where Node.js comes from, and where Git does.
+   Drawn the way the app draws the other link it has, in the notice box: the
+   browser default is a blue the theme knows nothing about, and a step that
+   underlines a word mid-sentence reads as emphasis rather than as somewhere to
+   go. */
+.setup-steps-list a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.setup-steps-list a:hover {
+  color: var(--accent-hover);
 }
 
 /* A line inside a step, set below the line above it. "Install two things" is not

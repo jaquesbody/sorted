@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.100.1';
+const APP_VERSION = '2.100.2';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1783,10 +1783,12 @@ function syncSettingsHtml() {
   // version that works: pick where, answer the one question that route asks —
   // an address, or a folder — and press Sync now.
   //
-  // The steps are the exception, and they are folded away rather than deleted:
-  // they are how that question gets answered, so a card that has not answered it
-  // needs them open and a card that has does not. Answering it again on every
-  // visit is what made this card read as homework.
+  // The steps are the exception, and they are folded away rather than deleted.
+  // They used to open themselves on a route that had not been answered yet, on
+  // the argument that they are how that question gets answered. The user asked
+  // for them closed on all four routes instead: a card that has read them once
+  // and come back later is the common case, and homework on every visit is what
+  // the whole simplification was undoing.
   //
   // The address field re-renders the card on change, for a smaller version of
   // the same thing: the button's enabled state is worked out when the card is
@@ -1830,7 +1832,7 @@ function syncSettingsHtml() {
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
-    <details class="setup-steps"${ready ? '' : ' open'}>
+    <details class="setup-steps">
       <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
