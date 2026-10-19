@@ -2,6 +2,11 @@ node_modules/
 dist/
 *.log
 
+# Built APKs — build artefacts, never committed (protocol 6.2). Every build is
+# attached to a GitHub release instead, which is what the README and the
+# portfolio card link to.
+*.apk
+
 # Capacitor / Android build outputs
 android/.gradle/
 android/build/

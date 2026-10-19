@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nothing is backed up, and that is a decision rather than an oversight.
+
+  With the default (allowBackup="true" and no rules), Android uploads this
+  app's data to Google Drive on API 31+, and transfers it to a new device on
+  API 31+ too. That data is the whole point of the app: every transaction,
+  every account, every person. And it includes the passcode, which sits in
+  WebView localStorage as
+    sorted-passcode
+    sorted-person-pins
+  — PLAINTEXT local storage inside the backup set, not a stored secret.
+
+  project.md's §5 promise is "no backend, no cloud storage, no login". One
+  attribute made the app quietly copy a household's finances plus its PINs to
+  a third party, in a form nobody reading the data would recognise as
+  needing protecting. The README states the opposite of what was happening.
+
+  The cost of turning it off: restoring onto a new phone needs the in-app
+  Export, which is the app's own file and already the documented route. That
+  is a deliberate trade of convenience for the promise the app makes.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+        <exclude domain="file" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+        <exclude domain="file" />
+    </device-transfer>
+</data-extraction-rules>
