@@ -33,15 +33,23 @@ const SYNC_DEVICE_KEY = 'sorted-sync-device';
 const SYNC_BACKUP_KEY = 'sorted-sync-backup';
 const SYNC_TOUCHED_KEY = 'sorted-sync-touched';
 
-// Which transports the app knows about. Only `lan` is implemented; the others
-// are listed so the shape of the setting is visible and adding one is a matter
-// of writing a `read`/`write` pair against the same two functions.
+// Which transports the app knows about.
 //
-//  - lan        an always-on machine on the same Wi-Fi, reachable over HTTP
-//  - tailscale  the same HTTP file over Tailscale, so it works off the home
-//               network without exposing anything to the internet
-//  - syncthing  a folder something else already syncs (not built yet)
-//  - cloud      a hosted file, which would contradict "no cloud, no login"
+//  - lan         an always-on machine on the same Wi-Fi, reachable over HTTP
+//  - tailscale   the same HTTP file over Tailscale, so it works off the home
+//                network without exposing anything to the internet
+//  - syncthing   a folder something else already keeps in step
+//  - cloud       a folder inside the person's own drive, which the same picker
+//                reaches because the drive app publishes it as a place to save
+//
+// The last two are the same mechanism — a folder the person chooses, in which
+// Sorted reads and writes one file — and they are listed separately because the
+// two things they are called are how people find their own route. What is on the
+// other end is not Sorted's business and is never asked about.
+//
+// `needsUrl` and `needsFolder` are what the card lays itself out from, so a
+// route that has no address cannot show an address box and leave someone
+// wondering what to type in it.
 const SYNC_TRANSPORTS = {
   lan: {
     label: 'Home server',
@@ -62,24 +70,25 @@ const SYNC_TRANSPORTS = {
     needsUrl: true,
     urlHint: 'http://100.x.y.z:8787/sorted-snapshot.json'
   },
-  // A shared folder and nothing else. No server to leave running and no
-  // address to type, which is the whole appeal: the folder is already there on
-  // both machines because something else is keeping it there, and Sorted reads
-  // and writes the same one file inside it. Listed because it was asked for,
-  // still marked not built until the read side is written and tested.
+  // A shared folder and nothing else. No server to leave running and no address
+  // to type, which is the whole appeal: the folder is already there on both
+  // machines because something else is keeping it there, and Sorted reads and
+  // writes the same one file inside it.
   syncthing: {
     label: 'Syncthing',
-    available: false,
+    available: true,
     blurb: 'A folder you already sync, no server to keep running',
-    needsUrl: true,
-    urlHint: 'file:// path to the synced folder'
+    needsFolder: true
   },
+  // The same folder, living in a drive the person already pays for. Sorted has
+  // no account and no server of its own here: the file goes into their own
+  // drive, through their own drive app, which is the only reason this is not a
+  // contradiction of "no cloud, no login".
   cloud: {
     label: 'Cloud',
-    available: false,
-    blurb: 'Works anywhere, but needs an account',
-    needsUrl: true,
-    urlHint: 'https://…'
+    available: true,
+    blurb: 'A folder in your own drive — Google Drive, Dropbox, OneDrive',
+    needsFolder: true
   }
 };
 
@@ -106,14 +115,14 @@ const SYNC_SETUP_STEPS = {
     'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above and tap <strong>Sync now</strong>.'
   ],
   syncthing: [
-    'Install Syncthing on the computer and on this phone, and pair them.',
-    'Pick a folder both of them sync.',
-    'Tell Sorted which folder, then tap <strong>Sync now</strong>.'
+    'Install <strong>Syncthing</strong> on this phone and on the other device, and pair them.',
+    'Pick one folder both of them keep in step — anything you like, it holds a single file.',
+    'Tap <strong>Choose folder</strong> above and pick that folder, then tap <strong>Sync now</strong>.'
   ],
   cloud: [
-    'Sign in to a cloud drive that can be read and written from a phone.',
-    'Give Sorted access to one file in it.',
-    'Paste that file\'s address above, then tap <strong>Sync now</strong>.'
+    'Install the drive you already use — <strong>Google Drive</strong>, <strong>Dropbox</strong>, <strong>OneDrive</strong> — and sign in.',
+    'Tap <strong>Choose folder</strong> above and pick a folder inside that drive. One folder, for the one file.',
+    'Tap <strong>Sync now</strong>. The file goes into your own drive and the drive carries it to the other device, where the same three steps bring it in.'
   ]
 };
 
@@ -130,6 +139,11 @@ function syncSettings() {
   return {
     transport: transport,
     url: typeof set.url === 'string' ? set.url.trim() : '',
+    // The folder route's whole setting: where the picker put us, and what to
+    // call it on screen. Kept beside the address rather than instead of it, so
+    // switching between a server and a folder does not lose either answer.
+    folderUri: typeof set.folderUri === 'string' ? set.folderUri : '',
+    folderName: typeof set.folderName === 'string' ? set.folderName : '',
     auto: set.auto === true
   };
 }
@@ -319,6 +333,59 @@ async function syncFetch(url, options) {
   return fetch(url, opts);
 }
 
+// ---------------------------------------------------------------- the folder
+
+// The second transport, and the one with no address in it.
+//
+// On Android a small native plugin wraps the system folder picker and the one
+// file inside whatever folder comes back. In a browser there is nothing to wrap,
+// because a page cannot read a folder at all — so the two folder routes are not
+// offered there, rather than offered and then explained away.
+let syncFolderCap = null;
+
+function syncFolderPlugin() {
+  const cap = window.Capacitor;
+  if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) return null;
+  if (typeof cap.registerPlugin !== 'function') return null;
+  if (!syncFolderCap) syncFolderCap = cap.registerPlugin('SortedFolder');
+  return syncFolderCap;
+}
+
+// Whether this build can use a folder at all. One function, because three places
+// have to agree about it: the dropdown, the card, and the sync itself.
+function syncFolderHere() {
+  return !!syncFolderPlugin();
+}
+
+// What "ready to sync" means for a route: an address for the two that have one,
+// a folder for the two that do not.
+function syncRouteReady(transport, settings) {
+  if (!transport || !transport.available) return false;
+  return transport.needsFolder ? !!settings.folderUri : !!settings.url;
+}
+
+// Reading a folder the person chose. "No file" is the ordinary first-run answer
+// rather than an error: the first sync creates it.
+async function folderReadSnapshot(uri) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) throw new Error('Syncing to a folder needs the phone app.');
+  const res = await plugin.read({ uri: uri });
+  if (!res || !res.exists) return null;
+  let parsed;
+  try { parsed = JSON.parse(res.data); } catch (err) {
+    throw new Error("The file in that folder isn't a Sorted snapshot.");
+  }
+  if (!isSyncSnapshot(parsed)) throw new Error("The file in that folder isn't a Sorted snapshot.");
+  return parsed;
+}
+
+async function folderWriteSnapshot(uri, snapshot) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) throw new Error('Syncing to a folder needs the phone app.');
+  await plugin.write({ uri: uri, data: JSON.stringify(snapshot) });
+  return true;
+}
+
 // ---------------------------------------------------------------- diagnosis
 
 // fetch() says "Failed to fetch" for every one of: nothing listening, the wrong
@@ -391,20 +458,40 @@ async function syncNow() {
   if (!transport || !transport.available) {
     return { ok: false, error: 'That sync option is not available yet.' };
   }
-  if (!settings.url) {
+  // A route that reads a folder has no address, and a route that fetches an
+  // address has no folder. Asking each for the setting it actually uses is what
+  // stops the wrong one's absence reading as "not set up".
+  const byFolder = !!transport.needsFolder;
+  if (byFolder && !settings.folderUri) {
+    return { ok: false, error: 'No folder has been chosen yet.' };
+  }
+  if (!byFolder && !settings.url) {
     return { ok: false, error: 'No address set for the sync.' };
   }
 
+  const readRemote = byFolder
+    ? () => folderReadSnapshot(settings.folderUri)
+    : () => readSyncSnapshot(settings.url);
+  const writeRemote = byFolder
+    ? (snapshot) => folderWriteSnapshot(settings.folderUri, snapshot)
+    : (snapshot) => writeSyncSnapshot(settings.url, snapshot);
+
   let remote = null;
   try {
-    remote = await readSyncSnapshot(settings.url);
+    remote = await readRemote();
   } catch (err) {
-    // The transport can only say "Failed to fetch" — the browser's words, the
-    // same for a dead machine, a wrong network and a refused request. So before
-    // reporting anything, ask the host itself, which knows which of those it is.
-    // A failure is rare and the answer is what makes it fixable, so the extra
-    // round trip is worth it; the probe gives up after six seconds either way.
     const detail = String((err && err.message) || err);
+    // A folder says what went wrong in the plugin's own words — a grant that has
+    // lapsed, a folder that has been deleted or unmounted — and asking again
+    // would only add jargon to a sentence that is already actionable. It is the
+    // HTTP route that arrives here as "Failed to fetch": the browser's wording,
+    // the same for a dead machine, a wrong network and a refused request, so
+    // that one asks the host itself before reporting anything. A failure is rare
+    // and the answer is what makes it fixable, so the extra round trip is worth
+    // it; the probe gives up after six seconds either way.
+    if (byFolder) {
+      return { ok: false, error: detail, where: 'folder', detail: detail };
+    }
     let message = syncReachMessage(settings.url, err);
     if (message !== detail) {
       const found = await syncTestAddress();
@@ -420,7 +507,7 @@ async function syncNow() {
   const local = await buildSyncSnapshot();
 
   if (!remote) {
-    await writeSyncSnapshot(settings.url, local);
+    await writeRemote(local);
     return { ok: true, did: 'created', at: local.updatedAt };
   }
 
@@ -441,7 +528,7 @@ async function syncNow() {
     return { ok: true, did: 'pulled', at: remote.updatedAt, backup: true };
   }
   if (localT > remoteT) {
-    await writeSyncSnapshot(settings.url, local);
+    await writeRemote(local);
     return { ok: true, did: 'pushed', at: local.updatedAt };
   }
   return { ok: true, did: 'none', at: local.updatedAt };

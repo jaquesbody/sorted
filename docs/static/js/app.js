@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.99.5';
+const APP_VERSION = '2.100.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1747,10 +1747,23 @@ function syncConfigured() {
 // "how easy is it to change my mind later".
 function syncSettingsHtml() {
   const s = syncSettings();
-  const active = SYNC_TRANSPORTS[s.transport];
-  const options = Object.keys(SYNC_TRANSPORTS).map((key) => {
+  // Only the routes this build can actually do. A browser cannot read a folder,
+  // so the two folder routes are not listed there at all — the alternative was
+  // offering them and then explaining, in the card, why they do not work, which
+  // is how this card ended up unreadable in the first place.
+  const keys = Object.keys(SYNC_TRANSPORTS).filter((key) => {
     const t = SYNC_TRANSPORTS[key];
-    return `<option value="${key}"${key === s.transport ? ' selected' : ''}>${escapeHTML(t.label)}</option>`;
+    return t.available && (!t.needsFolder || syncFolderHere());
+  });
+  // A setting can name a route this build does not offer — the same storage in a
+  // browser, a phone whose app was replaced by the web build. Drawing the card
+  // for a route the dropdown does not have would be a panel about nothing, so
+  // the first route that is on offer stands in until the dropdown is touched.
+  const key = keys.indexOf(s.transport) >= 0 ? s.transport : keys[0];
+  const active = SYNC_TRANSPORTS[key];
+  const options = keys.map((one) => {
+    const t = SYNC_TRANSPORTS[one];
+    return `<option value="${one}"${one === key ? ' selected' : ''}>${escapeHTML(t.label)}</option>`;
   }).join('');
 
   const hasBackup = !!syncBackup();
@@ -1758,27 +1771,28 @@ function syncSettingsHtml() {
   // "Ready" or "No address set" in words, which is one more line to read and one
   // more thing to keep in step with reality — a control that is enabled when it
   // will work and disabled when it will not already says both of those.
-  const ready = !!(active && active.available && s.url);
+  const ready = syncRouteReady(active, s);
+  const byFolder = !!(active && active.needsFolder);
 
-  // One address and one button, and that is the whole of it.
+  // One setting and one button, and that is the whole of it.
   //
   // This card was four rows — where, address, status, replaced copy — and then a
   // paragraph underneath explaining that the data goes in one file and how to
   // run the host. Every one of those was a line on a phone screen spent saying
   // something the two controls already said. What was asked for was the simplest
-  // version that works: pick where, paste the address the host printed, press
-  // Sync now.
+  // version that works: pick where, answer the one question that route asks —
+  // an address, or a folder — and press Sync now.
   //
   // The steps are the exception, and they are folded away rather than deleted:
-  // they are how the address is found, so a card with no address needs them
-  // open and a card that has one does not. An address in the box means that
-  // question was answered once already, and answering it again on every visit is
-  // what made this card read as homework.
+  // they are how that question gets answered, so a card that has not answered it
+  // needs them open and a card that has does not. Answering it again on every
+  // visit is what made this card read as homework.
   //
   // The address field re-renders the card on change, for a smaller version of
   // the same thing: the button's enabled state is worked out when the card is
   // drawn, so without it the first thing a new user does — paste the address the
-  // host printed — leaves them looking at a Sync now that will not press.
+  // host printed — leaves them looking at a Sync now that will not press. The
+  // folder picker re-renders for the same reason, and does it itself.
   return `
     <div class="setting-row setting-row--inline setting-row--tight">
       <div class="setting-text">
@@ -1790,6 +1804,16 @@ function syncSettingsHtml() {
                 onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
       </div>
     </div>
+    ${byFolder ? `
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label" id="sync-folder-label">Folder</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" id="sync-folder"
+                onclick="chooseSyncFolderFromSettings(this)">${s.folderUri ? escapeHTML(shortFolderName(s.folderName)) : 'Choose folder'}</button>
+      </div>
+    </div>` : `
     <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
       <div class="setting-text">
         <div class="setting-label">Address</div>
@@ -1802,14 +1826,14 @@ function syncSettingsHtml() {
                ${active && active.available ? '' : 'disabled'}
                onchange="setSyncSettings({url: this.value.trim()}); renderPage();">
       </div>
-    </div>
+    </div>`}
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
-    <details class="setup-steps"${s.url ? '' : ' open'}>
+    <details class="setup-steps"${ready ? '' : ' open'}>
       <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
-        ${(SYNC_SETUP_STEPS[s.transport] || []).map((step) => `<li>${step}</li>`).join('')}
+        ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
     </details>
     ${hasBackup ? `
@@ -1823,15 +1847,70 @@ function syncSettingsHtml() {
     </div>` : ''}`;
 }
 
+// A folder's own name can be a paragraph — "My Drive / Documents / Accounts" and
+// so on — and the button it sits in is a third of a phone's width. Cut to
+// something that still identifies it; the picker is one tap away and says the
+// rest.
+//
+// The name goes in the button rather than in the row's label, which is where a
+// value usually goes, because the obvious folder name for this file is "Sorted"
+// — and a row whose left-hand text reads "Sorted" is a row about the app, not
+// about a folder in someone's drive.
+function shortFolderName(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return 'Chosen folder';
+  return clean.length > 22 ? clean.slice(0, 21) + '…' : clean;
+}
+
+// Choosing the folder is the entire setup for the two folder routes: one tap,
+// the system picker, and there is nothing to type afterwards.
+//
+// It does not sync on the way out. A pull replaces what is on the phone, and
+// doing that off the back of a tap labelled "Choose folder" would be a surprise;
+// the button underneath is where that decision belongs.
+async function chooseSyncFolderFromSettings(btn) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) {
+    // Only reachable if the browser build is somehow showing this row, but a
+    // dead button that says nothing is worse than a sentence.
+    showToast('Syncing to a folder needs the phone app.', 6000);
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Choosing…'; }
+  let message = null;
+  try {
+    const res = await plugin.pick();
+    // Backing out of the picker is a decision, not a failure.
+    if (res && res.uri) {
+      const previous = syncSettings().folderUri;
+      if (previous && previous !== res.uri) {
+        // Android holds a limited number of these grants per app; letting go of
+        // the last folder is what keeps the next choice possible.
+        try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
+      }
+      setSyncSettings({ folderUri: res.uri, folderName: res.name || '' });
+      message = 'Folder set. Tap Sync now to use it.';
+    }
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+}
+
 async function syncFromSettings(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  const transport = SYNC_TRANSPORTS[syncSettings().transport];
+  const byFolder = !!(transport && transport.needsFolder);
   let message;
   try {
     const res = await syncNow();
     if (!res.ok) message = res.error;
-    else if (res.did === 'pulled') message = 'Took data from your server';
-    else if (res.did === 'pushed') message = 'Sent your data';
-    else if (res.did === 'created') message = 'Server set up';
+    // Named for where the copy actually is. "Took data from your server" is
+    // wrong by a mile on a route whose other end is a folder in someone's drive.
+    else if (res.did === 'pulled') message = byFolder ? 'Took the copy from the folder' : 'Took data from your server';
+    else if (res.did === 'pushed') message = byFolder ? 'Put your data in the folder' : 'Sent your data';
+    else if (res.did === 'created') message = byFolder ? 'Folder set up' : 'Server set up';
     else message = 'Already up to date';
   } catch (err) {
     message = String((err && err.message) || err);

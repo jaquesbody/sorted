@@ -31,6 +31,7 @@ public class MainActivity extends BridgeActivity {
   @Override
   public void onCreate(Bundle savedInstanceState) {
     registerPlugin(SaveFilePlugin.class);
+    registerPlugin(SortedFolderPlugin.class);
     super.onCreate(savedInstanceState);
     hideSystemBars();
   }

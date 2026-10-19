@@ -5958,6 +5958,185 @@ async function runSuite(driverBase) {
         failure.detail.pastingAnAddressTurnsTheButtonOn.pass
         && failure.detail.andTheAddressIsKept.pass, failure);
 
+    console.log('\n# sync to a folder: the route with no address in it');
+
+      // 8. The folder route. The picker itself is Android's and cannot be
+      //    reached from here; everything around it can — that a folder stands in
+      //    for the address everywhere, that a browser is not offered a route it
+      //    cannot do, and that the four outcomes are the same four the server
+      //    route has, because they are the same four functions underneath.
+      const folderRoute = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const realLookup = window.syncFolderPlugin;
+        window.__files = {};
+        window.__picked = null;
+        window.__forgot = [];
+        window.__ops = [];
+        const fake = () => ({
+          pick: async () => (window.__picked || { cancelled: true }),
+          read: async (o) => {
+            window.__ops.push('read ' + o.uri);
+            return Object.prototype.hasOwnProperty.call(window.__files, SYNC_FILE)
+              ? { exists: true, data: window.__files[SYNC_FILE] }
+              : { exists: false };
+          },
+          write: async (o) => {
+            window.__ops.push('write ' + o.uri);
+            window.__files[SYNC_FILE] = o.data;
+            return { ok: true };
+          },
+          forget: async (o) => { window.__forgot.push(o.uri); return { ok: true }; }
+        });
+        const card = () => [...document.querySelectorAll('.report-card')]
+          .find((x) => /set this up/i.test(x.textContent) && /Sync/.test(x.textContent));
+        const draw = async () => {
+          currentPage = 'settings'; await renderPage();
+          await new Promise((r) => setTimeout(r, 400));
+          return card();
+        };
+        const labels = () => [...document.querySelectorAll('#sync-transport option')]
+          .map((o) => o.textContent.trim());
+
+        // (a) A browser has no folder to read. So it is not offered one, rather
+        //     than offered one and told why it will not work.
+        window.syncFolderPlugin = () => null;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        let c = await draw();
+        t('aBrowserOffersOnlyTheTwoWithAnAddress', labels(), ['Home server', 'Tailscale']);
+        t('andDrawsAnAddressBox', !!document.getElementById('sync-url'), true);
+
+        // (b) On the phone all four are there, and a folder route asks the one
+        //     question it has instead of the one it does not.
+        window.syncFolderPlugin = fake;
+        setSyncSettings({ transport: 'cloud', url: '', folderUri: '', folderName: '' });
+        c = await draw();
+        t('thePhoneOffersAllFour', labels(), ['Home server', 'Tailscale', 'Syncthing', 'Cloud']);
+        t('aFolderRouteDrawsNoAddressBox', document.getElementById('sync-url') === null, true);
+        t('andSaysWhatToDoInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
+        t('andCannotSyncYet', c.querySelector('.btn-primary').disabled, true);
+        t('andShowsTheStepsThatAnswerIt', c.querySelector('details.setup-steps').open, true);
+
+        // (c) No folder, no sync — in words, rather than a request to nowhere.
+        setSyncSettings({ transport: 'cloud' });
+        const noFolder = await syncNow();
+        t('syncRefusesWithoutAFolder', noFolder.error, 'No folder has been chosen yet.');
+
+        // (d) Choosing one is the whole setup. The picker answers, the card is
+        //     ready, and the steps fold away because the question is answered.
+        window.__picked = { uri: 'content://com.android.externalstorage.documents/tree/primary%3ASorted', name: 'Sorted' };
+        await chooseSyncFolderFromSettings(null);
+        c = await draw();
+        t('theChosenFolderIsKept', syncSettings().folderUri, window.__picked.uri);
+        t('andNamedOnTheCard', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Sorted');
+        t('andTheRowStillSaysItIsTheFolder', (document.getElementById('sync-folder-label') || {}).textContent.trim(), 'Folder');
+        t('andSyncCanRunNow', c.querySelector('.btn-primary').disabled, false);
+        t('andTheStepsFoldAway', c.querySelector('details.setup-steps').open, false);
+
+        // (e) The same four outcomes as the server route, through a folder.
+        window.__ops.length = 0;
+        const created = await syncNow();
+        t('theFirstPassCreatesTheFile', created.did, 'created');
+        t('andReadsTheFolderThatWasChosen', window.__ops[0], 'read ' + window.__picked.uri);
+        t('andWritesTheOneFileAndNothingElse', Object.keys(window.__files), [SYNC_FILE]);
+        const unchanged = await syncNow();
+        t('anUnchangedPassSaysNone', unchanged.did, 'none');
+        await addItem('spend', { title: 'Through a folder', amount: 7, date: localISO(), category: 'Groceries' });
+        const pushed = await syncNow();
+        t('aLocalChangePushes', pushed.did, 'pushed');
+        t('andTheFileCarriesIt',
+          JSON.parse(window.__files[SYNC_FILE]).data.spend.some((r) => r.title === 'Through a folder'), true);
+        window.__files[SYNC_FILE] = JSON.stringify({
+          format: 1, deviceId: 'other',
+          updatedAt: new Date(Date.now() + 3600000).toISOString(),
+          data: { spend: [{ id: 'x', title: 'From the other side', amount: 3, date: '2026-09-05', category: 'Groceries' }] }
+        });
+        const pulled = await syncNow();
+        t('aNewerFilePulls', pulled.did, 'pulled');
+        t('andReplacesRatherThanMerging',
+          (await getAll('spend')).map((r) => r.title).indexOf('From the other side') >= 0, true);
+
+        // (f) Changing folders lets go of the last one. Android holds only a
+        //     handful of these grants per app, and that is how an app runs out.
+        const first = syncSettings().folderUri;
+        window.__picked = { uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload%2FSynced', name: 'Download/Synced' };
+        await chooseSyncFolderFromSettings(null);
+        t('changingTheFolderLetsGoOfTheLast', window.__forgot, [first]);
+        t('andKeepsTheNewOne', syncSettings().folderUri, window.__picked.uri);
+        t('andNamesThatOneInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Download/Synced');
+
+        // (g) A folder that has gone says so in plain words, and does not go
+        //     looking for a host that was never part of this route.
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          read: async () => { throw new Error('That folder is no longer there. Choose it again.'); }
+        });
+        setSyncSettings({ transport: 'syncthing' });
+        const gone = await syncNow();
+        t('aMissingFolderSaysSo', gone.error, 'That folder is no longer there. Choose it again.');
+        t('andSaysItWasTheFolder', gone.where, 'folder');
+
+        window.syncFolderPlugin = realLookup;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('a browser is not offered the folder routes at all, since it cannot read a folder',
+        folderRoute.detail.aBrowserOffersOnlyTheTwoWithAnAddress.pass
+        && folderRoute.detail.andDrawsAnAddressBox.pass, folderRoute);
+      check('and the phone is offered all four, with a folder asked for instead of an address',
+        folderRoute.detail.thePhoneOffersAllFour.pass
+        && folderRoute.detail.aFolderRouteDrawsNoAddressBox.pass
+        && folderRoute.detail.andSaysWhatToDoInstead.pass
+        && folderRoute.detail.andCannotSyncYet.pass
+        && folderRoute.detail.andShowsTheStepsThatAnswerIt.pass
+        && folderRoute.detail.syncRefusesWithoutAFolder.pass, folderRoute);
+      check('choosing a folder is the whole setup, and the steps fold away once it is done',
+        folderRoute.detail.theChosenFolderIsKept.pass
+        && folderRoute.detail.andNamedOnTheCard.pass
+        && folderRoute.detail.andTheRowStillSaysItIsTheFolder.pass
+        && folderRoute.detail.andSyncCanRunNow.pass
+        && folderRoute.detail.andTheStepsFoldAway.pass, folderRoute);
+      check('and a folder syncs like a server does: creates, says so when nothing has changed, pushes, pulls',
+        folderRoute.detail.theFirstPassCreatesTheFile.pass
+        && folderRoute.detail.andReadsTheFolderThatWasChosen.pass
+        && folderRoute.detail.andWritesTheOneFileAndNothingElse.pass
+        && folderRoute.detail.anUnchangedPassSaysNone.pass
+        && folderRoute.detail.aLocalChangePushes.pass
+        && folderRoute.detail.andTheFileCarriesIt.pass
+        && folderRoute.detail.aNewerFilePulls.pass
+        && folderRoute.detail.andReplacesRatherThanMerging.pass, folderRoute);
+      check('picking a different folder lets go of the last, and a folder that has gone says so plainly',
+        folderRoute.detail.changingTheFolderLetsGoOfTheLast.pass
+        && folderRoute.detail.andKeepsTheNewOne.pass
+        && folderRoute.detail.andNamesThatOneInstead.pass
+        && folderRoute.detail.aMissingFolderSaysSo.pass
+        && folderRoute.detail.andSaysItWasTheFolder.pass, folderRoute);
+
+      // The file name is written down twice — once in sync.js, once in the Java
+      // plugin that reads and writes it — and the two halves only meet if the two
+      // strings match. Nothing else in the suite can see across that line.
+      const syncSource = fs.readFileSync(path.join(REPO, 'docs/static/js/sync.js'), 'utf8');
+      const folderSource = fs.readFileSync(
+        path.join(REPO, 'android/app/src/main/java/com/jaquesbody/sorted/SortedFolderPlugin.java'), 'utf8');
+      const jsFileName = (syncSource.match(/const SYNC_FILE = '([^']+)'/) || [])[1];
+      const javaFileName = (folderSource.match(/FILE_NAME = "([^"]+)"/) || [])[1];
+      check('the file the app writes and the file the phone plugin looks for are the same file',
+        !!jsFileName && jsFileName === javaFileName, { jsFileName: jsFileName, javaFileName: javaFileName });
+
+      // And the plugin's own name, which is the other thing that has to match
+      // across the boundary. A wrong one is not an error anywhere: the page asks
+      // for a plugin nobody registered and gets an empty object back, which reads
+      // on the phone as a Choose folder button that does nothing at all.
+      const jsPluginName = (syncSource.match(/registerPlugin\('([^']+)'\)/) || [])[1];
+      const javaPluginName = (folderSource.match(/@CapacitorPlugin\(name = "([^"]+)"\)/) || [])[1];
+      const registered = fs.readFileSync(
+        path.join(REPO, 'android/app/src/main/java/com/jaquesbody/sorted/MainActivity.java'), 'utf8');
+      check('and the plugin the card calls is the one Android registers, under the same name',
+        !!jsPluginName && jsPluginName === javaPluginName
+        && registered.indexOf(javaPluginName + 'Plugin.class') >= 0,
+        { jsPluginName: jsPluginName, javaPluginName: javaPluginName });
+
     console.log('\n# notifications: the plan, the memory, and the native route');
 
       // ---------------------------------------------------------------
