@@ -5910,7 +5910,12 @@ async function runSuite(driverBase) {
         };
         const cardOf = (c) => ({
           details: c.querySelector('details.setup-steps'),
-          buttons: [...c.querySelectorAll('button')].map((b) => b.textContent.trim()),
+          // The Copy buttons in the steps are part of the instructions, not
+          // controls of the card — the card is still one setting and one button,
+          // which is what this is checking.
+          buttons: [...c.querySelectorAll('button')]
+            .filter((b) => !b.closest('.setup-steps'))
+            .map((b) => b.textContent.trim()),
           syncDisabled: c.querySelector('.btn-primary').disabled
         });
 
@@ -5922,7 +5927,7 @@ async function runSuite(driverBase) {
         shape = cardOf(await draw('http://192.168.1.10:8787/sorted-snapshot.json'));
         t('anAddressFoldsThemAway', shape.details.open, false);
         t('andStillOnlyOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
-        t('andTheStepsSurviveToBeOpened', /node tools\\/sync-host/.test(shape.details.textContent), true);
+        t('andTheStepsSurviveToBeOpened', /node sorted\\/tools\\/sync-host\\.mjs/.test(shape.details.textContent), true);
 
         // The field re-renders on change. Without it the first thing a new user
         // does — paste the address the host printed — leaves them looking at a
@@ -6136,6 +6141,140 @@ async function runSuite(driverBase) {
         !!jsPluginName && jsPluginName === javaPluginName
         && registered.indexOf(javaPluginName + 'Plugin.class') >= 0,
         { jsPluginName: jsPluginName, javaPluginName: javaPluginName });
+
+      // 9. The steps themselves. The first pass named the two things to install
+      //    without saying where from, and gave a command that only works from
+      //    inside a folder the reader was never told to stand in. They now name
+      //    the download, put each command in a box with its own Copy button, and
+      //    say the one thing that goes wrong with each where it goes wrong.
+      const stepsUi = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const card = () => [...document.querySelectorAll('.report-card')]
+          .find((x) => /set this up/i.test(x.textContent) && /Sync/.test(x.textContent));
+        const draw = async (patch) => {
+          setSyncSettings(patch);
+          currentPage = 'settings'; await renderPage();
+          await new Promise((r) => setTimeout(r, 400));
+          return card();
+        };
+        const realLookup = window.syncFolderPlugin;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+
+        let c = await draw({ transport: 'lan', url: '', folderUri: '', folderName: '' });
+        const details = c.querySelector('details.setup-steps');
+
+        // The rule that sat immediately under the Sync now button, cutting the
+        // button off from the steps that belong to it.
+        t('noRuleUnderTheSyncNowButton', getComputedStyle(details).borderTopWidth, '0px');
+
+        // The picker has to be as wide as its longest option. Measured against a
+        // bare one in a hidden copy of the same style, so the number under test
+        // is what the picker actually needs rather than one written down here.
+        const probe = document.createElement('select');
+        probe.className = 'form-input--mini';
+        probe.style.position = 'absolute';
+        probe.style.visibility = 'hidden';
+        probe.style.maxWidth = 'none';
+        probe.innerHTML = '<option>Home server</option>';
+        c.appendChild(probe);
+        const natural = Math.ceil(probe.getBoundingClientRect().width);
+        probe.remove();
+        const picker = document.getElementById('sync-transport');
+        const pickerWidth = Math.round(picker.getBoundingClientRect().width);
+        // The two numbers go in the result, not just the verdict: a clipped
+        // picker is a matter of a few pixels, and "false" alone says nothing
+        // about which way round it was.
+        t('thePickerFitsHomeServer',
+          pickerWidth >= natural ? 'wide enough' : 'too narrow: ' + pickerWidth + 'px of ' + natural + 'px',
+          'wide enough');
+
+        // Two commands in the Home server steps, each boxed, each with a button.
+        const copies = [...details.querySelectorAll('.setup-copy')];
+        t('theCommandsAreSetApartFromTheSentence', copies.length, 2);
+        t('andEachHasACopyButton', copies.every((p) => !!p.querySelector('.btn-copy')), true);
+        t('andTheFirstIsTheClone', copies[0].querySelector('code').textContent.trim(), 'git clone https://github.com/jaquesbody/sorted.git');
+        t('andTheSecondStartsTheHost', copies[1].querySelector('code').textContent.trim(), 'node sorted/tools/sync-host.mjs');
+        t('noCommandIsLeftAsBareCode', [...details.querySelectorAll('code')].every((el) => !!el.closest('.setup-copy')), true);
+        t('andTheStepsSayWhereNodeComesFrom', /nodejs\\.org/.test(details.textContent), true);
+        t('andGiveTheWindowsAnswerForGit', /git is not recognised|Git from git-scm\\.com/.test(details.textContent), true);
+        // The other thing that goes wrong, in the place it goes wrong: Node not
+        // installed, or too old for the module prefix the host uses.
+        t('andTheAnswerForNodeBeingMissingOrOld', /Cannot find module/.test(details.textContent), true);
+
+        // Copying. With a clipboard it writes to it; without one the command is
+        // selected and the button stops claiming it copied.
+        window.__copied = null;
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: { writeText: async (text) => { window.__copied = text; } }
+        });
+        copies[1].querySelector('.btn-copy').click();
+        await new Promise((r) => setTimeout(r, 80));
+        t('theCopyButtonCopiesTheCommandBesideIt', window.__copied, 'node sorted/tools/sync-host.mjs');
+
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
+        const copyBtn = copies[0].querySelector('.btn-copy');
+        copyBtn.click();
+        await new Promise((r) => setTimeout(r, 80));
+        t('andWithoutAClipboardItSelectsInstead', String(window.getSelection()).trim(), 'git clone https://github.com/jaquesbody/sorted.git');
+        t('andSaysThatIsWhatItDid', copyBtn.textContent.trim(), 'Select it');
+
+        // The folder routes ask for no terminal at all. That is the whole point of
+        // them, and a stray "node" in one would put the setup back where it was.
+        // A browser is not offered them, so the card is drawn for the phone here
+        // — the same stand-in the folder section above uses.
+        window.syncFolderPlugin = () => ({});
+        c = await draw({ transport: 'cloud', folderUri: '', folderName: '' });
+        const cloudSteps = c.querySelector('details.setup-steps');
+        t('theFolderRoutesAskForNoTerminal', /node|git |terminal/i.test(cloudSteps.textContent), false);
+        t('andHaveNothingToCopy', cloudSteps.querySelectorAll('.setup-copy').length, 0);
+        t('andTheCloudStepsNameTheDrivesTheUserNames', /Proton Drive/.test(cloudSteps.textContent), true);
+        c = await draw({ transport: 'syncthing' });
+        t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
+        window.syncFolderPlugin = realLookup;
+
+        // The placeholder has to say it is an example. The Tailscale one used to
+        // read 100.x.y.z, which people typed in literally.
+        await draw({ transport: 'lan' });
+        const lanHint = (document.getElementById('sync-url') || {}).placeholder || '';
+        t('theAddressPlaceholderSaysItIsAnExample', /^e\\.g\\. /.test(lanHint), true);
+        await draw({ transport: 'tailscale' });
+        const tsHint = (document.getElementById('sync-url') || {}).placeholder || '';
+        t('andTheTailscaleOneNoLongerSpellsOutXyz', /x\\.y\\.z/.test(tsHint), false);
+        t('andItIsAnExampleToo', /^e\\.g\\. /.test(tsHint), true);
+
+        delete navigator.clipboard;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('each setup command is boxed with its own Copy button, and says where it goes wrong',
+        stepsUi.detail.theCommandsAreSetApartFromTheSentence.pass
+        && stepsUi.detail.andEachHasACopyButton.pass
+        && stepsUi.detail.andTheFirstIsTheClone.pass
+        && stepsUi.detail.andTheSecondStartsTheHost.pass
+        && stepsUi.detail.noCommandIsLeftAsBareCode.pass
+        && stepsUi.detail.andTheStepsSayWhereNodeComesFrom.pass
+        && stepsUi.detail.andGiveTheWindowsAnswerForGit.pass
+        && stepsUi.detail.andTheAnswerForNodeBeingMissingOrOld.pass, stepsUi);
+      check('and Copy copies it — or selects it and says so where there is no clipboard',
+        stepsUi.detail.theCopyButtonCopiesTheCommandBesideIt.pass
+        && stepsUi.detail.andWithoutAClipboardItSelectsInstead.pass
+        && stepsUi.detail.andSaysThatIsWhatItDid.pass, stepsUi);
+      check('the folder routes ask for no terminal at all, which is the point of them',
+        stepsUi.detail.theFolderRoutesAskForNoTerminal.pass
+        && stepsUi.detail.andHaveNothingToCopy.pass
+        && stepsUi.detail.andTheCloudStepsNameTheDrivesTheUserNames.pass
+        && stepsUi.detail.andTheSyncthingStepsUseTheFolderButton.pass, stepsUi);
+      check('the address boxes show an example, and no longer spell out x.y.z',
+        stepsUi.detail.theAddressPlaceholderSaysItIsAnExample.pass
+        && stepsUi.detail.andTheTailscaleOneNoLongerSpellsOutXyz.pass
+        && stepsUi.detail.andItIsAnExampleToo.pass, stepsUi);
+      check('and the two faults in the card are gone: the rule under Sync now, and the clipped picker',
+        stepsUi.detail.noRuleUnderTheSyncNowButton.pass
+        && stepsUi.detail.thePickerFitsHomeServer.pass, stepsUi);
 
     console.log('\n# notifications: the plan, the memory, and the native route');
 

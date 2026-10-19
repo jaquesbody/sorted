@@ -56,7 +56,7 @@ const SYNC_TRANSPORTS = {
     available: true,
     blurb: 'An always-on machine on the same Wi-Fi',
     needsUrl: true,
-    urlHint: 'http://192.168.1.10:8787/sorted-snapshot.json'
+    urlHint: 'e.g. http://192.168.1.10:8787/sorted-snapshot.json'
   },
   // Not a different mechanism: the same one HTTP file, reached over Tailscale's
   // private network instead of the home Wi-Fi. The sync host runs exactly as it
@@ -68,7 +68,7 @@ const SYNC_TRANSPORTS = {
     available: true,
     blurb: 'The same file over your private network, from anywhere',
     needsUrl: true,
-    urlHint: 'http://100.x.y.z:8787/sorted-snapshot.json'
+    urlHint: 'e.g. http://100.101.102.103:8787/sorted-snapshot.json'
   },
   // A shared folder and nothing else. No server to leave running and no address
   // to type, which is the whole appeal: the folder is already there on both
@@ -87,7 +87,7 @@ const SYNC_TRANSPORTS = {
   cloud: {
     label: 'Cloud',
     available: true,
-    blurb: 'A folder in your own drive — Google Drive, Dropbox, OneDrive',
+    blurb: 'A folder in your own drive — Google Drive, Proton Drive, OneDrive',
     needsFolder: true
   }
 };
@@ -98,31 +98,90 @@ const SYNC_TRANSPORTS = {
 // nothing saying where the address comes from. "Paste an address" is only a step
 // if someone knows which address, and only that somebody can tell.
 //
-// The two marked not built list the steps they will take rather than pretending
-// otherwise — a blank option tells you nothing, and a wrong one costs an
-// afternoon.
+// Written to be followed by someone who has never opened a terminal, which is
+// where the first pass failed: it named the two things to install without saying
+// where from, and gave a command that only works from inside a folder nobody had
+// been told to stand in. The text below is the user's, with the gaps filled and
+// the two OS differences handled where they actually bite (Node must be
+// installed before the terminal is opened, and Git is not there on Windows).
+
+// A line inside a step, set below the line above it. "Install two things" is not
+// one sentence, and run together it read like one.
+function setupPart(html) {
+  return '<span class="setup-part">' + html + '</span>';
+}
+
+// A command, set apart from the sentence and given its own button.
+//
+// The button reads the command out of the <code> beside it rather than carrying
+// a second copy in an attribute: one place holds the text, so the two cannot
+// drift apart.
+//
+// <wbr> after each slash is where a long command is allowed to break. Without it
+// the browser has no break opportunity inside a URL and falls back to cutting a
+// word in half — "sorted.g" at the end of one line and "it" at the start of the
+// next, for the clone address. A <wbr> is not a character: the text, and so what
+// Copy puts on the clipboard, is exactly the command.
+function setupCommand(command) {
+  const wrappable = escapeHTML(command).replace(/\//g, '/<wbr>');
+  return '<span class="setup-copy"><code>' + wrappable + '</code>'
+    + '<button type="button" class="btn btn-ghost btn-copy"'
+    + ' onclick="copySetupCommand(this)">Copy</button></span>';
+}
+
+// The line under a command that says the one thing that goes wrong with it.
+function setupAside(html) {
+  return '<span class="setup-aside">' + html + '</span>';
+}
+
 const SYNC_SETUP_STEPS = {
   lan: [
-    'On the computer that stays on: you need <strong>Node</strong> installed, and the Sorted app folder — <code>git clone https://github.com/jaquesbody/sorted.git</code>.',
-    'In that folder, run <code>node tools/sync-host.mjs</code> and leave it running. This route needs that computer switched on and on the same Wi-Fi as this phone.',
-    'It prints an address for each network. Copy the one starting <code>192.168.</code> — the Wi-Fi one.',
-    'Paste it above and tap <strong>Sync now</strong>. If it cannot reach the host, the message says which part failed.'
+    'On a computer that stays on, and on the same Wi-Fi as this phone, install two things:'
+      + setupPart('<strong>Node.js</strong> — get it from <strong>nodejs.org</strong> and run the installer. It is the same download on Windows, Mac and Linux.')
+      + setupPart('<strong>The Sorted folder</strong> — open a <strong>new</strong> terminal (new, so it can see what you have just installed), paste this in and press enter:'
+        + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
+        + setupAside('If it says <strong>git</strong> is not recognised, install Git from git-scm.com first, then run it again.')),
+
+    'Start the sync host, in that same terminal:'
+      + setupCommand('node sorted/tools/sync-host.mjs')
+      + setupAside('Then leave it running — it is what this phone talks to. Ctrl-C stops it.'
+        + ' If it says <strong>node</strong> is not recognised, or <strong>Cannot find module</strong>, install the current Node.js from nodejs.org and try again.'),
+
+    'It prints an address for each network it can see. Copy the Wi-Fi one: the address starting <strong>192.168.</strong>',
+
+    'Paste it into the <strong>Address</strong> box above.',
+
+    'Tap <strong>Sync now</strong>. Done.'
   ],
   tailscale: [
-    'Install Tailscale on the computer that stays on, and on this phone, and sign in to both.',
-    'On the computer, run <code>node tools/sync-host.mjs</code> in the Sorted app folder and leave it running.',
-    'Open Tailscale on the computer and copy its IP — it starts <code>100.</code>',
-    'Paste <code>http://that-ip:8787/sorted-snapshot.json</code> above and tap <strong>Sync now</strong>.'
+    'Install and set up <strong>Tailscale</strong> on the computer that stays on and on this phone, sign in on both, and connect them.',
+
+    'On the computer, do <strong>steps 1 and 2 of Home server</strong> — install Node.js, get the Sorted folder, and start the sync host, leaving it running.',
+
+    'In Tailscale, find that computer\'s IP address. It starts with <strong>100.</strong>',
+
+    'Paste it into the <strong>Address</strong> box above like this, changing the example numbers for the ones you found:'
+      + setupPart('<code>http://100.101.102.103:8787/sorted-snapshot.json</code>'),
+
+    'Tap <strong>Sync now</strong>. Done.'
   ],
   syncthing: [
-    'Install <strong>Syncthing</strong> on this phone and on the other device, and pair them.',
-    'Pick one folder both of them keep in step — anything you like, it holds a single file.',
-    'Tap <strong>Choose folder</strong> above and pick that folder, then tap <strong>Sync now</strong>.'
+    'Install and set up <strong>Syncthing</strong> on the devices you want to connect, creating and then linking a specific <strong>Sorted</strong> folder.',
+
+    'Tap <strong>Choose folder</strong> above and locate that <strong>Sorted</strong> folder.',
+
+    'Tap <strong>Sync now</strong>.',
+
+    'Repeat step 2 on the other devices. Done.'
   ],
   cloud: [
-    'Install the drive you already use — <strong>Google Drive</strong>, <strong>Dropbox</strong>, <strong>OneDrive</strong> — and sign in.',
-    'Tap <strong>Choose folder</strong> above and pick a folder inside that drive. One folder, for the one file.',
-    'Tap <strong>Sync now</strong>. The file goes into your own drive and the drive carries it to the other device, where the same three steps bring it in.'
+    'Install and set up the drive you use — <strong>Google Drive</strong>, <strong>Proton Drive</strong>, <strong>OneDrive</strong> — and sign in.',
+
+    'Tap <strong>Choose folder</strong> above and locate a specific <strong>Sorted</strong> folder inside that drive.',
+
+    'Tap <strong>Sync now</strong>.',
+
+    'Repeat step 2 on the other devices. Done.'
   ]
 };
 

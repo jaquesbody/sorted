@@ -787,19 +787,16 @@ body {
    list rows had already drawn, which on the People card was two horizontal
    lines four pixels apart — the clearest possible sign of a divider that was
    doing nothing. The air is now the only separator. */
-/* What somebody actually does to set sync up, per transport. Its own block with
-   a rule above it, because unlike every other row in a settings card this one
-   genuinely is a separate thing: the rows are settings, this is instructions.
-   It is the one place on this screen where a horizontal line is the right call
-   \u2014 a reader needs to be able to stop reading settings and start reading
-   steps. */
+/* What somebody actually does to set sync up, per transport.
+   This block used to carry a rule above it, on the argument that the rows are
+   settings and this is instructions, so a reader needs to be told where settings
+   stop. On the screen the rule landed immediately under the Sync now button,
+   where it reads as a second thing rather than a divider: the button belongs to
+   the steps, and the rule cut it off from them. Taken out at the user's ask. The
+   air is kept — the gap is what separates the two without drawing a line. */
 .setup-steps {
-  /* Not the 16/14 it was. The gap between the Sync now button and this heading
-     read as an empty line — the two controls and the steps under them are one
-     block, not three. The rule stays; only the air above and below it shrinks. */
   margin-top: 6px;
   padding-top: 8px;
-  border-top: 1px solid var(--border);
 }
 
 /* The steps are a <details>, folded away unless the card has no address yet:
@@ -857,6 +854,53 @@ body {
      mid-address instead of wrapping. This breaks one only when it has to, and
      leaves every shorter command on its own line. */
   overflow-wrap: break-word;
+}
+
+/* A line inside a step, set below the line above it. "Install two things" is not
+   one sentence, and run together it read like one. */
+.setup-part {
+  display: block;
+  margin-top: 5px;
+}
+
+/* A command in the steps, boxed, with its own Copy button.
+   The command is the thing being read and the button is an aside beside it, so
+   the box takes the line and the button takes what it needs — the other way
+   round the command loses the room it needs to be read.
+   The box is smaller than the code samples elsewhere in the app (16px): these
+   are pasted, not read aloud, and the clone address is long enough to wrap to
+   three lines at the larger size. */
+.setup-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 0;
+}
+
+.setup-copy code {
+  flex: 1 1 auto;
+  /* Without this a flex item refuses to go below its content's width, so the
+     long command sets the row's width and the button is pushed off the card. */
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  font-size: var(--fs-sm);
+}
+
+.btn-copy {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  font-size: var(--fs-sm);
+}
+
+/* The one thing that goes wrong with the command above it, in the place it goes
+   wrong rather than in a paragraph at the end. */
+.setup-aside {
+  display: block;
+  margin-top: 5px;
+  font-size: var(--fs-sm);
 }
 
 .setting-row--add {
@@ -2200,6 +2244,15 @@ body {
   padding: 4px 10px;
   font-size: var(--fs-sm);
   margin-top: 4px;
+}
+
+/* The sync picker is the one mini picker whose widest option is two words —
+   "Home server" — and it has no switch beside it competing for the row, so it
+   gets the width that option needs. 116px was enough for "1 week before" and
+   clipped this one, because a native picker draws its own arrow inside the same
+   box. */
+.form-input--sync {
+  max-width: 152px;
 }
 
 /* A row that's off keeps its picker in place so the switch doesn't move under a

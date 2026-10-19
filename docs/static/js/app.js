@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.100.0';
+const APP_VERSION = '2.100.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1799,7 +1799,7 @@ function syncSettingsHtml() {
         <div class="setting-label">Sync</div>
       </div>
       <div class="setting-control">
-        <select class="form-input form-input--mini" id="sync-transport"
+        <select class="form-input form-input--mini form-input--sync" id="sync-transport"
                 aria-label="Where to sync to"
                 onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
       </div>
@@ -1896,6 +1896,44 @@ async function chooseSyncFolderFromSettings(btn) {
   }
   await renderPage();
   if (message) showToast(message, 6000);
+}
+
+// Copying one of the commands out of the setup steps.
+//
+// Two of them are long enough that typing either from a phone screen is the part
+// people get wrong, so each has a button. The clipboard API needs a secure
+// context and a page that is allowed to use it; where that is missing — and in a
+// WebView it sometimes is — the command is selected instead, which on a desktop
+// is one keystroke from the same thing and on a phone at least shows what to
+// copy. Either way the button says which happened, because a button that says
+// "Copy" and does nothing is how someone ends up pasting their last clipboard.
+async function copySetupCommand(btn) {
+  const code = btn && btn.parentElement ? btn.parentElement.querySelector('code') : null;
+  const command = code ? code.textContent.trim() : '';
+  if (!command) return;
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(command);
+      copied = true;
+    }
+  } catch (err) {
+    copied = false;
+  }
+  if (!copied && code) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (err) {
+      // Nothing to fall back to either; the button says so below.
+    }
+  }
+  const was = btn.textContent;
+  btn.textContent = copied ? 'Copied' : 'Select it';
+  setTimeout(() => { btn.textContent = was; }, 2000);
 }
 
 async function syncFromSettings(btn) {
