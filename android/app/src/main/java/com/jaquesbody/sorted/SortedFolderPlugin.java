@@ -106,6 +106,121 @@ public class SortedFolderPlugin extends Plugin {
     }
 
     /**
+     * An existing snapshot file, chosen through the system's Open list.
+     *
+     * The Cloud route uses a document rather than a folder because a folder
+     * tree only works with providers that publish a browseable tree through
+     * the picker. Google Drive and OneDrive do; Proton does not, which is
+     * exactly the "Proton appears in Save to but not in My Files" report. A
+     * document is a shape every provider in that list can answer.
+     *
+     * The type is a wildcard rather than application/json on purpose: providers
+     * disagree about what a .json file is, and hiding the file someone just
+     * saved is worse than showing a few extra ones. The content is validated
+     * when it is read.
+     */
+    @PluginMethod
+    public void pickFile(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*")
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(call, intent, "onFileResult");
+    }
+
+    /**
+     * A new snapshot file, created through the system's Save-to list.
+     *
+     * Creating it here, rather than asking someone to make an empty file in a
+     * file manager first, is what makes the first device and the second device
+     * the same two taps: Save new copy on one, Choose file on the other.
+     */
+    @PluginMethod
+    public void createFile(PluginCall call) {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(MIME_JSON)
+            .putExtra(Intent.EXTRA_TITLE, FILE_NAME)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        startActivityForResult(call, intent, "onFileResult");
+    }
+
+    @ActivityCallback
+    private void onFileResult(PluginCall call, ActivityResult result) {
+        if (call == null) return;
+        if (result.getResultCode() != Activity.RESULT_OK
+            || result.getData() == null
+            || result.getData().getData() == null) {
+            JSObject out = new JSObject();
+            out.put("cancelled", true);
+            call.resolve(out);
+            return;
+        }
+
+        Uri file = result.getData().getData();
+        int flags = result.getData().getFlags()
+            & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        try {
+            getContext().getContentResolver().takePersistableUriPermission(file, flags);
+        } catch (SecurityException ex) {
+            call.reject("Android would not let Sorted keep access to that file. Try another one.");
+            return;
+        }
+
+        JSObject out = new JSObject();
+        out.put("uri", file.toString());
+        out.put("name", displayName(file));
+        call.resolve(out);
+    }
+
+    /**
+     * The one document the Cloud route was pointed at.
+     *
+     * A file made by ACTION_CREATE_DOCUMENT is empty until the first sync writes
+     * to it, so an empty string is a value rather than a fault; the web layer
+     * treats it as "nothing there yet" and writes the first snapshot. A document
+     * that has been deleted or unmounted is the failure, and says so in words
+     * that tell someone to pick it again.
+     */
+    @PluginMethod
+    public void readFile(PluginCall call) {
+        Uri file = documentOrReject(call);
+        if (file == null) return;
+        JSObject out = new JSObject();
+        try {
+            out.put("exists", true);
+            out.put("data", readText(file));
+            call.resolve(out);
+        } catch (Exception ex) {
+            call.reject(readableFile(ex));
+        }
+    }
+
+    @PluginMethod
+    public void writeFile(PluginCall call) {
+        Uri file = documentOrReject(call);
+        if (file == null) return;
+        String data = call.getString("data");
+        if (data == null) {
+            call.reject("There is nothing to save.");
+            return;
+        }
+        try {
+            writeText(file, data);
+            JSObject out = new JSObject();
+            out.put("ok", true);
+            out.put("uri", file.toString());
+            call.resolve(out);
+        } catch (Exception ex) {
+            call.reject(readableFile(ex));
+        }
+    }
+
+    /**
      * The snapshot as text, or a flag saying there is not one yet.
      *
      * "No file" is the ordinary first-run answer rather than an error: the first
@@ -236,6 +351,20 @@ public class SortedFolderPlugin extends Plugin {
         return "the folder you chose";
     }
 
+    /** The document's own display name, for the row on the card. */
+    private String displayName(Uri file) {
+        try (Cursor cursor = getContext().getContentResolver()
+            .query(file, NAME_COLUMN, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                String name = cursor.getString(0);
+                if (name != null && !name.isEmpty()) return name;
+            }
+        } catch (Exception ignored) {
+            // The file was handed to us; the picker said what it was called.
+        }
+        return "the file you chose";
+    }
+
     private String readText(Uri file) throws IOException {
         InputStream in = getContext().getContentResolver().openInputStream(file);
         if (in == null) throw new IOException("that file could not be opened");
@@ -289,6 +418,15 @@ public class SortedFolderPlugin extends Plugin {
         return Uri.parse(uriText);
     }
 
+    private Uri documentOrReject(PluginCall call) {
+        String uriText = call.getString("uri");
+        if (uriText == null || uriText.isEmpty()) {
+            call.reject("No file has been chosen yet.");
+            return null;
+        }
+        return Uri.parse(uriText);
+    }
+
     /**
      * What went wrong, in words someone can act on. The two that actually happen
      * are a grant that has lapsed and a folder that has been deleted or
@@ -305,6 +443,19 @@ public class SortedFolderPlugin extends Plugin {
         String message = ex.getMessage();
         return message == null || message.isEmpty()
             ? "That folder could not be used."
+            : message;
+    }
+
+    private String readableFile(Exception ex) {
+        if (ex instanceof SecurityException) {
+            return "Sorted can no longer use that file. Choose it again.";
+        }
+        if (ex instanceof FileNotFoundException) {
+            return "That file is no longer there. Choose it again.";
+        }
+        String message = ex.getMessage();
+        return message == null || message.isEmpty()
+            ? "That file could not be used."
             : message;
     }
 }

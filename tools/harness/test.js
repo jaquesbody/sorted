@@ -5733,28 +5733,38 @@ async function runSuite(driverBase) {
         const out = {};
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
         localStorage.removeItem('sorted-sync-settings');
-        t('anEmptySettingDefaultsToLan', syncSettings().transport, 'lan');
-        t('anEmptySettingHasNoUrl', syncSettings().url, '');
+        t('anEmptySettingDefaultsToNetwork', syncSettings().transport, 'network');
+        t('anEmptySettingHasNoUrl', syncSettings().urlLan, '');
+        t('anEmptySettingHasNoTailscaleAddress', syncSettings().urlTailscale, '');
         t('autoIsOffUnlessAsked', syncSettings().auto, false);
         localStorage.setItem('sorted-sync-settings', 'not json at all');
-        t('aCorruptSettingDoesNotStopSettingsOpening', syncSettings().transport, 'lan');
+        t('aCorruptSettingDoesNotStopSettingsOpening', syncSettings().transport, 'network');
         localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'nonsense', url: '  http://x/y  ' }));
-        t('anUnknownTransportFallsBackToLan', syncSettings().transport, 'lan');
-        t('theUrlIsTrimmed', syncSettings().url, 'http://x/y');
+        t('anUnknownTransportFallsBackToNetwork', syncSettings().transport, 'network');
+        t('theUrlIsTrimmed', syncSettings().urlLan, 'http://x/y');
         setSyncSettings({ url: 'http://sync.test/sorted-snapshot.json' });
-        t('aPatchKeepsTheRest', syncSettings().transport, 'lan');
-        t('aPatchSetsItsOwnField', syncSettings().url, 'http://sync.test/sorted-snapshot.json');
+        t('aPatchKeepsTheRest', syncSettings().transport, 'network');
+        t('aPatchSetsItsOwnField', syncSettings().urlLan, 'http://sync.test/sorted-snapshot.json');
+
+        // The two routes that became one keep their addresses. A phone set up
+        // before the split is still set up after it.
+        localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-snapshot.json' }));
+        t('aHomeServerAddressBecomesTheWifiOne', syncSettings().transport, 'network');
+        t('andKeepsItsAddress', syncSettings().urlLan, 'http://192.168.1.10:8787/sorted-snapshot.json');
+        localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'tailscale', url: 'http://100.1.2.3:8787/sorted-snapshot.json' }));
+        t('aTailscaleAddressBecomesTheTailscaleOne', syncSettings().urlTailscale, 'http://100.1.2.3:8787/sorted-snapshot.json');
 
         // No address, or a transport that is not available yet, are both results
-        // rather than crashes.
-        setSyncSettings({ url: '' });
+        // rather than crashes. Both boxes are cleared: either one being filled
+        // is a configured Network route, which is the point of having two.
+        setSyncSettings({ urlLan: '', urlTailscale: '' });
         const noUrl = await syncNow();
         t('noAddressIsAReasonNotACrash', !!noUrl.error && noUrl.ok === false, true);
         setSyncSettings({ url: 'http://sync.test/sorted-snapshot.json' });
-        const realAvailable = SYNC_TRANSPORTS.lan.available;
-        SYNC_TRANSPORTS.lan.available = false;
+        const realAvailable = SYNC_TRANSPORTS.network.available;
+        SYNC_TRANSPORTS.network.available = false;
         const unavailable = await syncNow();
-        SYNC_TRANSPORTS.lan.available = realAvailable;
+        SYNC_TRANSPORTS.network.available = realAvailable;
         t('anUnavailableTransportIsAReasonNotACrash', !!unavailable.error && unavailable.ok === false, true);
 
         // A host that fails is reported as a failure, and says where.
@@ -5772,10 +5782,16 @@ async function runSuite(driverBase) {
         return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
       `);
       check('the settings fall back rather than refusing to open',
-        settings.detail.anEmptySettingDefaultsToLan.pass
+        settings.detail.anEmptySettingDefaultsToNetwork.pass
+        && settings.detail.anEmptySettingHasNoUrl.pass
+        && settings.detail.anEmptySettingHasNoTailscaleAddress.pass
         && settings.detail.aCorruptSettingDoesNotStopSettingsOpening.pass
-        && settings.detail.anUnknownTransportFallsBackToLan.pass
+        && settings.detail.anUnknownTransportFallsBackToNetwork.pass
         && settings.detail.theUrlIsTrimmed.pass, settings);
+      check('and the two address routes that became one keep their addresses',
+        settings.detail.aHomeServerAddressBecomesTheWifiOne.pass
+        && settings.detail.andKeepsItsAddress.pass
+        && settings.detail.aTailscaleAddressBecomesTheTailscaleOne.pass, settings);
       check('a patch keeps the rest of the settings',
         settings.detail.aPatchKeepsTheRest.pass && settings.detail.aPatchSetsItsOwnField.pass, settings);
       check('no address is a reason, not a crash',
@@ -5901,11 +5917,11 @@ async function runSuite(driverBase) {
         // and the steps folded away once that button can work.
         localStorage.removeItem('sorted-sync-backup');
         const draw = async (url) => {
-          setSyncSettings({ transport: 'lan', url: url });
+          setSyncSettings({ transport: 'network', urlLan: url, urlTailscale: '' });
           currentPage = 'settings'; await renderPage();
           await new Promise((r) => setTimeout(r, 400));
           const c = [...document.querySelectorAll('.report-card')]
-            .find((x) => /set this up/i.test(x.textContent) && /Address/.test(x.textContent));
+            .find((x) => /set this up/i.test(x.textContent) && /Wi-Fi/.test(x.textContent));
           return c;
         };
         const cardOf = (c) => ({
@@ -5933,14 +5949,14 @@ async function runSuite(driverBase) {
         // does — paste the address the host printed — leaves them looking at a
         // Sync now that will not press, with nothing saying why.
         await draw('');
-        const input = document.getElementById('sync-url');
+        const input = document.getElementById('sync-url-lan');
         input.value = 'http://192.168.1.10:8787/sorted-snapshot.json';
         input.dispatchEvent(new Event('change'));
         await new Promise((r) => setTimeout(r, 400));
         const after = cardOf([...document.querySelectorAll('.report-card')]
-          .find((x) => /set this up/i.test(x.textContent) && /Address/.test(x.textContent)));
+          .find((x) => /set this up/i.test(x.textContent) && /Wi-Fi/.test(x.textContent)));
         t('pastingAnAddressTurnsTheButtonOn', after.syncDisabled, false);
-        t('andTheAddressIsKept', syncSettings().url, 'http://192.168.1.10:8787/sorted-snapshot.json');
+        t('andTheAddressIsKept', syncSettings().urlLan, 'http://192.168.1.10:8787/sorted-snapshot.json');
 
         localStorage.removeItem('sorted-sync-settings');
         localStorage.removeItem('sorted-sync-backup');
@@ -6174,31 +6190,36 @@ async function runSuite(driverBase) {
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
         localStorage.removeItem('sorted-sync-settings');
 
-        setSyncSettings({ transport: 'lan', url: '' });
+        setSyncSettings({ transport: 'network', urlLan: '' });
         t('anAddressRouteWithoutAnAddressIsNotReady', syncConfigured(), false);
-        setSyncSettings({ url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        setSyncSettings({ urlLan: 'http://192.168.1.10:8787/sorted-snapshot.json' });
         t('anAddressRouteWithOneIsReady', syncConfigured(), true);
+        setSyncSettings({ urlLan: '', urlTailscale: 'http://100.1.2.3:8787/sorted-snapshot.json' });
+        t('andEitherBoxCounts', syncConfigured(), true);
 
-        setSyncSettings({ transport: 'cloud', url: '', folderUri: '', folderName: '' });
-        t('aFolderRouteWithoutAFolderIsNotReady', syncConfigured(), false);
-        setSyncSettings({ folderUri: 'content://drive/tree/Sorted', folderName: 'Sorted' });
-        t('butAChosenFolderIsSetUpEvenWithNoAddress', syncConfigured(), true);
+        setSyncSettings({ transport: 'cloud', urlLan: '', urlTailscale: '', fileUri: '', fileName: '' });
+        t('aFileRouteWithoutAFileIsNotReady', syncConfigured(), false);
+        setSyncSettings({ fileUri: 'content://drive/document/Sorted%2Fsorted-snapshot.json', fileName: 'sorted-snapshot.json' });
+        t('butAChosenFileIsSetUpEvenWithNoAddress', syncConfigured(), true);
 
-        setSyncSettings({ transport: 'syncthing', url: '', folderUri: 'content://sd/tree/Sorted' });
-        t('andThatIsTrueOnSyncthingToo', syncConfigured(), true);
+        setSyncSettings({ transport: 'syncthing', urlLan: '', urlTailscale: '', fileUri: '', folderUri: 'content://sd/tree/Sorted' });
+        t('andAChosenFolderIsTrueOnSyncthing', syncConfigured(), true);
 
         const say = (did, transport) => {
           setSyncSettings({ transport: transport });
           return syncResultMessage({ ok: true, did: did });
         };
-        t('aFolderPullNamesTheFolder', say('pulled', 'cloud'), 'Took the copy from the folder');
+        t('aFolderPullNamesTheFolder', say('pulled', 'syncthing'), 'Took the copy from the folder');
         t('aFolderPushNamesTheFolder', say('pushed', 'syncthing'), 'Put your data in the folder');
-        t('aFolderCreationNamesTheFolder', say('created', 'cloud'), 'Folder set up');
-        t('aServerPullNamesTheServer', say('pulled', 'lan'), 'Took data from your server');
-        t('aServerPushNamesTheServer', say('pushed', 'tailscale'), 'Sent your data');
-        t('aServerCreationNamesTheServer', say('created', 'lan'), 'Server set up');
+        t('aFolderCreationNamesTheFolder', say('created', 'syncthing'), 'Folder set up');
+        t('aFilePullNamesTheFile', say('pulled', 'cloud'), 'Took the copy from the file');
+        t('aFilePushNamesTheFile', say('pushed', 'cloud'), 'Put your data in the file');
+        t('aFileCreationNamesTheFile', say('created', 'cloud'), 'File set up');
+        t('aServerPullNamesTheServer', say('pulled', 'network'), 'Took data from your server');
+        t('aServerPushNamesTheServer', say('pushed', 'network'), 'Sent your data');
+        t('aServerCreationNamesTheServer', say('created', 'network'), 'Server set up');
         t('nothingToDoSaysTheSameThingEitherWay', say('none', 'cloud'), 'Already up to date');
-        setSyncSettings({ transport: 'lan' });
+        setSyncSettings({ transport: 'network' });
         t('aFailureKeepsItsOwnWording',
           syncResultMessage({ ok: false, error: 'No answer from http://192.168.1.10:8787.' }),
           'No answer from http://192.168.1.10:8787.');
@@ -6206,16 +6227,20 @@ async function runSuite(driverBase) {
         localStorage.removeItem('sorted-sync-settings');
         return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
       `);
-      check('a chosen folder counts as set up, so the dashboard arrow syncs instead of re-reading',
+      check('a chosen file or folder counts as set up, so the dashboard arrow syncs instead of re-reading',
         routeWording.detail.anAddressRouteWithoutAnAddressIsNotReady.pass
         && routeWording.detail.anAddressRouteWithOneIsReady.pass
-        && routeWording.detail.aFolderRouteWithoutAFolderIsNotReady.pass
-        && routeWording.detail.butAChosenFolderIsSetUpEvenWithNoAddress.pass
-        && routeWording.detail.andThatIsTrueOnSyncthingToo.pass, routeWording);
-      check('and the toast names the folder on a folder route and the server on an address route',
+        && routeWording.detail.andEitherBoxCounts.pass
+        && routeWording.detail.aFileRouteWithoutAFileIsNotReady.pass
+        && routeWording.detail.butAChosenFileIsSetUpEvenWithNoAddress.pass
+        && routeWording.detail.andAChosenFolderIsTrueOnSyncthing.pass, routeWording);
+      check('and the toast names the folder, the file or the server it actually came from',
         routeWording.detail.aFolderPullNamesTheFolder.pass
         && routeWording.detail.aFolderPushNamesTheFolder.pass
         && routeWording.detail.aFolderCreationNamesTheFolder.pass
+        && routeWording.detail.aFilePullNamesTheFile.pass
+        && routeWording.detail.aFilePushNamesTheFile.pass
+        && routeWording.detail.aFileCreationNamesTheFile.pass
         && routeWording.detail.aServerPullNamesTheServer.pass
         && routeWording.detail.aServerPushNamesTheServer.pass
         && routeWording.detail.aServerCreationNamesTheServer.pass
@@ -6233,12 +6258,19 @@ async function runSuite(driverBase) {
         const out = {};
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
         const realLookup = window.syncFolderPlugin;
+        const DOC_URI = 'content://com.proton.drive/document/sorted-snapshot.json';
+        const DOC_URI_2 = 'content://com.proton.drive/document/sorted-snapshot-2.json';
         window.__files = {};
+        window.__documents = {};
         window.__picked = null;
+        window.__pickedFile = null;
+        window.__createdFile = null;
         window.__forgot = [];
         window.__ops = [];
         const fake = () => ({
           pick: async () => (window.__picked || { cancelled: true }),
+          pickFile: async () => (window.__pickedFile || { cancelled: true }),
+          createFile: async () => (window.__createdFile || { cancelled: true }),
           read: async (o) => {
             window.__ops.push('read ' + o.uri);
             return Object.prototype.hasOwnProperty.call(window.__files, SYNC_FILE)
@@ -6248,6 +6280,17 @@ async function runSuite(driverBase) {
           write: async (o) => {
             window.__ops.push('write ' + o.uri);
             window.__files[SYNC_FILE] = o.data;
+            return { ok: true };
+          },
+          readFile: async (o) => {
+            window.__ops.push('readFile ' + o.uri);
+            return Object.prototype.hasOwnProperty.call(window.__documents, o.uri)
+              ? { exists: true, data: window.__documents[o.uri] }
+              : { exists: true, data: '' };
+          },
+          writeFile: async (o) => {
+            window.__ops.push('writeFile ' + o.uri);
+            window.__documents[o.uri] = o.data;
             return { ok: true };
           },
           forget: async (o) => { window.__forgot.push(o.uri); return { ok: true }; }
@@ -6261,34 +6304,50 @@ async function runSuite(driverBase) {
         };
         const labels = () => [...document.querySelectorAll('#sync-transport option')]
           .map((o) => o.textContent.trim());
+        const twoAddressBoxes = () => !!document.getElementById('sync-url-lan')
+          && !!document.getElementById('sync-url-tailscale');
 
-        // (a) A browser has no folder to read. So it is not offered one, rather
-        //     than offered one and told why it will not work.
+        // (a) A browser has no folder and no document picker. So it is offered
+        //     the one route it can do, and both ways to reach that host.
         window.syncFolderPlugin = () => null;
         localStorage.removeItem('sorted-sync-settings');
         localStorage.removeItem('sorted-sync-backup');
         let c = await draw();
-        t('aBrowserOffersOnlyTheTwoWithAnAddress', labels(), ['Home server', 'Tailscale']);
-        t('andDrawsAnAddressBox', !!document.getElementById('sync-url'), true);
+        t('aBrowserOffersOnlyNetwork', labels(), ['Network']);
+        t('andDrawsBothAddressBoxes', twoAddressBoxes(), true);
 
-        // (b) On the phone all four are there, and a folder route asks the one
-        //     question it has instead of the one it does not.
+        // (b) On the phone all three are there. A folder route asks the one
+        //     question it has; so does a file route; neither shows an address.
         window.syncFolderPlugin = fake;
-        setSyncSettings({ transport: 'cloud', url: '', folderUri: '', folderName: '' });
+        setSyncSettings({ transport: 'syncthing', urlLan: '', urlTailscale: '', folderUri: '', folderName: '', fileUri: '', fileName: '' });
         c = await draw();
-        t('thePhoneOffersAllFour', labels(), ['Home server', 'Tailscale', 'Syncthing', 'Cloud']);
-        t('aFolderRouteDrawsNoAddressBox', document.getElementById('sync-url') === null, true);
+        t('thePhoneOffersTheThreeRoutes', labels(), ['Syncthing', 'Cloud', 'Network']);
+        t('aFolderRouteDrawsNoAddressBox', document.getElementById('sync-url-lan') === null && document.getElementById('sync-url-tailscale') === null, true);
         t('andSaysWhatToDoInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
         t('andCannotSyncYet', c.querySelector('.btn-primary').disabled, true);
         t('andKeepsTheStepsThatAnswerItFolded', c.querySelector('details.setup-steps').open, false);
 
-        // (c) No folder, no sync — in words, rather than a request to nowhere.
         setSyncSettings({ transport: 'cloud' });
+        c = await draw();
+        t('aFileRouteDrawsNoAddressBox', document.getElementById('sync-url-lan') === null, true);
+        t('andAsksForAFile', (document.getElementById('sync-file') || {}).textContent.trim(), 'Choose file');
+        t('andOffersToSaveANewCopy', (document.getElementById('sync-file-new') || {}).textContent.trim(), 'Save new copy');
+        t('andCannotSyncYetEither', c.querySelector('.btn-primary').disabled, true);
+        t('andKeepsItsStepsFolded', c.querySelector('details.setup-steps').open, false);
+
+        // (c) No folder or no file is a reason, in words, rather than a request
+        //     to nowhere.
+        setSyncSettings({ transport: 'syncthing', folderUri: '' });
         const noFolder = await syncNow();
         t('syncRefusesWithoutAFolder', noFolder.error, 'No folder has been chosen yet.');
+        setSyncSettings({ transport: 'cloud', fileUri: '' });
+        const noFile = await syncNow();
+        t('andRefusesWithoutAFile', noFile.error, 'No file has been chosen yet.');
 
-        // (d) Choosing one is the whole setup. The picker answers, the card is
-        //     ready, and the steps fold away because the question is answered.
+        // (d) Choosing a folder is the whole Syncthing setup. The picker
+        //     answers, the card is ready, and the steps fold away because the
+        //     question is answered.
+        setSyncSettings({ transport: 'syncthing' });
         window.__picked = { uri: 'content://com.android.externalstorage.documents/tree/primary%3ASorted', name: 'Sorted' };
         await chooseSyncFolderFromSettings(null);
         c = await draw();
@@ -6298,7 +6357,7 @@ async function runSuite(driverBase) {
         t('andSyncCanRunNow', c.querySelector('.btn-primary').disabled, false);
         t('andTheStepsFoldAway', c.querySelector('details.setup-steps').open, false);
 
-        // (e) The same four outcomes as the server route, through a folder.
+        // (e) The same four outcomes as the address route, through a folder.
         window.__ops.length = 0;
         const created = await syncNow();
         t('theFirstPassCreatesTheFile', created.did, 'created');
@@ -6323,10 +6382,11 @@ async function runSuite(driverBase) {
 
         // (f) Changing folders lets go of the last one. Android holds only a
         //     handful of these grants per app, and that is how an app runs out.
-        const first = syncSettings().folderUri;
+        window.__forgot.length = 0;
+        const firstFolder = syncSettings().folderUri;
         window.__picked = { uri: 'content://com.android.externalstorage.documents/tree/primary%3ADownload%2FSynced', name: 'Download/Synced' };
         await chooseSyncFolderFromSettings(null);
-        t('changingTheFolderLetsGoOfTheLast', window.__forgot, [first]);
+        t('changingTheFolderLetsGoOfTheLast', window.__forgot, [firstFolder]);
         t('andKeepsTheNewOne', syncSettings().folderUri, window.__picked.uri);
         t('andNamesThatOneInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Download/Synced');
 
@@ -6340,22 +6400,80 @@ async function runSuite(driverBase) {
         t('aMissingFolderSaysSo', gone.error, 'That folder is no longer there. Choose it again.');
         t('andSaysItWasTheFolder', gone.where, 'folder');
 
+        // (h) The Cloud route is one document. Saving a new copy is the whole
+        //     setup on the first device; the picker hands back that document,
+        //     and the first sync writes into it because it starts empty.
+        window.syncFolderPlugin = fake;
+        setSyncSettings({ transport: 'cloud', fileUri: '', fileName: '' });
+        window.__createdFile = { uri: DOC_URI, name: 'sorted-snapshot.json' };
+        await chooseSyncFileFromSettings(null, true);
+        c = await draw();
+        t('theNewFileIsKept', syncSettings().fileUri, DOC_URI);
+        t('andNamedOnTheCard', /sorted-snapshot/.test(c.textContent), true);
+        t('andTheFileRowSaysItIsTheFile', (document.getElementById('sync-file-label') || {}).textContent.trim(), 'File');
+        t('andSyncCanRunNowWithAFile', c.querySelector('.btn-primary').disabled, false);
+        t('andTheCloudStepsFoldAway', c.querySelector('details.setup-steps').open, false);
+
+        window.__ops.length = 0;
+        const fileCreated = await syncNow();
+        t('theFirstFilePassCreatesTheFile', fileCreated.did, 'created');
+        t('andReadsTheFileThatWasChosen', window.__ops[0], 'readFile ' + DOC_URI);
+        t('andWritesThatSameFile', window.__ops.indexOf('writeFile ' + DOC_URI) >= 0, true);
+        const fileUnchanged = await syncNow();
+        t('anUnchangedFilePassSaysNone', fileUnchanged.did, 'none');
+        await addItem('spend', { title: 'Through a file', amount: 8, date: localISO(), category: 'Groceries' });
+        const filePushed = await syncNow();
+        t('aLocalChangePushesToTheFile', filePushed.did, 'pushed');
+        t('andTheFileCarriesIt',
+          JSON.parse(window.__documents[DOC_URI]).data.spend.some((r) => r.title === 'Through a file'), true);
+        window.__documents[DOC_URI] = JSON.stringify({
+          format: 1, deviceId: 'other',
+          updatedAt: new Date(Date.now() + 3600000).toISOString(),
+          data: { spend: [{ id: 'y', title: 'From the file side', amount: 4, date: '2026-09-06', category: 'Groceries' }] }
+        });
+        const filePulled = await syncNow();
+        t('aNewerDocumentPulls', filePulled.did, 'pulled');
+        t('andReplacesRatherThanMerging', (await getAll('spend')).map((r) => r.title).indexOf('From the file side') >= 0, true);
+
+        // (i) Changing the file lets go of the last grant, the same as a folder.
+        window.__forgot.length = 0;
+        const firstFile = syncSettings().fileUri;
+        window.__pickedFile = { uri: DOC_URI_2, name: 'sorted-snapshot-2.json' };
+        await chooseSyncFileFromSettings(null, false);
+        t('changingTheFileLetsGoOfTheLast', window.__forgot, [firstFile]);
+        t('andKeepsTheNewOneFile', syncSettings().fileUri, DOC_URI_2);
+
+        // (j) A document that has gone says so, and does not ask a host.
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async () => { throw new Error('That file is no longer there. Choose it again.'); }
+        });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI });
+        const fileGone = await syncNow();
+        t('aMissingFileSaysSo', fileGone.error, 'That file is no longer there. Choose it again.');
+        t('andSaysItWasTheFile', fileGone.where, 'file');
+
         window.syncFolderPlugin = realLookup;
         localStorage.removeItem('sorted-sync-settings');
         localStorage.removeItem('sorted-sync-backup');
         return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
       `);
-      check('a browser is not offered the folder routes at all, since it cannot read a folder',
-        folderRoute.detail.aBrowserOffersOnlyTheTwoWithAnAddress.pass
-        && folderRoute.detail.andDrawsAnAddressBox.pass, folderRoute);
-      check('and the phone is offered all four, with a folder asked for instead of an address',
-        folderRoute.detail.thePhoneOffersAllFour.pass
+      check('a browser is offered Network only, with both address boxes',
+        folderRoute.detail.aBrowserOffersOnlyNetwork.pass
+        && folderRoute.detail.andDrawsBothAddressBoxes.pass, folderRoute);
+      check('and the phone is offered all three: a folder, a file, and the addresses',
+        folderRoute.detail.thePhoneOffersTheThreeRoutes.pass
         && folderRoute.detail.aFolderRouteDrawsNoAddressBox.pass
         && folderRoute.detail.andSaysWhatToDoInstead.pass
         && folderRoute.detail.andCannotSyncYet.pass
         && folderRoute.detail.andKeepsTheStepsThatAnswerItFolded.pass
-        && folderRoute.detail.syncRefusesWithoutAFolder.pass, folderRoute);
-      check('choosing a folder is the whole setup, and the steps fold away once it is done',
+        && folderRoute.detail.aFileRouteDrawsNoAddressBox.pass
+        && folderRoute.detail.andAsksForAFile.pass
+        && folderRoute.detail.andOffersToSaveANewCopy.pass
+        && folderRoute.detail.andCannotSyncYetEither.pass
+        && folderRoute.detail.andKeepsItsStepsFolded.pass
+        && folderRoute.detail.syncRefusesWithoutAFolder.pass
+        && folderRoute.detail.andRefusesWithoutAFile.pass, folderRoute);
+      check('choosing a folder is the whole Syncthing setup, and the steps fold away once it is done',
         folderRoute.detail.theChosenFolderIsKept.pass
         && folderRoute.detail.andNamedOnTheCard.pass
         && folderRoute.detail.andTheRowStillSaysItIsTheFolder.pass
@@ -6376,6 +6494,26 @@ async function runSuite(driverBase) {
         && folderRoute.detail.andNamesThatOneInstead.pass
         && folderRoute.detail.aMissingFolderSaysSo.pass
         && folderRoute.detail.andSaysItWasTheFolder.pass, folderRoute);
+      check('saving a new Cloud file is the whole setup, and the file row says so',
+        folderRoute.detail.theNewFileIsKept.pass
+        && folderRoute.detail.andNamedOnTheCard.pass
+        && folderRoute.detail.andTheFileRowSaysItIsTheFile.pass
+        && folderRoute.detail.andSyncCanRunNowWithAFile.pass
+        && folderRoute.detail.andTheCloudStepsFoldAway.pass, folderRoute);
+      check('and a file syncs the same four outcomes: creates into the empty document, pushes, pulls',
+        folderRoute.detail.theFirstFilePassCreatesTheFile.pass
+        && folderRoute.detail.andReadsTheFileThatWasChosen.pass
+        && folderRoute.detail.andWritesThatSameFile.pass
+        && folderRoute.detail.anUnchangedFilePassSaysNone.pass
+        && folderRoute.detail.aLocalChangePushesToTheFile.pass
+        && folderRoute.detail.andTheFileCarriesIt.pass
+        && folderRoute.detail.aNewerDocumentPulls.pass
+        && folderRoute.detail.andReplacesRatherThanMerging.pass, folderRoute);
+      check('changing the Cloud file lets go of the last grant, and a file that has gone says so',
+        folderRoute.detail.changingTheFileLetsGoOfTheLast.pass
+        && folderRoute.detail.andKeepsTheNewOneFile.pass
+        && folderRoute.detail.aMissingFileSaysSo.pass
+        && folderRoute.detail.andSaysItWasTheFile.pass, folderRoute);
 
       // The file name is written down twice — once in sync.js, once in the Java
       // plugin that reads and writes it — and the two halves only meet if the two
@@ -6401,6 +6539,15 @@ async function runSuite(driverBase) {
         && registered.indexOf(javaPluginName + 'Plugin.class') >= 0,
         { jsPluginName: jsPluginName, javaPluginName: javaPluginName });
 
+      // Every method the card calls has to exist on the Java side. A missing one
+      // is not an error anywhere: Capacitor hands the page an object, the call
+      // rejects with "not implemented", and the card reads as a dead button.
+      const pluginMethods = ['pick', 'read', 'write', 'forget', 'pickFile', 'createFile', 'readFile', 'writeFile'];
+      const missingMethods = pluginMethods.filter(
+        (name) => !new RegExp('public void ' + name + '\\(PluginCall').test(folderSource));
+      check('and every plugin method the card calls exists on the phone side',
+        missingMethods, []);
+
       // 9. The steps themselves. The first pass named the two things to install
       //    without saying where from, and gave a command that only works from
       //    inside a folder the reader was never told to stand in. They now name
@@ -6421,7 +6568,7 @@ async function runSuite(driverBase) {
         localStorage.removeItem('sorted-sync-settings');
         localStorage.removeItem('sorted-sync-backup');
 
-        let c = await draw({ transport: 'lan', url: '', folderUri: '', folderName: '' });
+        let c = await draw({ transport: 'network', urlLan: '', urlTailscale: '', folderUri: '', folderName: '', fileUri: '', fileName: '' });
         const details = c.querySelector('details.setup-steps');
 
         // The rule that sat immediately under the Sync now button, cutting the
@@ -6436,7 +6583,7 @@ async function runSuite(driverBase) {
         probe.style.position = 'absolute';
         probe.style.visibility = 'hidden';
         probe.style.maxWidth = 'none';
-        probe.innerHTML = '<option>Home server</option>';
+        probe.innerHTML = '<option>Syncthing</option>';
         c.appendChild(probe);
         const natural = Math.ceil(probe.getBoundingClientRect().width);
         probe.remove();
@@ -6445,11 +6592,11 @@ async function runSuite(driverBase) {
         // The two numbers go in the result, not just the verdict: a clipped
         // picker is a matter of a few pixels, and "false" alone says nothing
         // about which way round it was.
-        t('thePickerFitsHomeServer',
+        t('thePickerFitsTheWidestOption',
           pickerWidth >= natural ? 'wide enough' : 'too narrow: ' + pickerWidth + 'px of ' + natural + 'px',
           'wide enough');
 
-        // Two commands in the Home server steps, each boxed, each with a button.
+        // Two commands in the Network steps, each boxed, each with a button.
         const copies = [...details.querySelectorAll('.setup-copy')];
         t('theCommandsAreSetApartFromTheSentence', copies.length, 2);
         t('andEachHasACopyButton', copies.every((p) => !!p.querySelector('.btn-copy')), true);
@@ -6498,54 +6645,53 @@ async function runSuite(driverBase) {
         t('andWithoutAClipboardItSelectsInstead', String(window.getSelection()).trim(), 'git clone https://github.com/jaquesbody/sorted.git');
         t('andSaysThatIsWhatItDid', copyBtn.textContent.trim(), 'Select it');
 
-        // The folder routes ask for no terminal at all. That is the whole point of
-        // them, and a stray "node" in one would put the setup back where it was.
-        // A browser is not offered them, so the card is drawn for the phone here
-        // — the same stand-in the folder section above uses.
+        // The folder and file routes ask for no terminal at all. That is the
+        // whole point of them, and a stray "node" in one would put the setup
+        // back where it was. A browser is not offered them, so the card is
+        // drawn for the phone here — the same stand-in the folder section uses.
         window.syncFolderPlugin = () => ({});
-        c = await draw({ transport: 'cloud', folderUri: '', folderName: '' });
+        c = await draw({ transport: 'cloud', fileUri: '', fileName: '' });
         const cloudSteps = c.querySelector('details.setup-steps');
-        t('theFolderRoutesAskForNoTerminal', /node|git |terminal/i.test(cloudSteps.textContent), false);
-        t('andHaveNothingToCopy', cloudSteps.querySelectorAll('.setup-copy').length, 0);
+        t('theFileRouteAsksForNoTerminal', /node|git |terminal/i.test(cloudSteps.textContent), false);
+        t('andHasNothingToCopy', cloudSteps.querySelectorAll('.setup-copy').length, 0);
         t('andTheCloudStepsNameTheDrivesTheUserNames', /Proton Drive/.test(cloudSteps.textContent), true);
-        t('andSayWhatToDoToTheFolder',
-          /Tap Choose folder above and then create\\/locate a specific Sorted folder inside that drive\\./
-            .test(cloudSteps.textContent), true);
+        t('andSayHowToMakeAndChooseTheFile',
+          /Save new copy/.test(cloudSteps.textContent) && /Choose file/.test(cloudSteps.textContent), true);
         c = await draw({ transport: 'syncthing' });
         t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
         window.syncFolderPlugin = realLookup;
 
-        // Tailscale carries its own setup rather than pointing at Home server's
-        // steps, which sent the reader back and forth between two lists.
-        const tsCard = await draw({ transport: 'tailscale' });
-        const tsSteps = tsCard.querySelector('details.setup-steps');
-        t('tailscaleCarriesItsOwnTwoCommands', tsSteps.querySelectorAll('.setup-copy').length, 2);
-        t('andSendsTheReaderNowhereElse', /steps 1 and 2|Home server steps/.test(tsSteps.textContent), false);
-        // The address there is the one thing that has to be built by hand rather
-        // than pasted, so the shape stays under the step: a Tailscale address is
-        // an IP with the port and the file's path after it.
+        // The two addresses live in one route, and its steps carry both ways to
+        // reach the same host rather than sending the reader to another list.
+        await draw({ transport: 'network', urlLan: 'http://192.168.1.10:8787/sorted-snapshot.json', urlTailscale: 'http://100.101.102.103:8787/sorted-snapshot.json' });
+        const netSteps = card().querySelector('details.setup-steps');
+        t('networkCarriesItsOwnTwoCommands', netSteps.querySelectorAll('.setup-copy').length, 2);
+        t('andSendsTheReaderNowhereElse', /steps 1 and 2|Home server steps/.test(netSteps.textContent), false);
+        // The Tailscale address is the one thing that has to be built by hand
+        // rather than pasted, so the shape stays under the step.
         t('andShowsTheAddressShapeToCopy',
-          /http:\\/\\/100\\.101\\.102\\.103:8787\\/sorted-snapshot\\.json/.test(tsSteps.textContent), true);
+          /http:\\/\\/100\\.101\\.102\\.103:8787\\/sorted-snapshot\\.json/.test(netSteps.textContent), true);
+        t('andBothAddressBoxesAreThere',
+          !!document.getElementById('sync-url-lan') && !!document.getElementById('sync-url-tailscale'), true);
 
         // No em dashes in the card, on any route. The user asked for them out of
         // the steps in as many words; the rest of the card is swept with them
         // because the same hand writes both.
         const dashed = [];
         window.syncFolderPlugin = () => ({});
-        for (const route of ['lan', 'tailscale', 'syncthing', 'cloud']) {
+        for (const route of ['syncthing', 'cloud', 'network']) {
           const rc = await draw({ transport: route });
           if (/—/.test(rc.textContent)) dashed.push(route);
         }
         t('andNoEmDashOnAnyRoute', dashed, []);
         window.syncFolderPlugin = realLookup;
 
-        // The placeholder has to say it is an example. The Tailscale one used to
-        // read 100.x.y.z, which people typed in literally.
-        await draw({ transport: 'lan' });
-        const lanHint = (document.getElementById('sync-url') || {}).placeholder || '';
+        // The placeholders have to say they are examples. The Tailscale one used
+        // to read 100.x.y.z, which people typed in literally.
+        await draw({ transport: 'network', urlLan: '', urlTailscale: '' });
+        const lanHint = (document.getElementById('sync-url-lan') || {}).placeholder || '';
         t('theAddressPlaceholderSaysItIsAnExample', /^e\\.g\\. /.test(lanHint), true);
-        await draw({ transport: 'tailscale' });
-        const tsHint = (document.getElementById('sync-url') || {}).placeholder || '';
+        const tsHint = (document.getElementById('sync-url-tailscale') || {}).placeholder || '';
         t('andTheTailscaleOneNoLongerSpellsOutXyz', /x\\.y\\.z/.test(tsHint), false);
         t('andItIsAnExampleToo', /^e\\.g\\. /.test(tsHint), true);
 
@@ -6570,16 +6716,17 @@ async function runSuite(driverBase) {
         stepsUi.detail.theCopyButtonCopiesTheCommandBesideIt.pass
         && stepsUi.detail.andWithoutAClipboardItSelectsInstead.pass
         && stepsUi.detail.andSaysThatIsWhatItDid.pass, stepsUi);
-      check('the folder routes ask for no terminal at all, which is the point of them',
-        stepsUi.detail.theFolderRoutesAskForNoTerminal.pass
-        && stepsUi.detail.andHaveNothingToCopy.pass
+      check('the folder and file routes ask for no terminal at all, which is the point of them',
+        stepsUi.detail.theFileRouteAsksForNoTerminal.pass
+        && stepsUi.detail.andHasNothingToCopy.pass
         && stepsUi.detail.andTheCloudStepsNameTheDrivesTheUserNames.pass
-        && stepsUi.detail.andSayWhatToDoToTheFolder.pass
+        && stepsUi.detail.andSayHowToMakeAndChooseTheFile.pass
         && stepsUi.detail.andTheSyncthingStepsUseTheFolderButton.pass, stepsUi);
-      check('and Tailscale\'s steps stand on their own, and no route uses an em dash',
-        stepsUi.detail.tailscaleCarriesItsOwnTwoCommands.pass
+      check('and the Network steps carry both addresses and stand on their own, with no em dash',
+        stepsUi.detail.networkCarriesItsOwnTwoCommands.pass
         && stepsUi.detail.andSendsTheReaderNowhereElse.pass
         && stepsUi.detail.andShowsTheAddressShapeToCopy.pass
+        && stepsUi.detail.andBothAddressBoxesAreThere.pass
         && stepsUi.detail.andNoEmDashOnAnyRoute.pass, stepsUi);
       check('the address boxes show an example, and no longer spell out x.y.z',
         stepsUi.detail.theAddressPlaceholderSaysItIsAnExample.pass
@@ -6587,7 +6734,7 @@ async function runSuite(driverBase) {
         && stepsUi.detail.andItIsAnExampleToo.pass, stepsUi);
       check('and the two faults in the card are gone: the rule under Sync now, and the clipped picker',
         stepsUi.detail.noRuleUnderTheSyncNowButton.pass
-        && stepsUi.detail.thePickerFitsHomeServer.pass, stepsUi);
+        && stepsUi.detail.thePickerFitsTheWidestOption.pass, stepsUi);
 
     console.log('\n# notifications: the plan, the memory, and the native route');
 

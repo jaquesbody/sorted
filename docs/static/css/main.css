@@ -910,6 +910,22 @@ body {
   font-size: var(--fs-sm);
 }
 
+/* An address shown as an example rather than offered as a command. It looks
+   like the boxes above it so it reads as something to type, but it has no Copy
+   button: part of it, the IP, is the reader's own. Kept as a span rather than a
+   `code` because every `code` in the steps is a command, and the suite holds
+   that line. */
+.setup-example {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-surface);
+  font-family: monospace;
+  font-size: var(--fs-sm);
+}
+
 /* The one thing that goes wrong with the command above it, in the place it goes
    wrong rather than in a paragraph at the end. */
 .setup-aside {
@@ -2261,12 +2277,14 @@ body {
   margin-top: 4px;
 }
 
-/* The sync picker is the one mini picker whose widest option is two words —
-   "Home server" — and it has no switch beside it competing for the row, so it
-   gets the width that option needs. 116px was enough for "1 week before" and
-   clipped this one, because a native picker draws its own arrow inside the same
-   box. */
+/* The sync picker is the one mini picker whose widest option is a single long
+   word — "Syncthing" — and it has no switch beside it competing for the row. A
+   select's auto width follows the option currently shown, so choosing "Network"
+   pulled the box in below the width "Syncthing" needs and clipped it. A fixed
+   width at that longest option's measure keeps the box still while the choice
+   changes, and keeps every option whole. */
 .form-input--sync {
+  width: 116px;
   max-width: 152px;
 }
 

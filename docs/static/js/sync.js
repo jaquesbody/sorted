@@ -33,62 +33,44 @@ const SYNC_DEVICE_KEY = 'sorted-sync-device';
 const SYNC_BACKUP_KEY = 'sorted-sync-backup';
 const SYNC_TOUCHED_KEY = 'sorted-sync-touched';
 
-// Which transports the app knows about.
+// Which transports the app knows about. Three, not four.
 //
-//  - lan         an always-on machine on the same Wi-Fi, reachable over HTTP
-//  - tailscale   the same HTTP file over Tailscale, so it works off the home
-//                network without exposing anything to the internet
+// The first pass listed the mechanism twice for each half: "Home server" and
+// "Tailscale" were the same HTTP file on two networks, and "Syncthing" and
+// "Cloud" were the same chosen thing carrying the file. Four names for two
+// mechanisms, and two of the four needed a computer left running. They are now
+// the three the user asked for:
+//
 //  - syncthing   a folder something else already keeps in step
-//  - cloud       a folder inside the person's own drive, which the same picker
-//                reaches because the drive app publishes it as a place to save
+//  - cloud       one file in the person's own drive
+//  - network     a computer that serves the file, on Wi-Fi or Tailscale
 //
-// The last two are the same mechanism — a folder the person chooses, in which
-// Sorted reads and writes one file — and they are listed separately because the
-// two things they are called are how people find their own route. What is on the
-// other end is not Sorted's business and is never asked about.
+// The last one holds both addresses because they are the same file on the same
+// host, reached two ways. Trying the Wi-Fi one and then the Tailscale one is not
+// a conflict: whichever answers is the one the write goes back to.
 //
-// `needsUrl` and `needsFolder` are what the card lays itself out from, so a
-// route that has no address cannot show an address box and leave someone
-// wondering what to type in it.
+// `needsUrl`, `needsFolder` and `needsFile` are what the card lays itself out
+// from, so a route that has no address cannot show an address box and leave
+// someone wondering what to type in it.
 const SYNC_TRANSPORTS = {
-  lan: {
-    label: 'Home server',
-    available: true,
-    blurb: 'An always-on machine on the same Wi-Fi',
-    needsUrl: true,
-    urlHint: 'e.g. http://192.168.1.10:8787/sorted-snapshot.json'
-  },
-  // Not a different mechanism: the same one HTTP file, reached over Tailscale's
-  // private network instead of the home Wi-Fi. The sync host runs exactly as it
-  // does for LAN, and the address is the machine's Tailscale IP, which is stable
-  // wherever the machine is. So it works from a phone that is not at home, with
-  // nothing exposed to the internet and no port forwarding.
-  tailscale: {
-    label: 'Tailscale',
-    available: true,
-    blurb: 'The same file over your private network, from anywhere',
-    needsUrl: true,
-    urlHint: 'e.g. http://100.101.102.103:8787/sorted-snapshot.json'
-  },
-  // A shared folder and nothing else. No server to leave running and no address
-  // to type, which is the whole appeal: the folder is already there on both
-  // machines because something else is keeping it there, and Sorted reads and
-  // writes the same one file inside it.
   syncthing: {
     label: 'Syncthing',
     available: true,
     blurb: 'A folder you already sync, no server to keep running',
     needsFolder: true
   },
-  // The same folder, living in a drive the person already pays for. Sorted has
-  // no account and no server of its own here: the file goes into their own
-  // drive, through their own drive app, which is the only reason this is not a
-  // contradiction of "no cloud, no login".
   cloud: {
     label: 'Cloud',
     available: true,
-    blurb: 'A folder in your own drive: Google Drive, Proton Drive, OneDrive',
-    needsFolder: true
+    blurb: 'One file in your own drive: Google Drive, Proton Drive, OneDrive',
+    needsFile: true
+  },
+  network: {
+    label: 'Network',
+    available: true,
+    blurb: 'A computer on your Wi-Fi, or the same file over Tailscale',
+    needsUrl: true,
+    urlHint: 'e.g. http://192.168.1.10:8787/sorted-snapshot.json'
   }
 };
 
@@ -142,7 +124,7 @@ function setupAside(html) {
 }
 
 const SYNC_SETUP_STEPS = {
-  lan: [
+  network: [
     'On a computer that stays on, and on the same Wi-Fi as this phone, install two things:'
       + setupPart('<strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.')
       + setupPart('<strong>The Sorted folder</strong>: open a <strong>new</strong> terminal, paste this in and press enter:'
@@ -153,29 +135,10 @@ const SYNC_SETUP_STEPS = {
       + setupCommand('node sorted/tools/sync-host.mjs')
       + setupAside('Then leave it running.'),
 
-    'It prints an address for each network it can see. Copy the Wi-Fi one: the address starting <strong>192.168.</strong>',
+    'It prints an address for each network it can see. Copy the Wi-Fi one, the address starting <strong>192.168.</strong>, into the <strong>Wi-Fi</strong> box above.',
 
-    'Paste it into the <strong>Address</strong> box above.',
-
-    'Tap <strong>Sync now</strong>. Done.'
-  ],
-  tailscale: [
-    'Install and set up <strong>Tailscale</strong> on the computer that stays on and on this phone, sign in on both, and connect them.',
-
-    'On that computer, install two things:'
-      + setupPart('<strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer.')
-      + setupPart('<strong>The Sorted folder</strong>: open a <strong>new</strong> terminal, paste this in and press enter:'
-        + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
-        + setupAside('If it says <strong>git</strong> is not recognised, install Git from <a href="https://git-scm.com/install/" target="_blank" rel="noopener">git-scm.com</a> first, then run it again.')),
-
-    'Start the sync host, in that same terminal:'
-      + setupCommand('node sorted/tools/sync-host.mjs')
-      + setupAside('Then leave it running.'),
-
-    'In Tailscale, find that computer\'s IP address. It starts with <strong>100.</strong>',
-
-    'Paste it into the <strong>Address</strong> box above:'
-      + setupPart('<code>http://100.101.102.103:8787/<wbr>sorted-snapshot.json</code>'),
+    'To sync away from home, install and set up <strong>Tailscale</strong> on the computer and this phone, sign in on both, and connect them. Then copy that computer\'s address starting <strong>100.</strong> into the <strong>Tailscale</strong> box above.'
+      + setupPart('<span class="setup-example">http://100.101.102.103:8787/<wbr>sorted-snapshot.json</span>'),
 
     'Tap <strong>Sync now</strong>. Done.'
   ],
@@ -191,11 +154,11 @@ const SYNC_SETUP_STEPS = {
   cloud: [
     'Install and set up the drive you use: <strong>Google Drive</strong>, <strong>Proton Drive</strong> or <strong>OneDrive</strong>, and sign in.',
 
-    'Tap <strong>Choose folder</strong> above and then create/locate a specific <strong>Sorted</strong> folder inside that drive.',
+    'On the first device, tap <strong>Save new copy</strong> above and save <strong>sorted-snapshot.json</strong> into that drive.',
 
     'Tap <strong>Sync now</strong>.',
 
-    'Repeat step 2 on the other devices. Done.'
+    'On the other devices, tap <strong>Choose file</strong> above and pick that same file, then tap <strong>Sync now</strong>. Done.'
   ]
 };
 
@@ -208,23 +171,60 @@ function syncSettings() {
     stored = null;
   }
   const set = stored && typeof stored === 'object' ? stored : {};
-  const transport = SYNC_TRANSPORTS[set.transport] ? set.transport : 'lan';
+
+  // Two routes became one, and the old names have to keep working. A phone that
+  // was set up on "Home server" keeps its address in the Wi-Fi box; one set up
+  // on "Tailscale" keeps its address in the Tailscale box. A setting written
+  // before the split has only `url`, and it was the Wi-Fi one by default.
+  const legacy = set.transport;
+  let transport = legacy === 'lan' || legacy === 'tailscale' ? 'network' : legacy;
+  if (!SYNC_TRANSPORTS[transport]) transport = 'network';
+
+  let urlLan = typeof set.urlLan === 'string' ? set.urlLan.trim() : '';
+  let urlTailscale = typeof set.urlTailscale === 'string' ? set.urlTailscale.trim() : '';
+  const oldUrl = typeof set.url === 'string' ? set.url.trim() : '';
+  if (legacy === 'lan' && !urlLan) urlLan = oldUrl;
+  else if (legacy === 'tailscale' && !urlTailscale) urlTailscale = oldUrl;
+  else if (legacy !== 'lan' && legacy !== 'tailscale' && !urlLan && !urlTailscale) urlLan = oldUrl;
+
   return {
     transport: transport,
-    url: typeof set.url === 'string' ? set.url.trim() : '',
+    urlLan: urlLan,
+    urlTailscale: urlTailscale,
+    // Kept for callers and settings written before the addresses were split.
+    // New code asks for one of the two boxes, never this.
+    url: urlLan || urlTailscale,
     // The folder route's whole setting: where the picker put us, and what to
-    // call it on screen. Kept beside the address rather than instead of it, so
-    // switching between a server and a folder does not lose either answer.
+    // call it on screen. Kept beside the addresses rather than instead of them,
+    // so switching routes does not lose an answer.
     folderUri: typeof set.folderUri === 'string' ? set.folderUri : '',
     folderName: typeof set.folderName === 'string' ? set.folderName : '',
+    // The Cloud route's setting, and a different shape from a folder on purpose:
+    // the system's Save-to picker creates one document and hands back that
+    // document's URI, which is what Proton and others expose. A folder tree
+    // needs a provider that publishes a browseable tree, and Proton does not.
+    fileUri: typeof set.fileUri === 'string' ? set.fileUri : '',
+    fileName: typeof set.fileName === 'string' ? set.fileName : '',
     auto: set.auto === true
   };
 }
 
 function setSyncSettings(patch) {
-  const next = Object.assign(syncSettings(), patch || {});
+  const asked = patch || {};
+  const next = Object.assign({}, syncSettings(), asked);
+  // A caller from before the addresses were split passes one `url` and, often,
+  // one of the old transport names. That address is mapped to the box its
+  // transport named, and only when the patch does not also carry a box of its
+  // own. Reading the patch rather than the merged settings matters: merging has
+  // already copied the patch over the fields this compares.
+  if (typeof asked.url === 'string'
+      && typeof asked.urlLan !== 'string' && typeof asked.urlTailscale !== 'string') {
+    if (asked.transport === 'tailscale') next.urlTailscale = asked.url.trim();
+    else next.urlLan = asked.url.trim();
+  }
+  delete next.url;
   localStorage.setItem(SYNC_SETTINGS_KEY, JSON.stringify(next));
-  return next;
+  return syncSettings();
 }
 
 // A stable id for this install, so a snapshot can say where it came from. Not
@@ -266,7 +266,18 @@ let syncApplying = false;
 // to push it back.
 function syncTouch() {
   if (syncApplying) return;
-  localStorage.setItem(SYNC_TOUCHED_KEY, syncNowStamp());
+  // A stamp never moves backwards, and a change always moves it forwards.
+  //
+  // The ordinary case is "now". The case that matters is a copy pulled from a
+  // device whose clock is ahead: the local stamp then sits in the future, and
+  // writing "now" over it would make the next real change look older than the
+  // copy it was made on top of, so the next sync would pull that copy back over
+  // the change. One millisecond past the stamp already here is enough to say
+  // "newer than the thing I was made from" without inventing a wider gap.
+  const previous = Date.parse(localStorage.getItem(SYNC_TOUCHED_KEY) || '');
+  const now = Date.now();
+  const next = Number.isFinite(previous) && previous >= now ? previous + 1 : now;
+  localStorage.setItem(SYNC_TOUCHED_KEY, new Date(next).toISOString());
 }
 
 function syncDataStamp(data) {
@@ -469,11 +480,23 @@ function syncFolderHere() {
   return !!syncFolderPlugin();
 }
 
-// What "ready to sync" means for a route: an address for the two that have one,
-// a folder for the two that do not.
+// What "ready to sync" means for a route: an address it can try, a folder, or
+// a file. One question per mechanism, asked of the setting that mechanism
+// actually uses, so the wrong one's absence never reads as "not set up".
 function syncRouteReady(transport, settings) {
   if (!transport || !transport.available) return false;
-  return transport.needsFolder ? !!settings.folderUri : !!settings.url;
+  if (transport.needsFolder) return !!settings.folderUri;
+  if (transport.needsFile) return !!settings.fileUri;
+  return !!(settings.urlLan || settings.urlTailscale);
+}
+
+// The addresses a Network route will try, in order. Wi-Fi first, because it is
+// the one that works at home with nothing else running, then Tailscale, which
+// works anywhere the tailnet is up. Both point at the same file on the same
+// host, so trying one after the other is a fallback, not a conflict.
+function syncAddresses(settings) {
+  const s = settings || syncSettings();
+  return [s.urlLan, s.urlTailscale].filter((url) => !!url);
 }
 
 // Reading a folder the person chose. "No file" is the ordinary first-run answer
@@ -495,6 +518,37 @@ async function folderWriteSnapshot(uri, snapshot) {
   const plugin = syncFolderPlugin();
   if (!plugin) throw new Error('Syncing to a folder needs the phone app.');
   await plugin.write({ uri: uri, data: JSON.stringify(snapshot) });
+  return true;
+}
+
+// The Cloud route, which is one document rather than a folder.
+//
+// The distinction is not cosmetic. A folder tree works only with a provider
+// that publishes a browseable tree through the system picker: Google Drive and
+// OneDrive do, Proton does not. A single document is created by the system's
+// Save-to list and read back by its Open list, both of which Proton appears in.
+//
+// A document created by ACTION_CREATE_DOCUMENT is empty until something is
+// written to it, so empty is the ordinary first-run answer here rather than a
+// corrupt file.
+async function fileReadSnapshot(uri) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) throw new Error('Syncing to a file needs the phone app.');
+  const res = await plugin.readFile({ uri: uri });
+  if (!res || !res.exists) return null;
+  if (!String(res.data || '').trim()) return null;
+  let parsed;
+  try { parsed = JSON.parse(res.data); } catch (err) {
+    throw new Error("That file isn't a Sorted snapshot.");
+  }
+  if (!isSyncSnapshot(parsed)) throw new Error("That file isn't a Sorted snapshot.");
+  return parsed;
+}
+
+async function fileWriteSnapshot(uri, snapshot) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) throw new Error('Syncing to a file needs the phone app.');
+  await plugin.writeFile({ uri: uri, data: JSON.stringify(snapshot) });
   return true;
 }
 
@@ -529,13 +583,7 @@ function syncReachMessage(url, err) {
 //
 // There is no button for this any more. Adding one made the card longer for
 // everybody to answer a question only a failure asks, so the failure asks it.
-async function syncTestAddress() {
-  const settings = syncSettings();
-  const transport = SYNC_TRANSPORTS[settings.transport];
-  if (!transport || !transport.available) {
-    return { state: 'unavailable', message: 'That sync option is not available yet.' };
-  }
-  const url = settings.url;
+async function syncTestAddressAt(url) {
   if (!url) return { state: 'empty', message: 'Put the address in first.' };
   const base = syncHostBase(url);
   if (!base) {
@@ -565,6 +613,47 @@ async function syncTestAddress() {
   return { state: 'ready-empty', message: 'The host is running, with nothing in its folder yet. Sync now puts your data there.' };
 }
 
+// The Network route has two addresses and either may be the one that answers,
+// so one failure has to describe both. A specific answer still beats "nothing
+// answered": it is the one that says what to fix.
+async function syncTestAddress() {
+  const settings = syncSettings();
+  const transport = SYNC_TRANSPORTS[settings.transport];
+  if (!transport || !transport.available) {
+    return { state: 'unavailable', message: 'That sync option is not available yet.' };
+  }
+  if (!transport.needsUrl) {
+    return { state: 'unavailable', message: 'That sync option does not use an address.' };
+  }
+  const urls = syncAddresses(settings);
+  if (!urls.length) return { state: 'empty', message: 'Put the address in first.' };
+  const results = [];
+  for (const url of urls) results.push(await syncTestAddressAt(url));
+  return results.find((one) => one.state !== 'unreachable' && one.state !== 'unavailable')
+    || results[0];
+}
+
+// Both addresses failed to serve the file. Ask each one why, then say the most
+// useful thing: a host that is up but serving the wrong path is a different
+// problem from a machine that is not answering at all.
+async function syncNetworkFailure(attempts) {
+  const results = [];
+  for (const attempt of attempts) {
+    results.push({ url: attempt.url, found: await syncTestAddressAt(attempt.url) });
+  }
+  const up = results.find((r) => r.found.state === 'ready-with-file' || r.found.state === 'ready-empty');
+  if (up) {
+    return 'The host is running at ' + (syncHostBase(up.url) || up.url)
+      + ', but it did not serve that file. Try Sync now again.';
+  }
+  const specific = results.find((r) => r.found.state === 'not-the-host'
+    || r.found.state === 'wrong-path' || r.found.state === 'malformed');
+  if (specific) return specific.found.message;
+  if (results.length === 1) return results[0].found.message;
+  const names = attempts.map((a) => syncHostBase(a.url) || a.url);
+  return 'No answer from ' + names.join(' or ') + '. Is the host running, and can this device reach it?';
+}
+
 // ---------------------------------------------------------------- syncing
 
 // One pass. Reports what it did rather than throwing on the ordinary outcomes,
@@ -575,50 +664,73 @@ async function syncNow() {
   if (!transport || !transport.available) {
     return { ok: false, error: 'That sync option is not available yet.' };
   }
-  // A route that reads a folder has no address, and a route that fetches an
-  // address has no folder. Asking each for the setting it actually uses is what
-  // stops the wrong one's absence reading as "not set up".
+  // One question per mechanism, asked of the setting that mechanism actually
+  // uses, so the wrong one's absence never reads as "not set up".
   const byFolder = !!transport.needsFolder;
+  const byFile = !!transport.needsFile;
   if (byFolder && !settings.folderUri) {
     return { ok: false, error: 'No folder has been chosen yet.' };
   }
-  if (!byFolder && !settings.url) {
+  if (byFile && !settings.fileUri) {
+    return { ok: false, error: 'No file has been chosen yet.' };
+  }
+  if (!byFolder && !byFile && !syncAddresses(settings).length) {
     return { ok: false, error: 'No address set for the sync.' };
   }
 
-  const readRemote = byFolder
-    ? () => folderReadSnapshot(settings.folderUri)
-    : () => readSyncSnapshot(settings.url);
-  const writeRemote = byFolder
-    ? (snapshot) => folderWriteSnapshot(settings.folderUri, snapshot)
-    : (snapshot) => writeSyncSnapshot(settings.url, snapshot);
-
   let remote = null;
-  try {
-    remote = await readRemote();
-  } catch (err) {
-    const detail = String((err && err.message) || err);
-    // A folder says what went wrong in the plugin's own words — a grant that has
-    // lapsed, a folder that has been deleted or unmounted — and asking again
-    // would only add jargon to a sentence that is already actionable. It is the
-    // HTTP route that arrives here as "Failed to fetch": the browser's wording,
-    // the same for a dead machine, a wrong network and a refused request, so
-    // that one asks the host itself before reporting anything. A failure is rare
-    // and the answer is what makes it fixable, so the extra round trip is worth
-    // it; the probe gives up after six seconds either way.
-    if (byFolder) {
+  let writeRemote = null;
+
+  if (byFolder) {
+    writeRemote = (snapshot) => folderWriteSnapshot(settings.folderUri, snapshot);
+    try {
+      remote = await folderReadSnapshot(settings.folderUri);
+    } catch (err) {
+      const detail = String((err && err.message) || err);
       return { ok: false, error: detail, where: 'folder', detail: detail };
     }
-    let message = syncReachMessage(settings.url, err);
-    if (message !== detail) {
-      const found = await syncTestAddress();
-      message = found.state === 'ready-with-file' || found.state === 'ready-empty'
-        // It answered, so the host is up and the file is the problem, which is
-        // not a state any of the four messages describes.
-        ? 'The host is running at ' + (syncHostBase(settings.url) || settings.url) + ', but it did not serve that file. Try Sync now again.'
-        : found.message;
+  } else if (byFile) {
+    writeRemote = (snapshot) => fileWriteSnapshot(settings.fileUri, snapshot);
+    try {
+      remote = await fileReadSnapshot(settings.fileUri);
+    } catch (err) {
+      const detail = String((err && err.message) || err);
+      return { ok: false, error: detail, where: 'file', detail: detail };
     }
-    return { ok: false, error: message, where: 'host', detail: detail };
+  } else {
+    // Wi-Fi first, then Tailscale. A file found at either is the file; if
+    // neither has one, the first address that answered is where the first copy
+    // is created. Writes go back to whichever address answered the read, so a
+    // phone that reached the host over Tailscale does not then try to write over
+    // Wi-Fi from somewhere else.
+    const urls = syncAddresses(settings);
+    const attempts = [];
+    let chosen = null;
+    let emptyAt = null;
+    for (const url of urls) {
+      try {
+        const found = await readSyncSnapshot(url);
+        if (found) { chosen = url; remote = found; break; }
+        if (!emptyAt) emptyAt = url;
+      } catch (err) {
+        attempts.push({ url: url, err: err });
+      }
+    }
+    if (!chosen) chosen = emptyAt;
+    if (!chosen) {
+      // A folder says what went wrong in the plugin's own words, but an address
+      // arrives here as "Failed to fetch": the browser's wording, the same for a
+      // dead machine, a wrong network and a refused request. Ask each address
+      // instead, because that is what makes it fixable.
+      const error = await syncNetworkFailure(attempts);
+      return {
+        ok: false,
+        error: error,
+        where: 'host',
+        detail: attempts.map((a) => String((a.err && a.err.message) || a.err)).join('; ')
+      };
+    }
+    writeRemote = (snapshot) => writeSyncSnapshot(chosen, snapshot);
   }
 
   const local = await buildSyncSnapshot();

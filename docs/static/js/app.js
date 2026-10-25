@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.101.0';
+const APP_VERSION = '2.102.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1711,10 +1711,11 @@ const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11
 function syncResultMessage(res) {
   const transport = SYNC_TRANSPORTS[syncSettings().transport];
   const byFolder = !!(transport && transport.needsFolder);
+  const byFile = !!(transport && transport.needsFile);
   if (!res.ok) return res.error;
-  if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : 'Took data from your server';
-  if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : 'Sent your data';
-  if (res.did === 'created') return byFolder ? 'Folder set up' : 'Server set up';
+  if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : (byFile ? 'Took the copy from the file' : 'Took data from your server');
+  if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : (byFile ? 'Put your data in the file' : 'Sent your data');
+  if (res.did === 'created') return byFolder ? 'Folder set up' : (byFile ? 'File set up' : 'Server set up');
   return 'Already up to date';
 }
 
@@ -1767,7 +1768,7 @@ function syncSettingsHtml() {
   // is how this card ended up unreadable in the first place.
   const keys = Object.keys(SYNC_TRANSPORTS).filter((key) => {
     const t = SYNC_TRANSPORTS[key];
-    return t.available && (!t.needsFolder || syncFolderHere());
+    return t.available && (!(t.needsFolder || t.needsFile) || syncFolderHere());
   });
   // A setting can name a route this build does not offer — the same storage in a
   // browser, a phone whose app was replaced by the web build. Drawing the card
@@ -1787,6 +1788,7 @@ function syncSettingsHtml() {
   // will work and disabled when it will not already says both of those.
   const ready = syncRouteReady(active, s);
   const byFolder = !!(active && active.needsFolder);
+  const byFile = !!(active && active.needsFile);
 
   // One setting and one button, and that is the whole of it.
   //
@@ -1829,20 +1831,46 @@ function syncSettingsHtml() {
         <button class="btn btn-ghost" id="sync-folder"
                 onclick="chooseSyncFolderFromSettings(this)">${s.folderUri ? escapeHTML(shortFolderName(s.folderName)) : 'Choose folder'}</button>
       </div>
+    </div>` : byFile ? `
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label" id="sync-file-label">File</div>
+        ${s.fileUri ? `<div class="setting-hint" style="margin-top: 2px;">${escapeHTML(shortFolderName(s.fileName))}</div>` : ''}
+      </div>
+      <div class="setting-control" style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
+        <button class="btn btn-ghost" id="sync-file"
+                onclick="chooseSyncFileFromSettings(this, false)">Choose file</button>
+        <button class="btn btn-ghost" id="sync-file-new"
+                onclick="chooseSyncFileFromSettings(this, true)">Save new copy</button>
+      </div>
     </div>` : `
     <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
       <div class="setting-text">
-        <div class="setting-label">Address</div>
+        <div class="setting-label">Wi-Fi</div>
       </div>
       <div class="setting-control setting-control--wide">
-        <input class="form-input" id="sync-url" type="url" inputmode="url"
-               placeholder="${escapeHTML(active ? active.urlHint : '')}"
-               value="${escapeHTML(s.url)}"
+        <input class="form-input" id="sync-url-lan" type="url" inputmode="url"
+               placeholder="e.g. http://192.168.1.10:8787/sorted-snapshot.json"
+               value="${escapeHTML(s.urlLan)}"
                style="text-align: left;"
                ${active && active.available ? '' : 'disabled'}
-               onchange="setSyncSettings({url: this.value.trim()}); renderPage();">
+               onchange="setSyncAddress('urlLan', this.value); renderPage();">
       </div>
-    </div>`}
+    </div>
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 10px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label">Tailscale</div>
+      </div>
+      <div class="setting-control setting-control--wide">
+        <input class="form-input" id="sync-url-tailscale" type="url" inputmode="url"
+               placeholder="e.g. http://100.101.102.103:8787/sorted-snapshot.json"
+               value="${escapeHTML(s.urlTailscale)}"
+               style="text-align: left;"
+               ${active && active.available ? '' : 'disabled'}
+               onchange="setSyncAddress('urlTailscale', this.value); renderPage();">
+      </div>
+    </div>
+    <div class="setting-hint" style="padding: 0 20px;">Sorted tries Wi-Fi first, then Tailscale.</div>`}
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
@@ -1878,6 +1906,14 @@ function shortFolderName(name) {
   return clean.length > 22 ? clean.slice(0, 21) + '…' : clean;
 }
 
+// One of the two Network addresses. Kept in its own field rather than a single
+// `url`, because they are two ways to the same host and either can be absent.
+function setSyncAddress(field, value) {
+  const patch = {};
+  patch[field] = String(value || '').trim();
+  setSyncSettings(patch);
+}
+
 // Choosing the folder is the entire setup for the two folder routes: one tap,
 // the system picker, and there is nothing to type afterwards.
 //
@@ -1906,6 +1942,37 @@ async function chooseSyncFolderFromSettings(btn) {
       }
       setSyncSettings({ folderUri: res.uri, folderName: res.name || '' });
       message = 'Folder set. Tap Sync now to use it.';
+    }
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+}
+
+// The Cloud route's one setting, as a document rather than a folder.
+//
+// Two buttons, because a first device has no file to open: it creates one with
+// the system's Save-to list. Every other device opens that same file. Both go
+// through the system picker, which is the only thing that can see Proton Drive
+// and the rest; a folder tree cannot, because not every provider publishes one.
+async function chooseSyncFileFromSettings(btn, create) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) {
+    showToast('Syncing to a file needs the phone app.', 6000);
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = create ? 'Saving…' : 'Choosing…'; }
+  let message = null;
+  try {
+    const res = create ? await plugin.createFile() : await plugin.pickFile();
+    if (res && res.uri) {
+      const previous = syncSettings().fileUri;
+      if (previous && previous !== res.uri) {
+        try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
+      }
+      setSyncSettings({ fileUri: res.uri, fileName: res.name || '' });
+      message = 'File set. Tap Sync now to use it.';
     }
   } catch (err) {
     message = String((err && err.message) || err);
