@@ -22,8 +22,7 @@ import { createServer } from 'node:http';
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { tmpdir } from 'node:os';
-import { networkInterfaces } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => {
@@ -31,7 +30,11 @@ const flag = (name, fallback) => {
   return i !== -1 && args[i + 1] ? args[i + 1] : fallback;
 };
 
-const DIR = resolve(flag('dir', join(tmpdir(), 'sorted-sync')));
+// The home folder, not the system's temp folder. The file here is the copy both
+// devices read and write, so it had better outlive a reboot: the temp folder is
+// emptied on a schedule or at boot on most systems, and a snapshot that
+// vanishes takes the only copy with it. `--dir` still overrides it.
+const DIR = resolve(flag('dir', join(homedir(), 'sorted-sync')));
 const PORT = Number(flag('port', '8787'));
 const BIND = flag('host', '0.0.0.0');
 const FILE = join(DIR, 'sorted-snapshot.json');

@@ -5963,6 +5963,265 @@ async function runSuite(driverBase) {
         failure.detail.pastingAnAddressTurnsTheButtonOn.pass
         && failure.detail.andTheAddressIsKept.pass, failure);
 
+    console.log('\n# sync: the phone transport, and the empty file');
+
+      // 7b. The two faults that made the address routes fail on every phone, and
+      //     the one that made a fresh install dangerous.
+      //
+      //     The first is where CapacitorHttp lives. The code used to read
+      //     `Capacitor.CapacitorHttp`, which does not exist; the bundle exports it
+      //     as a plugin, at `Capacitor.Plugins.CapacitorHttp`. Every phone fell
+      //     through to the WebView, whose https origin refuses an http request as
+      //     mixed content, and the refusal read as a dead host. Chrome on the
+      //     computer worked because a browser page has no such rule, which is
+      //     exactly the shape of the report.
+      //
+      //     The second is the empty file. A fresh install with no rows and no
+      //     change stamp used to stamp itself "now", so it was newer than every
+      //     snapshot ever taken and pushed its empty database over the real copy.
+      //     That is the "Nothing usable in that file" report, from the other end.
+      const phoneTransport = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const realCapacitor = window.Capacitor;
+        const realFetch = window.fetch;
+
+        // Nothing about the plugin path is testable from a browser, so the
+        // plugin is stood up where the shipped bundle puts it.
+        const asked = [];
+        const reply = (status, data) => ({ status: status, data: data });
+        const nativeHttp = {
+          request: async (o) => {
+            asked.push(o);
+            if (o.method === 'GET') {
+              return reply(200, JSON.stringify({
+                format: 1, deviceId: 'native', updatedAt: '2026-01-01T00:00:00.000Z',
+                data: { spend: [] }
+              }));
+            }
+            return reply(200, '');
+          }
+        };
+        window.Capacitor = { isNativePlatform: () => true, Plugins: { CapacitorHttp: nativeHttp } };
+
+        let webviewCalls = 0;
+        window.fetch = async () => { webviewCalls++; throw new Error('the WebView must not be asked'); };
+
+        t('thePluginIsFoundWhereTheBundlePutsIt', syncNativeHttp(window.Capacitor) === nativeHttp, true);
+        t('aBrowserIsNotTreatedAsAPhone',
+          syncNativeHttp({ isNativePlatform: () => false, Plugins: { CapacitorHttp: nativeHttp } }), null);
+        t('andTheOldWrongPathStillWorksIfItIsAllThereIs',
+          syncNativeHttp({ isNativePlatform: () => true, CapacitorHttp: nativeHttp }) === nativeHttp, true);
+
+        asked.length = 0;
+        const got = await syncFetch('http://192.168.1.10:8787/sorted-snapshot.json', { method: 'GET' });
+        t('theNativePluginMadeTheRequest', asked.length, 1);
+        t('andTheWebViewWasNotAsked', webviewCalls, 0);
+        t('andTheRequestIsARead', asked[0].method, 'GET');
+        t('andItReadsTheNativeAnswer', (await got.text()).indexOf('2026-01-01') >= 0, true);
+
+        asked.length = 0;
+        const put = await syncFetch('http://192.168.1.10:8787/sorted-snapshot.json', {
+          method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"format":1}'
+        });
+        t('aWriteGoesThroughThePluginToo', asked.length, 1);
+        t('andCarriesItsBody', asked[0].data, '{"format":1}');
+        t('andTheWriteIsOk', put.ok, true);
+
+        // The native layer fails in OkHttp's words, not the browser's. Those are
+        // the same class of failure and deserve the same sentence, which names
+        // the address because that is the fixable part.
+        window.Capacitor = { isNativePlatform: () => true, Plugins: { CapacitorHttp: {
+          request: async () => { throw new Error('Failed to connect to /192.168.1.10:8787'); }
+        } } };
+        window.fetch = realFetch;
+        setSyncSettings({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        const down = await syncNow();
+        t('aNativeRefusalIsAFailure', down.ok, false);
+        t('andNamesTheAddressRatherThanOkHttp',
+          down.error, 'No answer from http://192.168.1.10:8787. Is the host running, and can this device reach it?');
+        t('andSaysItWasTheHost', down.where, 'host');
+
+        window.Capacitor = realCapacitor;
+        window.fetch = realFetch;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('on a phone the request goes through CapacitorHttp, where the bundle actually puts it',
+        phoneTransport.detail.thePluginIsFoundWhereTheBundlePutsIt.pass
+        && phoneTransport.detail.aBrowserIsNotTreatedAsAPhone.pass
+        && phoneTransport.detail.andTheOldWrongPathStillWorksIfItIsAllThereIs.pass
+        && phoneTransport.detail.theNativePluginMadeTheRequest.pass
+        && phoneTransport.detail.andTheWebViewWasNotAsked.pass
+        && phoneTransport.detail.andTheRequestIsARead.pass
+        && phoneTransport.detail.andItReadsTheNativeAnswer.pass
+        && phoneTransport.detail.aWriteGoesThroughThePluginToo.pass
+        && phoneTransport.detail.andCarriesItsBody.pass
+        && phoneTransport.detail.andTheWriteIsOk.pass, phoneTransport);
+      check('and OkHttp\'s wording becomes the same sentence that names the address',
+        phoneTransport.detail.aNativeRefusalIsAFailure.pass
+        && phoneTransport.detail.andNamesTheAddressRatherThanOkHttp.pass
+        && phoneTransport.detail.andSaysItWasTheHost.pass, phoneTransport);
+
+      // 7c. The empty file. Two halves, and both are data-loss bugs:
+      //     - an install that has never been written to is at the epoch, so it
+      //       can only pull, never flatten the snapshot it was meant to receive;
+      //     - an empty file never replaces a device with rows in it.
+      //     A local copy that is empty *and* has been written to still pushes,
+      //     because that is a deliberate wipe and its stamp says so.
+      const emptyFile = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const wipe = () => new Promise((resolve) => { openDB().then((d) => {
+          const ns = [...d.objectStoreNames];
+          const tx = d.transaction(ns, 'readwrite');
+          ns.forEach((n) => tx.objectStore(n).clear());
+          tx.oncomplete = () => resolve();
+        }); });
+        const realFetch = window.fetch;
+        window.__syncCalls = [];
+        window.__syncFile = null;
+        window.fetch = async (url, options) => {
+          window.__syncCalls.push({ method: (options && options.method) || 'GET', body: (options && options.body) || null });
+          if ((options && options.method) === 'GET') {
+            if (window.__syncFile === null) return { ok: false, status: 404, text: async () => '' };
+            return { ok: true, status: 200, text: async () => window.__syncFile };
+          }
+          window.__syncFile = options.body;
+          return { ok: true, status: 200, text: async () => '' };
+        };
+
+        // (a) A brand-new install: no rows, no change stamp.
+        await wipe();
+        await loadPeople(); await loadAccounts();
+        localStorage.removeItem('sorted-sync-touched');
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        const fresh = await buildSyncSnapshot();
+        t('anInstallThatHasNeverBeenWrittenToIsAtTheEpoch', fresh.updatedAt, new Date(0).toISOString());
+
+        // A real file from another device, older than "now" but newer than the
+        // epoch. Before the fix this install was "now" and pushed over it.
+        window.__syncFile = JSON.stringify({
+          format: 1, deviceId: 'old-phone', updatedAt: '2026-01-01T00:00:00.000Z',
+          data: { spend: [{ id: 'r1', title: 'The real data', amount: 12, date: '2026-01-01', category: 'Groceries' }] }
+        });
+        setSyncSettings({ transport: 'lan', url: 'http://sync.test/sorted-snapshot.json' });
+        window.__syncCalls.length = 0;
+        const first = await syncNow();
+        const afterFirst = (await getAll('spend')).map((r) => r.title);
+        t('soItPullsRatherThanPushingNothing', first.did, 'pulled');
+        t('andTheRealDataArrives', afterFirst.indexOf('The real data') >= 0, true);
+        t('andNothingWasWrittenOverTheFile',
+          window.__syncCalls.filter((c) => c.method === 'PUT').length, 0);
+
+        // (b) An empty file is never newer than a device that has rows, whatever
+        //     stamp it carries.
+        await wipe();
+        await loadPeople(); await loadAccounts();
+        localStorage.removeItem('sorted-sync-touched');
+        await addItem('spend', { title: 'Mine', amount: 4, date: localISO(), category: 'Groceries' });
+        window.__syncFile = JSON.stringify({
+          format: 1, deviceId: 'empty-phone', updatedAt: new Date(Date.now() + 3600000).toISOString(),
+          data: { spend: [] }
+        });
+        window.__syncCalls.length = 0;
+        const emptyRemote = await syncNow();
+        t('anEmptyFileDoesNotReplaceRows', emptyRemote.did, 'pushed');
+        t('andTheRowsAreStillHere', (await getAll('spend')).map((r) => r.title).indexOf('Mine') >= 0, true);
+        t('andTheFileWasRepairedWithThem',
+          JSON.parse(window.__syncFile).data.spend.some((r) => r.title === 'Mine'), true);
+
+        // (c) A device somebody deliberately wiped is empty but stamped, and that
+        //     still travels. The difference between (a) and (c) is the stamp.
+        await wipe();
+        await loadPeople(); await loadAccounts();
+        localStorage.removeItem('sorted-sync-touched');
+        syncTouch();
+        window.__syncFile = JSON.stringify({
+          format: 1, deviceId: 'other', updatedAt: '2026-01-01T00:00:00.000Z',
+          data: { spend: [{ title: 'Deleted on purpose', amount: 1, date: '2026-01-01', category: 'Groceries' }] }
+        });
+        window.__syncCalls.length = 0;
+        const deliberate = await syncNow();
+        t('aDeliberateWipeStillPushes', deliberate.did, 'pushed');
+        t('andTheFileBecomesEmpty', JSON.parse(window.__syncFile).data.spend.length, 0);
+
+        window.fetch = realFetch;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('a fresh install pulls rather than pushing its empty database over the real copy',
+        emptyFile.detail.anInstallThatHasNeverBeenWrittenToIsAtTheEpoch.pass
+        && emptyFile.detail.soItPullsRatherThanPushingNothing.pass
+        && emptyFile.detail.andTheRealDataArrives.pass
+        && emptyFile.detail.andNothingWasWrittenOverTheFile.pass, emptyFile);
+      check('an empty file never replaces a device that has rows in it',
+        emptyFile.detail.anEmptyFileDoesNotReplaceRows.pass
+        && emptyFile.detail.andTheRowsAreStillHere.pass
+        && emptyFile.detail.andTheFileWasRepairedWithThem.pass, emptyFile);
+      check('but a deliberate wipe, which has a stamp of its own, still travels',
+        emptyFile.detail.aDeliberateWipeStillPushes.pass
+        && emptyFile.detail.andTheFileBecomesEmpty.pass, emptyFile);
+
+      // 7d. The two places that answered "is sync set up?" and "what does the
+      //     toast say?" differently. A chosen folder is set up; the toast names
+      //     the folder rather than a server that was never part of the route.
+      const routeWording = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        localStorage.removeItem('sorted-sync-settings');
+
+        setSyncSettings({ transport: 'lan', url: '' });
+        t('anAddressRouteWithoutAnAddressIsNotReady', syncConfigured(), false);
+        setSyncSettings({ url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        t('anAddressRouteWithOneIsReady', syncConfigured(), true);
+
+        setSyncSettings({ transport: 'cloud', url: '', folderUri: '', folderName: '' });
+        t('aFolderRouteWithoutAFolderIsNotReady', syncConfigured(), false);
+        setSyncSettings({ folderUri: 'content://drive/tree/Sorted', folderName: 'Sorted' });
+        t('butAChosenFolderIsSetUpEvenWithNoAddress', syncConfigured(), true);
+
+        setSyncSettings({ transport: 'syncthing', url: '', folderUri: 'content://sd/tree/Sorted' });
+        t('andThatIsTrueOnSyncthingToo', syncConfigured(), true);
+
+        const say = (did, transport) => {
+          setSyncSettings({ transport: transport });
+          return syncResultMessage({ ok: true, did: did });
+        };
+        t('aFolderPullNamesTheFolder', say('pulled', 'cloud'), 'Took the copy from the folder');
+        t('aFolderPushNamesTheFolder', say('pushed', 'syncthing'), 'Put your data in the folder');
+        t('aFolderCreationNamesTheFolder', say('created', 'cloud'), 'Folder set up');
+        t('aServerPullNamesTheServer', say('pulled', 'lan'), 'Took data from your server');
+        t('aServerPushNamesTheServer', say('pushed', 'tailscale'), 'Sent your data');
+        t('aServerCreationNamesTheServer', say('created', 'lan'), 'Server set up');
+        t('nothingToDoSaysTheSameThingEitherWay', say('none', 'cloud'), 'Already up to date');
+        setSyncSettings({ transport: 'lan' });
+        t('aFailureKeepsItsOwnWording',
+          syncResultMessage({ ok: false, error: 'No answer from http://192.168.1.10:8787.' }),
+          'No answer from http://192.168.1.10:8787.');
+
+        localStorage.removeItem('sorted-sync-settings');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('a chosen folder counts as set up, so the dashboard arrow syncs instead of re-reading',
+        routeWording.detail.anAddressRouteWithoutAnAddressIsNotReady.pass
+        && routeWording.detail.anAddressRouteWithOneIsReady.pass
+        && routeWording.detail.aFolderRouteWithoutAFolderIsNotReady.pass
+        && routeWording.detail.butAChosenFolderIsSetUpEvenWithNoAddress.pass
+        && routeWording.detail.andThatIsTrueOnSyncthingToo.pass, routeWording);
+      check('and the toast names the folder on a folder route and the server on an address route',
+        routeWording.detail.aFolderPullNamesTheFolder.pass
+        && routeWording.detail.aFolderPushNamesTheFolder.pass
+        && routeWording.detail.aFolderCreationNamesTheFolder.pass
+        && routeWording.detail.aServerPullNamesTheServer.pass
+        && routeWording.detail.aServerPushNamesTheServer.pass
+        && routeWording.detail.aServerCreationNamesTheServer.pass
+        && routeWording.detail.nothingToDoSaysTheSameThingEitherWay.pass
+        && routeWording.detail.aFailureKeepsItsOwnWording.pass, routeWording);
+
     console.log('\n# sync to a folder: the route with no address in it');
 
       // 8. The folder route. The picker itself is Android's and cannot be

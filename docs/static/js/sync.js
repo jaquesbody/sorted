@@ -272,13 +272,23 @@ function syncTouch() {
 function syncDataStamp(data) {
   const touched = Date.parse(localStorage.getItem(SYNC_TOUCHED_KEY) || '');
   let latest = Number.isFinite(touched) ? touched : 0;
+  let rows = 0;
   for (const name of STORES) {
     for (const item of (data && data[name]) || []) {
+      rows++;
       const t = Date.parse(item && item.updatedAt);
       if (Number.isFinite(t) && t > latest) latest = t;
     }
   }
-  return latest ? new Date(latest).toISOString() : syncNowStamp();
+  if (latest) return new Date(latest).toISOString();
+  // Never written to, and nothing in it: the beginning of time, so any real
+  // file wins. Stamping this "now" was the worst fault in the whole route — a
+  // fresh install is newer than every snapshot ever taken, so a new phone
+  // pushed its empty database over the copy it was set up to receive, and the
+  // phone that held the data pulled the empty file back. An install with rows
+  // but no timestamps keeps the old answer: its age is unknown, and "now" is at
+  // least never a reason to lose what is on the device.
+  return rows === 0 ? new Date(0).toISOString() : syncNowStamp();
 }
 
 // Set while a snapshot is being written into the database, so the writes it
@@ -319,6 +329,15 @@ function isSyncSnapshot(value) {
     && value.data && typeof value.data === 'object'
     && !Array.isArray(value.data)
     && typeof value.updatedAt === 'string';
+}
+
+// How many records a snapshot actually holds. The file says so in `counts`, but
+// that is written by whichever device wrote it and is not evidence; counting the
+// rows is.
+function syncRowCount(snapshot) {
+  let rows = 0;
+  for (const name of STORES) rows += ((snapshot && snapshot.data && snapshot.data[name]) || []).length;
+  return rows;
 }
 
 // The newest of the two stamps, treating an unreadable one as older. A file with
@@ -366,6 +385,22 @@ async function writeSyncSnapshot(url, snapshot) {
 // CORS applies on top. CapacitorHttp is the documented way to make a request
 // through the native layer instead of the WebView, and it sidesteps the first
 // two. The browser build has none of this and goes straight to fetch.
+//
+// Where CapacitorHttp lives is the whole of whether any of this works. The
+// bundle that ships as capacitor.js exports it as `CapacitorHttp` on its exports
+// object and registers it as a plugin, so it is at
+// `Capacitor.Plugins.CapacitorHttp`. It has never been at `Capacitor.CapacitorHttp`
+// — and reading that instead sent every phone down the WebView path, where the
+// https page's request to an http host is refused as mixed content before a
+// packet leaves the device. Both address routes failed on every Android build
+// from 2.99.3 to 2.100.2 for that reason, and the error arrived as the
+// browser's "Failed to fetch", which reads as a dead host.
+function syncNativeHttp(cap) {
+  if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) return null;
+  const plugins = cap.Plugins || {};
+  return plugins.CapacitorHttp || cap.CapacitorHttp || null;
+}
+
 async function syncFetch(url, options) {
   const cap = window.Capacitor;
   const opts = options || {};
@@ -375,8 +410,9 @@ async function syncFetch(url, options) {
   // finally says "Failed to fetch". Only the probe passes a limit; syncing
   // itself does not, so a slow but working sync is never cut short.
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 0;
-  if (cap && cap.isNativePlatform && cap.isNativePlatform() && cap.CapacitorHttp) {
-    const response = await cap.CapacitorHttp.request({
+  const http = syncNativeHttp(cap);
+  if (http) {
+    const response = await http.request({
       url: url,
       method: opts.method || 'GET',
       headers: opts.headers || {},
@@ -384,8 +420,11 @@ async function syncFetch(url, options) {
       // Without this a PUT body arrives as form-encoded and the host reads
       // garbage rather than JSON.
       serializer: 'json',
-      connectTimeout: timeoutMs || 4000,
-      readTimeout: timeoutMs || 8000
+      connectTimeout: timeoutMs || 5000,
+      // A snapshot with receipts in it can be several megabytes, and this is the
+      // one request that has to finish rather than be cut off. The probe keeps
+      // its own short limit.
+      readTimeout: timeoutMs || 30000
     });
     return {
       ok: response.status >= 200 && response.status < 300,
@@ -471,7 +510,12 @@ function syncHostBase(url) {
 
 function syncReachMessage(url, err) {
   const raw = String((err && err.message) || err);
-  const isTransport = /failed to fetch|networkerror|network error|load failed|timed? ?out|abort/i.test(raw);
+  // The native HTTP plugin fails in OkHttp's words rather than the browser's:
+  // "Failed to connect to /192.168.1.10:8787", "Unable to resolve host",
+  // "Network is unreachable", "CLEARTEXT communication not permitted". They are
+  // the same class of failure as "Failed to fetch" and are worth the same
+  // sentence, which names the address because that is the part that is fixable.
+  const isTransport = /failed to fetch|networkerror|network error|load failed|timed? ?out|abort|failed to connect|connect failed|connection refused|connection reset|unreachable|unable to resolve host|no route to host|socket|cleartext/i.test(raw);
   if (!isTransport) return raw;
   return 'No answer from ' + (syncHostBase(url) || url)
     + '. Is the host running, and can this device reach it?';
@@ -586,6 +630,18 @@ async function syncNow() {
 
   const localT = syncStamp(local);
   const remoteT = syncStamp(remote);
+
+  // An empty file never replaces a device that has data in it. That is the
+  // failure this release exists to fix: a fresh install wrote an empty snapshot
+  // into the folder, and every phone that read it either reported "nothing
+  // usable" or had its data replaced by nothing. A local install that is empty
+  // *and* has been written to still pushes, because that is somebody deleting
+  // everything on purpose and its stamp says so; an install that has never been
+  // written to is stamped at the epoch, so it can only ever pull.
+  if (syncRowCount(remote) === 0 && syncRowCount(local) > 0) {
+    await writeRemote(local);
+    return { ok: true, did: 'pushed', at: local.updatedAt };
+  }
 
   if (remoteT > localT) {
     // Keep what is here before it goes, always. This is the only thing standing

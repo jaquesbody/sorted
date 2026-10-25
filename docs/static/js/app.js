@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.100.2';
+const APP_VERSION = '2.101.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1703,6 +1703,21 @@ const GOAL_TICK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" s
 // Paperclip shown on rows that have a stored receipt.
 const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>';
 
+// The toast a sync result deserves, in the words of the route it came from.
+// "Took data from your server" on a route whose other end is a folder in
+// someone's drive is wrong by a mile, and there were two copies of this ladder
+// saying different things: the Settings card got it right, the Dashboard arrow
+// did not. One copy, in one place.
+function syncResultMessage(res) {
+  const transport = SYNC_TRANSPORTS[syncSettings().transport];
+  const byFolder = !!(transport && transport.needsFolder);
+  if (!res.ok) return res.error;
+  if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : 'Took data from your server';
+  if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : 'Sent your data';
+  if (res.did === 'created') return byFolder ? 'Folder set up' : 'Server set up';
+  return 'Already up to date';
+}
+
 // The dashboard's refresh button: sync if there is somewhere to sync to, then
 // re-read either way.
 //
@@ -1714,12 +1729,7 @@ async function dashboardSyncNow(btn) {
   let message = '';
   try {
     if (syncConfigured()) {
-      const res = await syncNow();
-      if (!res.ok) message = res.error;
-      else if (res.did === 'pulled') message = 'Synced from your server';
-      else if (res.did === 'pushed') message = 'Sent to your server';
-      else if (res.did === 'created') message = 'Server set up';
-      else message = 'Already up to date';
+      message = syncResultMessage(await syncNow());
     }
   } catch (err) {
     message = String((err && err.message) || err);
@@ -1729,10 +1739,14 @@ async function dashboardSyncNow(btn) {
   if (message) showToast(message);
 }
 
+// Whether there is somewhere to sync to, whichever question the route asks. It
+// used to check for an address only, so a chosen folder read as "not set up":
+// the Dashboard arrow went quiet, its tooltip said to go and configure sync,
+// and pressing it re-read the page instead of syncing. The Settings card always
+// knew better; this is the same answer.
 function syncConfigured() {
   const s = syncSettings();
-  const t = SYNC_TRANSPORTS[s.transport];
-  return !!(t && t.available && s.url);
+  return syncRouteReady(SYNC_TRANSPORTS[s.transport], s);
 }
 
 // The Sync card.
@@ -1940,25 +1954,16 @@ async function copySetupCommand(btn) {
 
 async function syncFromSettings(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
-  const transport = SYNC_TRANSPORTS[syncSettings().transport];
-  const byFolder = !!(transport && transport.needsFolder);
   let message;
   try {
-    const res = await syncNow();
-    if (!res.ok) message = res.error;
-    // Named for where the copy actually is. "Took data from your server" is
-    // wrong by a mile on a route whose other end is a folder in someone's drive.
-    else if (res.did === 'pulled') message = byFolder ? 'Took the copy from the folder' : 'Took data from your server';
-    else if (res.did === 'pushed') message = byFolder ? 'Put your data in the folder' : 'Sent your data';
-    else if (res.did === 'created') message = byFolder ? 'Folder set up' : 'Server set up';
-    else message = 'Already up to date';
+    message = syncResultMessage(await syncNow());
   } catch (err) {
     message = String((err && err.message) || err);
   }
   await renderPage();
   // Longer than the default, and longer than the other cards': a sync that
-  // cannot reach the host now says which of the four things went wrong and names
-  // the address it tried, which is a sentence rather than a word.
+  // cannot reach the host says which of the four things went wrong and names the
+  // address it tried, which is a sentence rather than a word.
   if (message) showToast(message, 8000);
 }
 
