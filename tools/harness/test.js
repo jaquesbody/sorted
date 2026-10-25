@@ -6788,6 +6788,100 @@ async function runSuite(driverBase) {
         t('aPersistentBusyDriveSaysToWait', /still finishing the last upload/.test(hardWrite.error), true);
         t('andSaysItWasTheFile', hardWrite.where, 'file');
 
+        // A descriptor that dies under the write. Proton replaces the document
+        // when another device has just uploaded, and the phone's descriptor then
+        // answers EBADF. The pass has to start again from a read, not write the
+        // same copy blind: what replaced the file may be newer than this device.
+        await addItem('spend', { title: 'Local before the replacement', amount: 3, date: localISO(), category: 'Groceries' });
+        localStorage.setItem('sorted-sync-touched', '2026-05-05T00:00:00.000Z');
+        let deadReads = 0;
+        let deadWrites = 0;
+        window.__ops.length = 0;
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async (o) => {
+            deadReads += 1;
+            window.__ops.push('readFile ' + o.uri);
+            if (deadReads === 1) {
+              return {
+                exists: true,
+                data: JSON.stringify({
+                  format: 1, deviceId: 'other', updatedAt: '2020-01-01T00:00:00.000Z',
+                  data: { spend: [{ id: 'old', title: 'The older copy', amount: 1, date: '2026-01-01', category: 'Groceries' }] }
+                })
+              };
+            }
+            return {
+              exists: true,
+              data: JSON.stringify({
+                format: 1, deviceId: 'other', updatedAt: '2099-01-01T00:00:00.000Z',
+                data: { spend: [{ id: 'new', title: 'What replaced the file', amount: 2, date: '2099-01-01', category: 'Groceries' }] }
+              })
+            };
+          },
+          writeFile: async (o) => {
+            deadWrites += 1;
+            window.__ops.push('writeFile ' + o.uri);
+            throw new Error('write failed: EBADF (bad file descriptor)');
+          }
+        });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false, filePushedAt: '' });
+        const replaced = await syncNow();
+        t('aDescriptorThatDiesUnderTheWriteIsTriedAgain', deadReads, 2);
+        t('andTheSecondAttemptReadsBeforeChoosing', replaced.did, 'pulled');
+        t('andTheReplacementIsWhatArrives',
+          (await getAll('spend')).map((r) => r.title), ['What replaced the file']);
+        t('andNothingWasWrittenBlind', deadWrites, 1);
+
+        // If the replacement is not the answer and the descriptor keeps dying,
+        // the sentence says what happened rather than quoting EBADF, and the
+        // pass is not run a third time.
+        deadReads = 0;
+        deadWrites = 0;
+        window.__ops.length = 0;
+        localStorage.setItem('sorted-sync-touched', '2026-05-05T00:00:00.000Z');
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async (o) => {
+            deadReads += 1;
+            window.__ops.push('readFile ' + o.uri);
+            return {
+              exists: true,
+              data: JSON.stringify({
+                format: 1, deviceId: 'other', updatedAt: '2020-01-01T00:00:00.000Z',
+                data: { spend: [{ id: 'old', title: 'The older copy', amount: 1, date: '2026-01-01', category: 'Groceries' }] }
+              })
+            };
+          },
+          writeFile: async () => {
+            deadWrites += 1;
+            throw new Error('write failed: EBADF (bad file descriptor)');
+          }
+        });
+        const twiceDead = await syncNow();
+        t('aDescriptorThatKeepsDyingSaysWhatHappened', /lost hold of that file/.test(twiceDead.error), true);
+        t('andIsNotRetriedForever', deadWrites, 2);
+        t('andStillSaysItWasTheFile', twiceDead.where, 'file');
+        t('andKeepsTheProvidersWordsForTheDetail', /EBADF/.test(twiceDead.detail), true);
+
+        // A write that fails for an ordinary reason is not given a second pass:
+        // retrying a missing file or a lapsed grant only repeats the same answer.
+        let ordinaryReads = 0;
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async () => {
+            ordinaryReads += 1;
+            return {
+              exists: true,
+              data: JSON.stringify({
+                format: 1, deviceId: 'other', updatedAt: '2020-01-01T00:00:00.000Z',
+                data: { spend: [{ id: 'old', title: 'The older copy', amount: 1, date: '2026-01-01', category: 'Groceries' }] }
+              })
+            };
+          },
+          writeFile: async () => { throw new Error('That file is no longer there. Choose it again.'); }
+        });
+        const ordinaryFailure = await syncNow();
+        t('anOrdinaryWriteFailureIsNotRetried', ordinaryReads, 1);
+        t('andKeepsItsOwnWords', ordinaryFailure.error, 'That file is no longer there. Choose it again.');
+
         // On a device that did not make the file the same answer is a fault, and
         // is reported in the provider's own words so it can be looked up.
         window.syncFolderPlugin = () => Object.assign(fake(), {
@@ -6889,6 +6983,18 @@ async function runSuite(driverBase) {
         && folderRoute.detail.andTheWriteTimeIsRemembered.pass
         && folderRoute.detail.aPersistentBusyDriveSaysToWait.pass
         && folderRoute.detail.andSaysItWasTheFile.pass, folderRoute);
+      check('a descriptor that dies under the write starts the pass again from a read',
+        folderRoute.detail.aDescriptorThatDiesUnderTheWriteIsTriedAgain.pass
+        && folderRoute.detail.andTheSecondAttemptReadsBeforeChoosing.pass
+        && folderRoute.detail.andTheReplacementIsWhatArrives.pass
+        && folderRoute.detail.andNothingWasWrittenBlind.pass, folderRoute);
+      check('and one that keeps dying says so, once, without quoting EBADF at the reader',
+        folderRoute.detail.aDescriptorThatKeepsDyingSaysWhatHappened.pass
+        && folderRoute.detail.andIsNotRetriedForever.pass
+        && folderRoute.detail.andStillSaysItWasTheFile.pass
+        && folderRoute.detail.andKeepsTheProvidersWordsForTheDetail.pass
+        && folderRoute.detail.anOrdinaryWriteFailureIsNotRetried.pass
+        && folderRoute.detail.andKeepsItsOwnWords.pass, folderRoute);
       check('changing the Cloud file lets go of the last grant, and a file that has gone says so',
         folderRoute.detail.changingTheFileLetsGoOfTheLast.pass
         && folderRoute.detail.andKeepsTheNewOneFile.pass
@@ -7129,6 +7235,20 @@ async function runSuite(driverBase) {
         (name) => !new RegExp('public void ' + name + '\\(PluginCall').test(folderSource));
       check('and every plugin method the card calls exists on the phone side',
         missingMethods, []);
+
+      // A descriptor that dies under a write is the Cloud fault that a copy had
+      // uploaded and still reported "failed": Proton Drive replaces the document
+      // when another device uploads to it, and the old descriptor answers EBADF.
+      // The phone retries that once, and a close that fails after every byte was
+      // accepted is not a failed write.
+      const writeTextSource = (folderSource.match(/private void writeText[\s\S]*?\n    }/) || [''])[0];
+      check('the phone retries a descriptor that died under the write, once',
+        /attempt < 2/.test(writeTextSource)
+        && /deadDescriptor\(ex\)/.test(writeTextSource)
+        && /Thread\.sleep\(700\)/.test(writeTextSource), writeTextSource.length);
+      check('and a close that fails after the whole write landed is not a failure',
+        /complete && deadDescriptor\(failure\)/.test(folderSource)
+        && /bad file descriptor/.test(folderSource), { deadDescriptor: /deadDescriptor/.test(folderSource) });
 
       // 9. The steps themselves. The first pass named the two things to install
       //    without saying where from, and gave a command that only works from

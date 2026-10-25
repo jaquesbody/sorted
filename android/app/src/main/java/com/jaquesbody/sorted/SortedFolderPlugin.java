@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 /**
  * A folder the person chooses, and one file inside it.
@@ -391,6 +392,32 @@ public class SortedFolderPlugin extends Plugin {
      * away with "wt" because every file it writes is new.
      */
     private void writeText(Uri file, String data) throws IOException {
+        byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+        IOException last = null;
+        // A provider can hand back a descriptor that dies under the write. Proton
+        // Drive replaces the document when another device has just uploaded to
+        // it, and a descriptor opened before that replacement answers EBADF, so
+        // the same write a moment later succeeds. One retry, then the failure is
+        // reported in the provider's own words.
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                writeBytes(file, bytes);
+                return;
+            } catch (IOException ex) {
+                last = ex;
+                if (!deadDescriptor(ex)) throw ex;
+                try {
+                    Thread.sleep(700);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw ex;
+                }
+            }
+        }
+        throw last;
+    }
+
+    private void writeBytes(Uri file, byte[] bytes) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
         OutputStream out = null;
         for (String mode : new String[] { "rwt", "wt", null }) {
@@ -402,11 +429,35 @@ public class SortedFolderPlugin extends Plugin {
             if (out != null) break;
         }
         if (out == null) throw new IOException("that file could not be opened for writing");
+        boolean complete = false;
+        IOException failure = null;
         try {
-            out.write(data.getBytes(StandardCharsets.UTF_8));
-        } finally {
-            out.close();
+            out.write(bytes);
+            out.flush();
+            complete = true;
+        } catch (IOException ex) {
+            failure = ex;
         }
+        try {
+            out.close();
+        } catch (IOException closeError) {
+            if (failure == null) failure = closeError;
+        }
+        if (failure == null) return;
+        // Every byte was accepted before the failure, so what the provider is
+        // complaining about is the close of a descriptor it has already taken
+        // the content from. Proton does this after a successful upload, and
+        // reporting it as a failed sync is how a copy that had reached the drive
+        // looked like it had not.
+        if (complete && deadDescriptor(failure)) return;
+        throw failure;
+    }
+
+    /** The descriptor died under us, rather than the provider refusing the file. */
+    private boolean deadDescriptor(IOException ex) {
+        String message = String.valueOf(ex.getMessage()).toLowerCase(Locale.US);
+        return message.contains("ebadf") || message.contains("bad file descriptor")
+            || message.contains("epipe") || message.contains("broken pipe");
     }
 
     private Uri treeOrReject(PluginCall call) {

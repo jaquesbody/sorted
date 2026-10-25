@@ -660,6 +660,15 @@ function isPendingUploadWriteError(err) {
   return /could not be opened for writing/i.test(text);
 }
 
+// A provider can lose the descriptor under a write. Proton Drive replaces the
+// document when another device has just uploaded to it, and the descriptor the
+// phone opened before that replacement comes back as EBADF. The plugin retries
+// once itself; this is the same fault seen from the page.
+function isDeadDescriptorError(err) {
+  const text = String((err && err.message) || err);
+  return /ebadf|bad file descriptor|epipe|broken pipe/i.test(text);
+}
+
 // How long after a write this device still treats an empty or pending read as
 // its own upload in flight. Long enough for a large snapshot on a slow link,
 // short enough that a genuinely empty document is written to again.
@@ -828,7 +837,21 @@ function syncNow() {
 
 // One pass. Reports what it did rather than throwing on the ordinary outcomes,
 // because "already up to date" is a result, not a failure.
+//
+// A drive can replace the document under a write. Proton does it whenever
+// another device has just uploaded, and the descriptor the phone opened before
+// the replacement dies with EBADF. The plugin retries that write on its own; if
+// it still fails, the pass starts again from a fresh read rather than writing
+// again, because this device's copy may now be older than what the other device
+// has just put there.
 async function syncNowOnce() {
+  const first = await syncPassOnce(false);
+  if (!first || !first.retryWrite) return first;
+  await new Promise((resolve) => setTimeout(resolve, 900));
+  return syncPassOnce(true);
+}
+
+async function syncPassOnce(retried) {
   const settings = syncSettings();
   const transport = SYNC_TRANSPORTS[settings.transport];
   if (!transport || !transport.available) {
@@ -931,7 +954,7 @@ async function syncNowOnce() {
   if (fileWaiting) return { ok: true, did: 'waiting', at: local.updatedAt };
 
   if (!remote) {
-    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile);
+    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile, retried);
     if (failed) return failed;
     syncRecordPushed(local.updatedAt);
     // The new document now has a snapshot in it, so the next pass reads and
@@ -952,7 +975,7 @@ async function syncNowOnce() {
   // everything on purpose and its stamp says so; an install that has never been
   // written to is stamped at the epoch, so it can only ever pull.
   if (syncRowCount(remote) === 0 && syncRowCount(local) > 0) {
-    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile);
+    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile, retried);
     if (failed) return failed;
     syncRecordPushed(local.updatedAt);
     if (byFile) noteFileWritten();
@@ -973,7 +996,7 @@ async function syncNowOnce() {
     return { ok: true, did: 'pulled', at: remote.updatedAt, backup: true };
   }
   if (localT > remoteT) {
-    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile);
+    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile, retried);
     if (failed) return failed;
     syncRecordPushed(local.updatedAt);
     if (byFile) noteFileWritten();
@@ -984,7 +1007,7 @@ async function syncNowOnce() {
 
 // One write, with the provider's "still busy" answer turned into something the
 // reader can act on rather than the raw sentence from the content resolver.
-async function writeLocalSnapshot(writeRemote, snapshot, where, byFile) {
+async function writeLocalSnapshot(writeRemote, snapshot, where, byFile, retried) {
   try {
     await writeRemote(snapshot);
     return null;
@@ -1000,6 +1023,20 @@ async function writeLocalSnapshot(writeRemote, snapshot, where, byFile) {
       return {
         ok: false,
         error: 'The drive is still finishing the last upload. Wait a moment, then press Sync now.',
+        where: 'file',
+        detail: detail
+      };
+    }
+    if (byFile && isDeadDescriptorError(err) && !retried) {
+      // The document was replaced under the write. Starting the pass again
+      // reads first, which is the only safe answer: this device's copy may now
+      // be older than the one that replaced it.
+      return { ok: false, retryWrite: true, where: 'file', detail: detail };
+    }
+    if (byFile && isDeadDescriptorError(err)) {
+      return {
+        ok: false,
+        error: 'The drive lost hold of that file while Sorted was writing it. Press Sync now to try again.',
         where: 'file',
         detail: detail
       };
