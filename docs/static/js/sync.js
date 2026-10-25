@@ -207,12 +207,18 @@ function syncSettings() {
     fileName: typeof set.fileName === 'string' ? set.fileName : '',
     // A document the Save-to picker has just made is empty on purpose, and some
     // providers (Proton) cannot be read until their first upload has finished.
-    // The first sync after Save new copy therefore writes without reading. It
-    // also keeps `fileOwned`, so a later read that fails with the provider's
-    // pending-upload error is treated as "nothing here yet" rather than as a
-    // dead file. Only the device that made the file gets that leniency.
+    // The first sync after Save new copy therefore writes without reading.
+    // `fileOwned` marks the device that made the file, so a later read that
+    // fails with the provider's pending-upload error is this device's own
+    // upload still finishing rather than a dead file. Only that device gets the
+    // leniency; on any other device the same answer is a fault.
     fileNew: set.fileNew === true,
-    fileOwned: set.fileOwned === true
+    fileOwned: set.fileOwned === true,
+    // When this device last wrote the document successfully. Proton keeps
+    // uploading after the write returns, and a second write during that window
+    // fails with "that file could not be opened for writing". This is what tells
+    // an empty or pending read apart from a document that really is empty.
+    filePushedAt: typeof set.filePushedAt === 'string' ? set.filePushedAt : ''
   };
 }
 
@@ -453,11 +459,15 @@ async function syncFetch(url, options) {
       // Without this a PUT body arrives as form-encoded and the host reads
       // garbage rather than JSON.
       serializer: 'json',
-      connectTimeout: timeoutMs || 5000,
+      // A phone that has just changed network, or a Tailscale path that has to
+      // come up over mobile data, can take longer than a browser would to make
+      // the connection. Cutting it off at five seconds is what made a working
+      // tailnet look like a dead host when Wi-Fi was switched off.
+      connectTimeout: timeoutMs || 10000,
       // A snapshot with receipts in it can be several megabytes, and this is the
       // one request that has to finish rather than be cut off. The probe keeps
-      // its own short limit.
-      readTimeout: timeoutMs || 30000
+      // its own shorter limit.
+      readTimeout: timeoutMs || 60000
     });
     return {
       ok: response.status >= 200 && response.status < 300,
@@ -528,6 +538,18 @@ function syncAddresses(settings) {
   return [s.urlLan, s.urlTailscale].filter((url) => !!url);
 }
 
+// A first attempt can fail because the phone is still moving between Wi-Fi and
+// mobile data, or because Tailscale has not finished bringing the path up. One
+// retry a moment later is the difference between "the app gave up" and "the app
+// waited for the network".
+function readSyncSnapshotWithRetry(url, tries) {
+  return readSyncSnapshot(url).catch((err) => {
+    if (tries <= 1 || !syncIsTransportError(err)) throw err;
+    return new Promise((resolve) => setTimeout(resolve, 1200))
+      .then(() => readSyncSnapshotWithRetry(url, tries - 1));
+  });
+}
+
 // Read from whichever address answers first, not from Wi-Fi first and Tailscale
 // only after it gives up. At home the Wi-Fi address is immediate; away from home
 // it is a machine that is not there, and waiting for its timeout before trying
@@ -545,7 +567,7 @@ function readAnyAddress(urls) {
       resolve(value);
     };
     urls.forEach((url) => {
-      readSyncSnapshot(url).then(
+      readSyncSnapshotWithRetry(url, 2).then(
         (snapshot) => {
           results.push({ url: url, snapshot: snapshot });
           // A file is the strongest answer and settles it at once. An empty
@@ -630,6 +652,24 @@ function isPendingUploadError(err) {
   return /cannot get drive link|upload id/i.test(text);
 }
 
+// Proton keeps uploading after the write returns. Opening the same document for
+// writing during that window fails with this, which is a wait rather than a
+// fault. It is also the message the user saw after a copy had in fact uploaded.
+function isPendingUploadWriteError(err) {
+  const text = String((err && err.message) || err);
+  return /could not be opened for writing/i.test(text);
+}
+
+// How long after a write this device still treats an empty or pending read as
+// its own upload in flight. Long enough for a large snapshot on a slow link,
+// short enough that a genuinely empty document is written to again.
+const FILE_PENDING_MS = 120000;
+
+function fileOwnUploadRecent(settings) {
+  const pushed = Date.parse((settings && settings.filePushedAt) || '');
+  return Number.isFinite(pushed) && Date.now() - pushed < FILE_PENDING_MS;
+}
+
 // ---------------------------------------------------------------- diagnosis
 
 // fetch() says "Failed to fetch" for every one of: nothing listening, the wrong
@@ -658,7 +698,15 @@ function syncIsTailscaleAddress(url) {
 
 function syncTailscaleHint(urls) {
   if (!urls.some((url) => syncIsTailscaleAddress(url))) return '';
-  return ' Check Tailscale is connected on this device and on the computer, and that the computer allows port 8787 on its Tailscale network.';
+  return ' Check Tailscale is connected on this device and on the computer, including on mobile data, and that the computer allows port 8787 on its Tailscale network.';
+}
+
+// The failures that mean "the request never got an answer", as opposed to "the
+// answer was wrong". They are worth one retry on a phone, which may still be
+// moving between networks, and worth the same sentence to the reader.
+function syncIsTransportError(err) {
+  const raw = String((err && err.message) || err);
+  return /failed to fetch|networkerror|network error|load failed|timed? ?out|abort|failed to connect|connect failed|connection refused|connection reset|unreachable|unable to resolve host|no route to host|socket|cleartext/i.test(raw);
 }
 
 function syncReachMessage(url, err) {
@@ -668,8 +716,7 @@ function syncReachMessage(url, err) {
   // "Network is unreachable", "CLEARTEXT communication not permitted". They are
   // the same class of failure as "Failed to fetch" and are worth the same
   // sentence, which names the address because that is the part that is fixable.
-  const isTransport = /failed to fetch|networkerror|network error|load failed|timed? ?out|abort|failed to connect|connect failed|connection refused|connection reset|unreachable|unable to resolve host|no route to host|socket|cleartext/i.test(raw);
-  if (!isTransport) return raw;
+  if (!syncIsTransportError(err)) return raw;
   return 'No answer from ' + (syncHostBase(url) || url)
     + '. Is the host running, and can this device reach it?';
 }
@@ -697,7 +744,7 @@ async function syncTestAddressAt(url) {
 
   let res;
   try {
-    res = await syncFetch(base + '/health', { method: 'GET', timeoutMs: 6000 });
+    res = await syncFetch(base + '/health', { method: 'GET', timeoutMs: 10000 });
   } catch (err) {
     return { state: 'unreachable', message: 'No answer from ' + base + '. Is the host running, and can this device reach it?' };
   }
@@ -803,6 +850,7 @@ async function syncNowOnce() {
 
   let remote = null;
   let writeRemote = null;
+  let fileWaiting = false;
 
   if (byFolder) {
     writeRemote = (snapshot) => folderWriteSnapshot(settings.folderUri, snapshot);
@@ -813,13 +861,29 @@ async function syncNowOnce() {
       return { ok: false, error: detail, where: 'folder', detail: detail };
     }
   } else if (byFile) {
-    writeRemote = (snapshot) => fileWriteSnapshot(settings.fileUri, snapshot);
+    // A write that fails while the provider is still processing the last upload
+    // is worth one retry rather than a toast. Proton is the one that does this,
+    // and a moment later the same write succeeds.
+    writeRemote = async (snapshot) => {
+      try {
+        return await fileWriteSnapshot(settings.fileUri, snapshot);
+      } catch (err) {
+        if (!isPendingUploadWriteError(err)) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        return fileWriteSnapshot(settings.fileUri, snapshot);
+      }
+    };
     // A document just made by Save new copy is empty, and Proton cannot serve a
     // read of it until its first upload has finished. Reading it anyway is what
     // produced "Cannot get drive link with upload id" on the first sync, while
     // the drive app sat there saying "Waiting to upload". The first pass writes
-    // instead of reading; a later pass that hits the same message on a file this
-    // device made is treated as empty for the same reason.
+    // instead of reading.
+    //
+    // After that first write the document is this device's own upload, and it
+    // stays unreadable for a while. Writing again during that window is what
+    // produced "that file could not be opened for writing" even though the copy
+    // had already reached the drive. So an empty or pending read straight after
+    // our own write means "wait", not "write it again".
     if (!settings.fileNew) {
       try {
         remote = await fileReadSnapshot(settings.fileUri);
@@ -828,7 +892,11 @@ async function syncNowOnce() {
           const detail = String((err && err.message) || err);
           return { ok: false, error: detail, where: 'file', detail: detail };
         }
+        fileWaiting = fileOwnUploadRecent(settings);
         remote = null;
+      }
+      if (remote === null && settings.fileOwned && fileOwnUploadRecent(settings)) {
+        fileWaiting = true;
       }
     }
   } else {
@@ -856,13 +924,20 @@ async function syncNowOnce() {
   }
 
   const local = await buildSyncSnapshot();
+  const where = byFolder ? 'folder' : (byFile ? 'file' : 'host');
+
+  // The drive has the copy already; it is still uploading it. Nothing to do and
+  // nothing to report. The next pass reads it once the drive has finished.
+  if (fileWaiting) return { ok: true, did: 'waiting', at: local.updatedAt };
 
   if (!remote) {
-    await writeRemote(local);
+    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile);
+    if (failed) return failed;
     syncRecordPushed(local.updatedAt);
     // The new document now has a snapshot in it, so the next pass reads and
-    // compares like any other.
-    if (byFile && settings.fileNew) setSyncSettings({ fileNew: false });
+    // compares like any other. Recording when it was written is what lets that
+    // next pass know a pending read is its own upload rather than an empty file.
+    if (byFile) noteFileWritten();
     return { ok: true, did: 'created', at: local.updatedAt };
   }
 
@@ -877,8 +952,10 @@ async function syncNowOnce() {
   // everything on purpose and its stamp says so; an install that has never been
   // written to is stamped at the epoch, so it can only ever pull.
   if (syncRowCount(remote) === 0 && syncRowCount(local) > 0) {
-    await writeRemote(local);
+    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile);
+    if (failed) return failed;
     syncRecordPushed(local.updatedAt);
+    if (byFile) noteFileWritten();
     return { ok: true, did: 'pushed', at: local.updatedAt };
   }
 
@@ -896,11 +973,46 @@ async function syncNowOnce() {
     return { ok: true, did: 'pulled', at: remote.updatedAt, backup: true };
   }
   if (localT > remoteT) {
-    await writeRemote(local);
+    const failed = await writeLocalSnapshot(writeRemote, local, where, byFile);
+    if (failed) return failed;
     syncRecordPushed(local.updatedAt);
+    if (byFile) noteFileWritten();
     return { ok: true, did: 'pushed', at: local.updatedAt };
   }
   return { ok: true, did: 'none', at: local.updatedAt };
+}
+
+// One write, with the provider's "still busy" answer turned into something the
+// reader can act on rather than the raw sentence from the content resolver.
+async function writeLocalSnapshot(writeRemote, snapshot, where, byFile) {
+  try {
+    await writeRemote(snapshot);
+    return null;
+  } catch (err) {
+    const detail = String((err && err.message) || err);
+    if (byFile && isPendingUploadWriteError(err)) {
+      // The document is busy uploading. Treat that as a write that has just
+      // happened, so the 15-second poll does not ask again every time; the next
+      // real attempt waits for the upload window to pass. A new document is no
+      // longer new either: whatever the provider did with it, the next pass
+      // should read before deciding to write.
+      setSyncSettings({ fileNew: false, filePushedAt: new Date().toISOString() });
+      return {
+        ok: false,
+        error: 'The drive is still finishing the last upload. Wait a moment, then press Sync now.',
+        where: 'file',
+        detail: detail
+      };
+    }
+    return { ok: false, error: detail, where: where, detail: detail };
+  }
+}
+
+// The document now holds a snapshot this device wrote. Both facts matter: it is
+// no longer new, and the time of the write is what tells a later pending read
+// apart from a document that really is empty.
+function noteFileWritten() {
+  setSyncSettings({ fileNew: false, filePushedAt: new Date().toISOString() });
 }
 
 // ---------------------------------------------------------------- automatic

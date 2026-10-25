@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.0';
+const APP_VERSION = '2.103.1';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1720,6 +1720,7 @@ function syncResultMessage(res) {
   if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : (byFile ? 'Took the copy from the file' : 'Took data from your server');
   if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : (byFile ? 'Put your data in the file' : 'Sent your data');
   if (res.did === 'created') return byFolder ? 'Folder set up' : (byFile ? 'File set up' : 'Server set up');
+  if (res.did === 'waiting') return 'Waiting for the drive to finish uploading';
   return 'Already up to date';
 }
 
@@ -1762,6 +1763,25 @@ function syncConfigured() {
 // isn't built says so rather than being hidden: a sync option that silently
 // does nothing is worse than one that admits it isn't there yet.
 //
+// Why the two folder routes are missing when they are. A browser without the
+// File System Access API cannot read a folder or write a chosen file, and the
+// card used to say nothing at all about it: the user saw Network and reasonably
+// concluded the desktop had no setup. Brave ships the API switched off, which
+// is the case that made this necessary, and it can be switched back on.
+function syncBrowserPickerHint() {
+  if (syncFolderHere()) return '';
+  const cap = window.Capacitor;
+  if (cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform()) return '';
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return 'The folder and file pickers need an https:// address or localhost. This page is open another way, so only Network can be set up here.';
+  }
+  const agent = String((navigator && navigator.userAgent) || '');
+  if (/Brave/i.test(agent)) {
+    return 'Brave hides the folder and file pickers. Turn on brave://flags/#file-system-access-api, restart Brave, then choose Syncthing or Cloud here.';
+  }
+  return 'This browser does not offer the folder and file pickers, so only Network can be set up here. Chrome, Edge and Chromium do.';
+}
+
 // The snapshot file itself is the same whatever the transport, so switching is a
 // matter of pointing at a different address — which is the honest answer to
 // "how easy is it to change my mind later".
@@ -1776,6 +1796,7 @@ function syncSettingsHtml() {
     const t = SYNC_TRANSPORTS[key];
     return t.available && (!(t.needsFolder || t.needsFile) || syncFolderHere());
   });
+  const browserHint = syncBrowserPickerHint();
   // A setting can name a route this build does not offer — the same storage in a
   // browser, a phone whose app was replaced by the web build. Drawing the card
   // for a route the dropdown does not have would be a panel about nothing, so
@@ -1833,6 +1854,7 @@ function syncSettingsHtml() {
                 onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
       </div>
     </div>
+    ${browserHint ? `<div class="setting-hint" id="sync-browser-hint" style="padding: 0 20px; margin-top: 8px;">${escapeHTML(browserHint)}</div>` : ''}
     ${byFolder ? `
     <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
       <div class="setting-text">
@@ -1881,7 +1903,7 @@ function syncSettingsHtml() {
                onchange="setSyncAddress('urlTailscale', this.value); renderPage();">
       </div>
     </div>
-    <div class="setting-hint" style="padding: 0 20px;">Sorted tries Wi-Fi first, then Tailscale.</div>`}
+    <div class="setting-hint" style="padding: 0 20px;">Sorted tries both addresses and uses whichever answers first.</div>`}
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
@@ -2003,7 +2025,7 @@ async function chooseSyncFileFromSettings(btn, create) {
   // Choosing a file with nothing in it is the one case where the next pass has
   // to run without being asked: there is no remote to compare, and the whole
   // point of Save new copy was to put the data there.
-  if (create && syncSettings().fileNew) scheduleAutoSync(600);
+  if (create && syncSettings().fileNew) scheduleAutoSync(1500);
 }
 
 // Copying one of the commands out of the setup steps.

@@ -5755,6 +5755,7 @@ async function runSuite(driverBase) {
         t('anEmptySettingHasNoTailscaleAddress', syncSettings().urlTailscale, '');
         t('aNewFileIsNotAssumed', syncSettings().fileNew, false);
         t('andIsNotOwned', syncSettings().fileOwned, false);
+        t('andHasNoWriteTime', syncSettings().filePushedAt, '');
         localStorage.setItem('sorted-sync-settings', 'not json at all');
         t('aCorruptSettingDoesNotStopSettingsOpening', syncSettings().transport, 'network');
         localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'nonsense', url: '  http://x/y  ' }));
@@ -6052,6 +6053,8 @@ async function runSuite(driverBase) {
         t('theNativePluginMadeTheRequest', asked.length, 1);
         t('andTheWebViewWasNotAsked', webviewCalls, 0);
         t('andTheRequestIsARead', asked[0].method, 'GET');
+        t('andThePhoneGetsLongEnoughForATailscalePath', asked[0].connectTimeout >= 10000, true);
+        t('andAReadIsNotCutShort', asked[0].readTimeout >= 60000, true);
         t('andItReadsTheNativeAnswer', (await got.text()).indexOf('2026-01-01') >= 0, true);
 
         asked.length = 0;
@@ -6089,6 +6092,8 @@ async function runSuite(driverBase) {
         && phoneTransport.detail.theNativePluginMadeTheRequest.pass
         && phoneTransport.detail.andTheWebViewWasNotAsked.pass
         && phoneTransport.detail.andTheRequestIsARead.pass
+        && phoneTransport.detail.andThePhoneGetsLongEnoughForATailscalePath.pass
+        && phoneTransport.detail.andAReadIsNotCutShort.pass
         && phoneTransport.detail.andItReadsTheNativeAnswer.pass
         && phoneTransport.detail.aWriteGoesThroughThePluginToo.pass
         && phoneTransport.detail.andCarriesItsBody.pass
@@ -6232,6 +6237,24 @@ async function runSuite(driverBase) {
         t('andReturnsTheFileItFound', !!found.remote, true);
         t('andThereIsNothingToReport', found.attempts, []);
 
+        // (a2) A first request can fail because the phone is still moving
+        //      between Wi-Fi and mobile data, or because Tailscale has not
+        //      finished bringing the path up. One retry a moment later is what
+        //      makes a reconnecting network work without a second button press.
+        let tries = 0;
+        window.fetch = async (url) => {
+          if (String(url).indexOf('100.101.102.103') >= 0) {
+            tries += 1;
+            if (tries === 1) throw new Error('Network is unreachable');
+            return { ok: true, status: 200, text: async () => snapshot };
+          }
+          return new Promise(() => {});
+        };
+        const recovered = await readAnyAddress([TS]);
+        t('aFirstAttemptThatFailsIsTriedAgain', recovered.chosen, TS);
+        t('andTheFileArrivesOnTheSecondTry', !!recovered.remote, true);
+        t('andThatTookTwoAttempts', tries, 2);
+
         // (b) An empty answer is not an answer until the other address has had
         //     its turn: the file may still arrive.
         window.fetch = async (url) => {
@@ -6266,6 +6289,7 @@ async function runSuite(driverBase) {
         const hint = syncTailscaleHint([TS]);
         t('theHintNamesBothEnds', hint.indexOf('connected on this device and on the computer') >= 0, true);
         t('andThePort', hint.indexOf('port 8787') >= 0, true);
+        t('andNamesMobileData', hint.indexOf('mobile data') >= 0, true);
         t('andWifiGetsNoTailscaleHint', syncTailscaleHint([LAN]), '');
 
         window.fetch = async () => { throw new Error('network down'); };
@@ -6309,13 +6333,17 @@ async function runSuite(driverBase) {
         && addressRace.detail.andThereIsNoFile.pass
         && addressRace.detail.andNoAttemptFailed.pass
         && addressRace.detail.bothDownChoosesNothing.pass
-        && addressRace.detail.andReportsBothAttempts.pass, addressRace);
+        && addressRace.detail.andReportsBothAttempts.pass
+        && addressRace.detail.aFirstAttemptThatFailsIsTriedAgain.pass
+        && addressRace.detail.andTheFileArrivesOnTheSecondTry.pass
+        && addressRace.detail.andThatTookTwoAttempts.pass, addressRace);
       check('a Tailscale failure says what is specific to Tailscale, and a Wi-Fi one does not',
         addressRace.detail.aTailscaleAddressIsRecognised.pass
         && addressRace.detail.andAnAddressJustOutsideItIsNot.pass
         && addressRace.detail.andWifiIsNotTailscale.pass
         && addressRace.detail.theHintNamesBothEnds.pass
         && addressRace.detail.andThePort.pass
+        && addressRace.detail.andNamesMobileData.pass
         && addressRace.detail.andWifiGetsNoTailscaleHint.pass
         && addressRace.detail.aTailscaleFailureNamesTailscale.pass
         && addressRace.detail.andStillSaysNoAnswer.pass
@@ -6479,6 +6507,7 @@ async function runSuite(driverBase) {
         t('aFilePullNamesTheFile', say('pulled', 'cloud'), 'Took the copy from the file');
         t('aFilePushNamesTheFile', say('pushed', 'cloud'), 'Put your data in the file');
         t('aFileCreationNamesTheFile', say('created', 'cloud'), 'File set up');
+        t('aWaitingFileSaysWhy', say('waiting', 'cloud'), 'Waiting for the drive to finish uploading');
         t('aServerPullNamesTheServer', say('pulled', 'network'), 'Took data from your server');
         t('aServerPushNamesTheServer', say('pushed', 'network'), 'Sent your data');
         t('aServerCreationNamesTheServer', say('created', 'network'), 'Server set up');
@@ -6505,6 +6534,7 @@ async function runSuite(driverBase) {
         && routeWording.detail.aFilePullNamesTheFile.pass
         && routeWording.detail.aFilePushNamesTheFile.pass
         && routeWording.detail.aFileCreationNamesTheFile.pass
+        && routeWording.detail.aWaitingFileSaysWhy.pass
         && routeWording.detail.aServerPullNamesTheServer.pass
         && routeWording.detail.aServerPushNamesTheServer.pass
         && routeWording.detail.aServerCreationNamesTheServer.pass
@@ -6705,8 +6735,10 @@ async function runSuite(driverBase) {
 
         // Proton answers a read of a document it has not uploaded yet with
         // "Cannot get drive link with upload id". On the device that made the
-        // file that means "nothing there yet": write, rather than report a
-        // pending upload as a dead file.
+        // file, straight after its own write, that means "the copy is still
+        // uploading", not "write it again": opening a document Proton is still
+        // processing for writing is what produced "that file could not be opened
+        // for writing" even though the copy had reached the drive.
         window.__ops.length = 0;
         window.syncFolderPlugin = () => Object.assign(fake(), {
           readFile: async (o) => {
@@ -6714,17 +6746,54 @@ async function runSuite(driverBase) {
             throw new Error('Cannot get drive link with upload id');
           }
         });
-        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: true });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: true, filePushedAt: new Date().toISOString() });
         const pending = await syncNow();
-        t('aPendingUploadOnAFileThisDeviceMadeIsTreatedAsEmpty', pending.did, 'created');
-        t('andItWritesRatherThanFailing', window.__ops.indexOf('writeFile ' + DOC_URI) >= 0, true);
+        t('aPendingUploadOnAFileThisDeviceMadeWaits', pending.did, 'waiting');
+        t('andDoesNotWriteAgain', window.__ops.filter((one) => one.indexOf('writeFile') === 0).length, 0);
+        t('andSaysWhyItIsWaiting', pending.ok, true);
+
+        // Waiting forever would be the other fault. Once the upload window has
+        // passed, a document that still cannot be read is tried again.
+        setSyncSettings({ fileNew: false, fileOwned: true, filePushedAt: new Date(Date.now() - 180000).toISOString() });
+        window.__ops.length = 0;
+        const afterWindow = await syncNow();
+        t('afterTheUploadWindowItTriesAgain', afterWindow.did, 'created');
+        t('andWritesThisTime', window.__ops.some((one) => one.indexOf('writeFile') === 0), true);
+
+        // A provider that is not ready for the first write either gets one retry.
+        // This is the same Proton window seen from the other end.
+        let writeAttempts = 0;
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async () => ({ exists: true, data: '' }),
+          writeFile: async (o) => {
+            writeAttempts += 1;
+            if (writeAttempts === 1) throw new Error('that file could not be opened for writing');
+            window.__documents[o.uri] = o.data;
+            return { ok: true };
+          }
+        });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: true, fileOwned: true, filePushedAt: '' });
+        const retriedWrite = await syncNow();
+        t('aFirstWriteTheDriveIsNotReadyForIsRetried', retriedWrite.did, 'created');
+        t('andOnlyOnceMore', writeAttempts, 2);
+        t('andTheDocumentCarriesTheCopy', JSON.parse(window.__documents[DOC_URI]).format, 1);
+        t('andTheWriteTimeIsRemembered', syncSettings().filePushedAt !== '', true);
+
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async () => ({ exists: true, data: '' }),
+          writeFile: async () => { throw new Error('that file could not be opened for writing'); }
+        });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: true, fileOwned: true, filePushedAt: '' });
+        const hardWrite = await syncNow();
+        t('aPersistentBusyDriveSaysToWait', /still finishing the last upload/.test(hardWrite.error), true);
+        t('andSaysItWasTheFile', hardWrite.where, 'file');
 
         // On a device that did not make the file the same answer is a fault, and
         // is reported in the provider's own words so it can be looked up.
         window.syncFolderPlugin = () => Object.assign(fake(), {
           readFile: async () => { throw new Error('Cannot get drive link with upload id'); }
         });
-        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false, filePushedAt: '' });
         const foreignPending = await syncNow();
         t('aPendingUploadOnSomeoneElsesFileIsStillAFailure', foreignPending.ok, false);
         t('andKeepsTheProvidersWords', /Cannot get drive link/.test(foreignPending.error), true);
@@ -6805,11 +6874,21 @@ async function runSuite(driverBase) {
         && folderRoute.detail.andTheFileCarriesIt.pass
         && folderRoute.detail.aNewerDocumentPulls.pass
         && folderRoute.detail.andReplacesRatherThanMerging.pass, folderRoute);
-      check('a pending Proton upload on the file this device made writes instead of failing',
-        folderRoute.detail.aPendingUploadOnAFileThisDeviceMadeIsTreatedAsEmpty.pass
-        && folderRoute.detail.andItWritesRatherThanFailing.pass
+      check('a pending Proton upload on the file this device made waits instead of writing again',
+        folderRoute.detail.aPendingUploadOnAFileThisDeviceMadeWaits.pass
+        && folderRoute.detail.andDoesNotWriteAgain.pass
+        && folderRoute.detail.andSaysWhyItIsWaiting.pass
+        && folderRoute.detail.afterTheUploadWindowItTriesAgain.pass
+        && folderRoute.detail.andWritesThisTime.pass
         && folderRoute.detail.aPendingUploadOnSomeoneElsesFileIsStillAFailure.pass
         && folderRoute.detail.andKeepsTheProvidersWords.pass, folderRoute);
+      check('and a drive that is not ready for the write gets one retry, then says to wait',
+        folderRoute.detail.aFirstWriteTheDriveIsNotReadyForIsRetried.pass
+        && folderRoute.detail.andOnlyOnceMore.pass
+        && folderRoute.detail.andTheDocumentCarriesTheCopy.pass
+        && folderRoute.detail.andTheWriteTimeIsRemembered.pass
+        && folderRoute.detail.aPersistentBusyDriveSaysToWait.pass
+        && folderRoute.detail.andSaysItWasTheFile.pass, folderRoute);
       check('changing the Cloud file lets go of the last grant, and a file that has gone says so',
         folderRoute.detail.changingTheFileLetsGoOfTheLast.pass
         && folderRoute.detail.andKeepsTheNewOneFile.pass
@@ -6896,6 +6975,9 @@ async function runSuite(driverBase) {
         await draw({ transport: 'network' });
         t('withoutTheApiOnlyNetworkIsOffered', labels(), ['Network']);
         t('andTheProviderIsAbsent', syncFolderPlugin(), null);
+        const noPickerHint = document.getElementById('sync-browser-hint');
+        t('andTheCardSaysWhyTheOtherTwoAreMissing',
+          !!noPickerHint && /only Network can be set up here/.test(noPickerHint.textContent), true);
 
         // (b) With it, all three are offered and the pickers return handles.
         window.showDirectoryPicker = async () => dirHandle;
@@ -6905,6 +6987,7 @@ async function runSuite(driverBase) {
         setSyncSettings({ transport: 'syncthing', folderUri: '', folderName: '', fileUri: '', fileName: '' });
         let c = await draw({ transport: 'syncthing' });
         t('withTheApiAllThreeAreOffered', labels(), ['Syncthing', 'Cloud', 'Network']);
+        t('andTheHintGoesAway', document.getElementById('sync-browser-hint'), null);
         t('andTheCardAsksForAFolder', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
 
         await chooseSyncFolderFromSettings(null);
@@ -6979,11 +7062,13 @@ async function runSuite(driverBase) {
         localStorage.removeItem('sorted-sync-backup');
         return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
       `);
-      check('a browser without the File System Access API is offered Network only',
+      check('a browser without the File System Access API is offered Network only, and says why',
         browserRoute.detail.withoutTheApiOnlyNetworkIsOffered.pass
-        && browserRoute.detail.andTheProviderIsAbsent.pass, browserRoute);
+        && browserRoute.detail.andTheProviderIsAbsent.pass
+        && browserRoute.detail.andTheCardSaysWhyTheOtherTwoAreMissing.pass, browserRoute);
       check('a browser with it is offered all three, with a folder picker that is remembered',
         browserRoute.detail.withTheApiAllThreeAreOffered.pass
+        && browserRoute.detail.andTheHintGoesAway.pass
         && browserRoute.detail.andTheCardAsksForAFolder.pass
         && browserRoute.detail.theBrowserFolderIsKept.pass
         && browserRoute.detail.andNamedAfterTheHandle.pass
