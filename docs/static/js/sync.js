@@ -205,7 +205,14 @@ function syncSettings() {
     // needs a provider that publishes a browseable tree, and Proton does not.
     fileUri: typeof set.fileUri === 'string' ? set.fileUri : '',
     fileName: typeof set.fileName === 'string' ? set.fileName : '',
-    auto: set.auto === true
+    // A document the Save-to picker has just made is empty on purpose, and some
+    // providers (Proton) cannot be read until their first upload has finished.
+    // The first sync after Save new copy therefore writes without reading. It
+    // also keeps `fileOwned`, so a later read that fails with the provider's
+    // pending-upload error is treated as "nothing here yet" rather than as a
+    // dead file. Only the device that made the file gets that leniency.
+    fileNew: set.fileNew === true,
+    fileOwned: set.fileOwned === true
   };
 }
 
@@ -278,6 +285,21 @@ function syncTouch() {
   const now = Date.now();
   const next = Number.isFinite(previous) && previous >= now ? previous + 1 : now;
   localStorage.setItem(SYNC_TOUCHED_KEY, new Date(next).toISOString());
+  scheduleAutoSync();
+}
+
+// A push settles the local stamp on the snapshot that was sent. Without this,
+// an install with rows but no stamp of its own (one upgraded from before this
+// existed) gives every build "now": the first push is right, but the next pass
+// sees a newer local stamp and pushes the same data again, forever. The guard
+// keeps a change made while the write was in flight, because that stamp is
+// newer than the one that went out.
+function syncRecordPushed(stamp) {
+  const pushed = Date.parse(stamp || '');
+  if (!Number.isFinite(pushed)) return;
+  const current = Date.parse(localStorage.getItem(SYNC_TOUCHED_KEY) || '');
+  if (Number.isFinite(current) && current >= pushed) return;
+  localStorage.setItem(SYNC_TOUCHED_KEY, new Date(pushed).toISOString());
 }
 
 function syncDataStamp(data) {
@@ -461,16 +483,23 @@ async function syncFetch(url, options) {
 // The second transport, and the one with no address in it.
 //
 // On Android a small native plugin wraps the system folder picker and the one
-// file inside whatever folder comes back. In a browser there is nothing to wrap,
-// because a page cannot read a folder at all — so the two folder routes are not
-// offered there, rather than offered and then explained away.
+// file inside whatever folder comes back. On a desktop browser Chrome and Edge
+// have the File System Access API, which returns a handle to a folder or a file
+// that can be used again after a reload; sync-browser.js wraps it in the same
+// shape. Firefox and Safari have neither, so the routes are not offered there.
 let syncFolderCap = null;
 
 function syncFolderPlugin() {
   const cap = window.Capacitor;
-  if (!cap || typeof cap.isNativePlatform !== 'function' || !cap.isNativePlatform()) return null;
-  if (typeof cap.registerPlugin !== 'function') return null;
-  if (!syncFolderCap) syncFolderCap = cap.registerPlugin('SortedFolder');
+  const native = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
+  if (native) {
+    if (!cap || typeof cap.registerPlugin !== 'function') return null;
+    if (!syncFolderCap) syncFolderCap = cap.registerPlugin('SortedFolder');
+    return syncFolderCap;
+  }
+  if (!syncFolderCap && typeof createSortedBrowserSync === 'function') {
+    syncFolderCap = createSortedBrowserSync(SYNC_FILE);
+  }
   return syncFolderCap;
 }
 
@@ -499,11 +528,50 @@ function syncAddresses(settings) {
   return [s.urlLan, s.urlTailscale].filter((url) => !!url);
 }
 
+// Read from whichever address answers first, not from Wi-Fi first and Tailscale
+// only after it gives up. At home the Wi-Fi address is immediate; away from home
+// it is a machine that is not there, and waiting for its timeout before trying
+// the address that does work is why leaving the house felt like a sync that had
+// stopped working. Both addresses point at the same file on the same host, so
+// the first answer is the right answer.
+function readAnyAddress(urls) {
+  return new Promise((resolve) => {
+    const results = [];
+    let left = urls.length;
+    let decided = false;
+    const finish = (value) => {
+      if (decided) return;
+      decided = true;
+      resolve(value);
+    };
+    urls.forEach((url) => {
+      readSyncSnapshot(url).then(
+        (snapshot) => {
+          results.push({ url: url, snapshot: snapshot });
+          // A file is the strongest answer and settles it at once. An empty
+          // answer has to wait: the other address may still produce the file.
+          if (snapshot) finish({ chosen: url, remote: snapshot, attempts: [] });
+        },
+        (err) => { results.push({ url: url, err: err }); }
+      ).finally(() => {
+        left -= 1;
+        if (left > 0 || decided) return;
+        const empty = results.find((one) => !one.err);
+        finish({
+          chosen: empty ? empty.url : null,
+          remote: null,
+          attempts: results.filter((one) => one.err)
+        });
+      });
+    });
+  });
+}
+
 // Reading a folder the person chose. "No file" is the ordinary first-run answer
 // rather than an error: the first sync creates it.
 async function folderReadSnapshot(uri) {
   const plugin = syncFolderPlugin();
-  if (!plugin) throw new Error('Syncing to a folder needs the phone app.');
+  if (!plugin) throw new Error('Syncing to a folder needs a folder picker.');
   const res = await plugin.read({ uri: uri });
   if (!res || !res.exists) return null;
   let parsed;
@@ -516,7 +584,7 @@ async function folderReadSnapshot(uri) {
 
 async function folderWriteSnapshot(uri, snapshot) {
   const plugin = syncFolderPlugin();
-  if (!plugin) throw new Error('Syncing to a folder needs the phone app.');
+  if (!plugin) throw new Error('Syncing to a folder needs a folder picker.');
   await plugin.write({ uri: uri, data: JSON.stringify(snapshot) });
   return true;
 }
@@ -533,7 +601,7 @@ async function folderWriteSnapshot(uri, snapshot) {
 // corrupt file.
 async function fileReadSnapshot(uri) {
   const plugin = syncFolderPlugin();
-  if (!plugin) throw new Error('Syncing to a file needs the phone app.');
+  if (!plugin) throw new Error('Syncing to a file needs a file picker.');
   const res = await plugin.readFile({ uri: uri });
   if (!res || !res.exists) return null;
   if (!String(res.data || '').trim()) return null;
@@ -547,9 +615,19 @@ async function fileReadSnapshot(uri) {
 
 async function fileWriteSnapshot(uri, snapshot) {
   const plugin = syncFolderPlugin();
-  if (!plugin) throw new Error('Syncing to a file needs the phone app.');
+  if (!plugin) throw new Error('Syncing to a file needs a file picker.');
   await plugin.writeFile({ uri: uri, data: JSON.stringify(snapshot) });
   return true;
+}
+
+// Proton Drive's provider answers a read of a document it has not uploaded yet
+// with this, rather than with an empty file. The document exists and is fine;
+// its first upload is still queued. Only the device that created it treats that
+// as "nothing here yet" (see fileOwned in syncSettings), because on any other
+// device it is a fault worth reporting.
+function isPendingUploadError(err) {
+  const text = String((err && err.message) || err);
+  return /cannot get drive link|upload id/i.test(text);
 }
 
 // ---------------------------------------------------------------- diagnosis
@@ -560,6 +638,27 @@ async function fileWriteSnapshot(uri, snapshot) {
 // name the address, and say what to look at.
 function syncHostBase(url) {
   try { return new URL(url).origin; } catch (err) { return null; }
+}
+
+// Tailscale hands out addresses in 100.64.0.0/10. Recognising them is what lets
+// a failure say the one thing that is specific to that route: the tailnet has to
+// be up on both ends, and the computer's firewall has to allow the port on that
+// interface. Without it the message is the same "no answer" a wrong Wi-Fi
+// address gets, and the fix is somewhere else entirely.
+function syncIsTailscaleAddress(url) {
+  try {
+    const host = new URL(url).hostname;
+    const parts = host.split('.').map((one) => Number(one));
+    if (parts.length !== 4 || parts.some((one) => !Number.isInteger(one))) return false;
+    return parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127;
+  } catch (err) {
+    return false;
+  }
+}
+
+function syncTailscaleHint(urls) {
+  if (!urls.some((url) => syncIsTailscaleAddress(url))) return '';
+  return ' Check Tailscale is connected on this device and on the computer, and that the computer allows port 8787 on its Tailscale network.';
 }
 
 function syncReachMessage(url, err) {
@@ -649,16 +748,40 @@ async function syncNetworkFailure(attempts) {
   const specific = results.find((r) => r.found.state === 'not-the-host'
     || r.found.state === 'wrong-path' || r.found.state === 'malformed');
   if (specific) return specific.found.message;
-  if (results.length === 1) return results[0].found.message;
+  const hint = syncTailscaleHint(attempts.map((a) => a.url));
+  if (results.length === 1) {
+    const only = results[0];
+    if (only.found.state === 'unreachable' && hint) {
+      return 'No answer from ' + (syncHostBase(only.url) || only.url) + '.' + hint;
+    }
+    return only.found.message;
+  }
   const names = attempts.map((a) => syncHostBase(a.url) || a.url);
+  if (hint) return 'No answer from ' + names.join(' or ') + '.' + hint;
   return 'No answer from ' + names.join(' or ') + '. Is the host running, and can this device reach it?';
 }
 
 // ---------------------------------------------------------------- syncing
 
+// One pass at a time. The manual button, a change of data, a return to the app
+// and the poll can all ask for a sync in the same second; two passes on the same
+// database would read the same remote and both decide to write. A promise chain
+// is enough: each pass starts after the one before it has finished.
+let syncChain = Promise.resolve();
+
+function syncNow() {
+  // An explicit pass makes a queued automatic one redundant. Dropping it here
+  // also keeps the manual button from doing the same work twice when it is
+  // pressed during the debounce.
+  cancelAutoSync();
+  const pass = syncChain.then(() => syncNowOnce());
+  syncChain = pass.catch(() => {});
+  return pass;
+}
+
 // One pass. Reports what it did rather than throwing on the ordinary outcomes,
 // because "already up to date" is a result, not a failure.
-async function syncNow() {
+async function syncNowOnce() {
   const settings = syncSettings();
   const transport = SYNC_TRANSPORTS[settings.transport];
   if (!transport || !transport.available) {
@@ -691,52 +814,55 @@ async function syncNow() {
     }
   } else if (byFile) {
     writeRemote = (snapshot) => fileWriteSnapshot(settings.fileUri, snapshot);
-    try {
-      remote = await fileReadSnapshot(settings.fileUri);
-    } catch (err) {
-      const detail = String((err && err.message) || err);
-      return { ok: false, error: detail, where: 'file', detail: detail };
+    // A document just made by Save new copy is empty, and Proton cannot serve a
+    // read of it until its first upload has finished. Reading it anyway is what
+    // produced "Cannot get drive link with upload id" on the first sync, while
+    // the drive app sat there saying "Waiting to upload". The first pass writes
+    // instead of reading; a later pass that hits the same message on a file this
+    // device made is treated as empty for the same reason.
+    if (!settings.fileNew) {
+      try {
+        remote = await fileReadSnapshot(settings.fileUri);
+      } catch (err) {
+        if (!(settings.fileOwned && isPendingUploadError(err))) {
+          const detail = String((err && err.message) || err);
+          return { ok: false, error: detail, where: 'file', detail: detail };
+        }
+        remote = null;
+      }
     }
   } else {
-    // Wi-Fi first, then Tailscale. A file found at either is the file; if
+    // Whichever address answers first. A file found at either is the file; if
     // neither has one, the first address that answered is where the first copy
     // is created. Writes go back to whichever address answered the read, so a
     // phone that reached the host over Tailscale does not then try to write over
     // Wi-Fi from somewhere else.
-    const urls = syncAddresses(settings);
-    const attempts = [];
-    let chosen = null;
-    let emptyAt = null;
-    for (const url of urls) {
-      try {
-        const found = await readSyncSnapshot(url);
-        if (found) { chosen = url; remote = found; break; }
-        if (!emptyAt) emptyAt = url;
-      } catch (err) {
-        attempts.push({ url: url, err: err });
-      }
-    }
-    if (!chosen) chosen = emptyAt;
-    if (!chosen) {
+    const found = await readAnyAddress(syncAddresses(settings));
+    if (!found.chosen) {
       // A folder says what went wrong in the plugin's own words, but an address
       // arrives here as "Failed to fetch": the browser's wording, the same for a
       // dead machine, a wrong network and a refused request. Ask each address
       // instead, because that is what makes it fixable.
-      const error = await syncNetworkFailure(attempts);
+      const error = await syncNetworkFailure(found.attempts);
       return {
         ok: false,
         error: error,
         where: 'host',
-        detail: attempts.map((a) => String((a.err && a.err.message) || a.err)).join('; ')
+        detail: found.attempts.map((a) => String((a.err && a.err.message) || a.err)).join('; ')
       };
     }
-    writeRemote = (snapshot) => writeSyncSnapshot(chosen, snapshot);
+    remote = found.remote;
+    writeRemote = (snapshot) => writeSyncSnapshot(found.chosen, snapshot);
   }
 
   const local = await buildSyncSnapshot();
 
   if (!remote) {
     await writeRemote(local);
+    syncRecordPushed(local.updatedAt);
+    // The new document now has a snapshot in it, so the next pass reads and
+    // compares like any other.
+    if (byFile && settings.fileNew) setSyncSettings({ fileNew: false });
     return { ok: true, did: 'created', at: local.updatedAt };
   }
 
@@ -752,6 +878,7 @@ async function syncNow() {
   // written to is stamped at the epoch, so it can only ever pull.
   if (syncRowCount(remote) === 0 && syncRowCount(local) > 0) {
     await writeRemote(local);
+    syncRecordPushed(local.updatedAt);
     return { ok: true, did: 'pushed', at: local.updatedAt };
   }
 
@@ -770,9 +897,86 @@ async function syncNow() {
   }
   if (localT > remoteT) {
     await writeRemote(local);
+    syncRecordPushed(local.updatedAt);
     return { ok: true, did: 'pushed', at: local.updatedAt };
   }
   return { ok: true, did: 'none', at: local.updatedAt };
+}
+
+// ---------------------------------------------------------------- automatic
+
+// Sync on its own, rather than only when a button is pressed.
+//
+// Four moments matter:
+//   - after a change, once the typing has stopped (a debounce, so an import or
+//     a quick edit is one pass rather than ten);
+//   - when the app comes back to the front, which on Android is the only reliable
+//     "the phone is being used again" signal;
+//   - on first load, so a new device pulls without being asked; and
+//   - every 15 seconds while the app is visible, so a device that is already
+//     open picks up what another device wrote without a refresh.
+//
+// A failure is silent. The manual buttons are where a reason is reported; an
+// automatic pass that popped a toast every time the host was asleep would be
+// worse than not syncing. The only visible effect of an automatic pull is that
+// the page is redrawn with the new data.
+let syncAutoTimer = null;
+let syncAutoRunning = false;
+let syncAutoPoll = null;
+
+function cancelAutoSync() {
+  if (syncAutoTimer) {
+    clearTimeout(syncAutoTimer);
+    syncAutoTimer = null;
+  }
+}
+
+function scheduleAutoSync(delay) {
+  if (typeof syncConfigured !== 'function' || !syncConfigured()) return;
+  startAutoSyncPoll();
+  if (syncAutoTimer) clearTimeout(syncAutoTimer);
+  const wait = Number.isFinite(delay) ? Math.max(0, delay) : 1800;
+  syncAutoTimer = setTimeout(() => {
+    syncAutoTimer = null;
+    autoSyncNow();
+  }, wait);
+}
+
+async function autoSyncNow() {
+  if (syncAutoRunning) return;
+  if (typeof syncConfigured !== 'function' || !syncConfigured()) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  syncAutoRunning = true;
+  let pulled = false;
+  try {
+    const res = await syncNow();
+    pulled = !!(res && res.ok && res.did === 'pulled');
+  } catch (err) {
+    // Deliberately silent. The manual buttons report; this is the background.
+  } finally {
+    syncAutoRunning = false;
+  }
+  if (!pulled) return;
+  // A pull replaces the whole database. Redrawing is what makes that visible,
+  // but not over an open form: the modal belongs to the person using it.
+  if (typeof renderPage === 'function' && !document.querySelector('.modal.active')) {
+    await renderPage();
+  }
+}
+
+function startAutoSyncPoll() {
+  if (syncAutoPoll || typeof setInterval !== 'function') return;
+  // Nothing to poll until a route is set up. Starting a timer that only wakes
+  // to discover that would be a wake-up every 15 seconds for the life of a tab
+  // that never syncs.
+  if (typeof syncConfigured !== 'function' || !syncConfigured()) return;
+  syncAutoPoll = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    // A change or a return to the app has already queued a pass; do not stack
+    // a poll behind it.
+    if (syncAutoTimer || syncAutoRunning) return;
+    autoSyncNow();
+  }, 15000);
 }
 
 // When the local copy was replaced by a pull, so a settings page can offer it

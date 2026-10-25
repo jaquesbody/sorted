@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.102.0';
+const APP_VERSION = '2.103.0';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -575,6 +575,10 @@ document.addEventListener('visibilitychange', () => {
   if (now - resumeRenderedAt < 1500) return;
   resumeRenderedAt = now;
   renderPage();
+  // Coming back is also the moment another device's change is most likely to
+  // be waiting. Queued rather than awaited: the page is already being drawn,
+  // and a pull redraws it again once the data has landed.
+  if (typeof scheduleAutoSync === 'function') scheduleAutoSync(0);
 });
 
 // Modal — openModal moves focus into the modal (first field, or the
@@ -1726,6 +1730,7 @@ function syncResultMessage(res) {
 // which is the thing you want after an import — so it works either way and just
 // says which of the two it did.
 async function dashboardSyncNow(btn) {
+  cancelAutoSync();
   if (btn) btn.classList.add('is-busy');
   let message = '';
   try {
@@ -1762,10 +1767,11 @@ function syncConfigured() {
 // "how easy is it to change my mind later".
 function syncSettingsHtml() {
   const s = syncSettings();
-  // Only the routes this build can actually do. A browser cannot read a folder,
-  // so the two folder routes are not listed there at all — the alternative was
-  // offering them and then explaining, in the card, why they do not work, which
-  // is how this card ended up unreadable in the first place.
+  // Only the routes this build can actually do. A phone has the folder plugin;
+  // a desktop Chrome or Edge has the File System Access API; anything else is
+  // offered the Network route and not the two that would not work. The
+  // alternative was offering them and then explaining, in the card, why they do
+  // not, which is how this card ended up unreadable in the first place.
   const keys = Object.keys(SYNC_TRANSPORTS).filter((key) => {
     const t = SYNC_TRANSPORTS[key];
     return t.available && (!(t.needsFolder || t.needsFile) || syncFolderHere());
@@ -1798,6 +1804,11 @@ function syncSettingsHtml() {
   // something the two controls already said. What was asked for was the simplest
   // version that works: pick where, answer the one question that route asks —
   // an address, or a folder — and press Sync now.
+  //
+  // The button is no longer the only way a sync happens. A change, a return to
+  // the app and a 15-second poll all run one on their own; the line under the
+  // button says so in one sentence. The button stays because it is also how you
+  // ask "now, and tell me what happened".
   //
   // The steps are the exception, and they are folded away rather than deleted.
   // They used to open themselves on a route that had not been answered yet, on
@@ -1874,6 +1885,7 @@ function syncSettingsHtml() {
     <button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync now</button>
+    ${ready ? '<div class="setting-hint" style="padding: 0 20px;">Sorted also syncs on its own when the data changes, when you return to the app and every 15 seconds while it is open.</div>' : ''}
     <details class="setup-steps">
       <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
@@ -1925,7 +1937,7 @@ async function chooseSyncFolderFromSettings(btn) {
   if (!plugin) {
     // Only reachable if the browser build is somehow showing this row, but a
     // dead button that says nothing is worse than a sentence.
-    showToast('Syncing to a folder needs the phone app.', 6000);
+    showToast('Choosing a folder needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
     return;
   }
   if (btn) { btn.disabled = true; btn.textContent = 'Choosing…'; }
@@ -1959,7 +1971,7 @@ async function chooseSyncFolderFromSettings(btn) {
 async function chooseSyncFileFromSettings(btn, create) {
   const plugin = syncFolderPlugin();
   if (!plugin) {
-    showToast('Syncing to a file needs the phone app.', 6000);
+    showToast('Choosing a file needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
     return;
   }
   if (btn) { btn.disabled = true; btn.textContent = create ? 'Saving…' : 'Choosing…'; }
@@ -1971,14 +1983,27 @@ async function chooseSyncFileFromSettings(btn, create) {
       if (previous && previous !== res.uri) {
         try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
       }
-      setSyncSettings({ fileUri: res.uri, fileName: res.name || '' });
-      message = 'File set. Tap Sync now to use it.';
+      // A document the system has just created is empty, and on Proton it also
+      // cannot be read until its first upload finishes. Recording that lets the
+      // first sync write without reading, which is the difference between a
+      // working Cloud route and "Cannot get drive link with upload id".
+      setSyncSettings({
+        fileUri: res.uri,
+        fileName: res.name || '',
+        fileNew: !!create,
+        fileOwned: !!create
+      });
+      message = create ? 'File set. Syncing now.' : 'File set. Tap Sync now to use it.';
     }
   } catch (err) {
     message = String((err && err.message) || err);
   }
   await renderPage();
   if (message) showToast(message, 6000);
+  // Choosing a file with nothing in it is the one case where the next pass has
+  // to run without being asked: there is no remote to compare, and the whole
+  // point of Save new copy was to put the data there.
+  if (create && syncSettings().fileNew) scheduleAutoSync(600);
 }
 
 // Copying one of the commands out of the setup steps.
@@ -2020,6 +2045,7 @@ async function copySetupCommand(btn) {
 }
 
 async function syncFromSettings(btn) {
+  cancelAutoSync();
   if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
   let message;
   try {
@@ -6708,3 +6734,8 @@ maybeShowPrivacyNotice();
 // common case costs one function call and no listeners.
 initNotifications();
 renderPage();
+// Automatic sync from the first load, not from the first visit to Settings. The
+// delay lets the initial render finish before a pull replaces the data and asks
+// for a second one; with nothing configured both calls return immediately.
+startAutoSyncPoll();
+scheduleAutoSync(1200);

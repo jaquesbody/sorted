@@ -5632,6 +5632,20 @@ async function runSuite(driverBase) {
         t('thePushPutTheFile',
           JSON.parse(window.__syncFile).data.spend.some((r) => r.title === 'Pushed'), true);
 
+        // (c2) A push settles the stamp on what was sent. An install with rows
+        //      but no stamp of its own is the one case where a build has to
+        //      invent "now"; without settling it, the next pass invents a newer
+        //      "now" and pushes the same data again, forever. The guard also
+        //      means a change made during the write is not undone by it.
+        const touchedBefore = localStorage.getItem('sorted-sync-touched');
+        localStorage.setItem('sorted-sync-touched', '2026-01-01T00:00:00.000Z');
+        syncRecordPushed('2026-01-02T00:00:00.000Z');
+        t('aPushMovesTheStampForward', localStorage.getItem('sorted-sync-touched'), '2026-01-02T00:00:00.000Z');
+        syncRecordPushed('2026-01-01T12:00:00.000Z');
+        t('andNeverMovesItBackwards', localStorage.getItem('sorted-sync-touched'), '2026-01-02T00:00:00.000Z');
+        if (touchedBefore === null) localStorage.removeItem('sorted-sync-touched');
+        else localStorage.setItem('sorted-sync-touched', touchedBefore);
+
         // (d) A newer file pulls, and replaces rather than merging.
         const remoteData = {
           spend: [{ id: 'fromthefile', title: 'From the file', amount: 99, date: '2026-09-02', category: 'Groceries' }]
@@ -5656,6 +5670,9 @@ async function runSuite(driverBase) {
       check('and an unchanged pass says so and puts nothing — this is what stops it pushing forever',
         tree.detail.anUnchangedPassSaysNone.pass && tree.detail.anUnchangedPassPutsNothing.pass, tree);
       check('a local change pushes', tree.detail.alocalChangePushes.pass, tree);
+      check('and a push settles the stamp, so it cannot push the same data forever',
+        tree.detail.aPushMovesTheStampForward.pass
+        && tree.detail.andNeverMovesItBackwards.pass, tree);
       check('a newer file pulls', tree.detail.anewerFilePulls.pass, tree);
       check('and a pull replaces rather than merging, so a deleted row stays deleted',
         tree.detail.apullReplacesRatherThanMerging.pass, tree);
@@ -5736,7 +5753,8 @@ async function runSuite(driverBase) {
         t('anEmptySettingDefaultsToNetwork', syncSettings().transport, 'network');
         t('anEmptySettingHasNoUrl', syncSettings().urlLan, '');
         t('anEmptySettingHasNoTailscaleAddress', syncSettings().urlTailscale, '');
-        t('autoIsOffUnlessAsked', syncSettings().auto, false);
+        t('aNewFileIsNotAssumed', syncSettings().fileNew, false);
+        t('andIsNotOwned', syncSettings().fileOwned, false);
         localStorage.setItem('sorted-sync-settings', 'not json at all');
         t('aCorruptSettingDoesNotStopSettingsOpening', syncSettings().transport, 'network');
         localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'nonsense', url: '  http://x/y  ' }));
@@ -6182,7 +6200,253 @@ async function runSuite(driverBase) {
         emptyFile.detail.aDeliberateWipeStillPushes.pass
         && emptyFile.detail.andTheFileBecomesEmpty.pass, emptyFile);
 
-      // 7d. The two places that answered "is sync set up?" and "what does the
+      // 7d. The Network route has two addresses. At home the Wi-Fi one answers;
+      //     away from home it is a machine that is not there, and the Tailscale
+      //     one is the only way through. Waiting for the dead one before trying
+      //     the live one is what made leaving the house look like a broken sync.
+      console.log('\n# two addresses: the first answer wins');
+
+      const addressRace = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const realFetch = window.fetch;
+        const LAN = 'http://192.168.1.10:8787/sorted-snapshot.json';
+        const TS = 'http://100.101.102.103:8787/sorted-snapshot.json';
+        const snapshot = JSON.stringify({
+          format: 1, deviceId: 'host',
+          updatedAt: new Date(Date.now() + 3600000).toISOString(),
+          data: { spend: [{ id: 'r', title: 'Over Tailscale', amount: 1, date: '2026-09-08', category: 'Groceries' }] }
+        });
+
+        // (a) Wi-Fi never answers; Tailscale does. The pass must not wait for
+        //     the address that is not there.
+        window.fetch = async (url) => {
+          if (String(url).indexOf('192.168.1.10') >= 0) return new Promise(() => {});
+          return { ok: true, status: 200, text: async () => snapshot };
+        };
+        const started = Date.now();
+        const found = await readAnyAddress([LAN, TS]);
+        const elapsed = Date.now() - started;
+        t('theWorkingAddressWins', found.chosen, TS);
+        t('andDoesNotWaitForTheDeadOne', elapsed < 1500, true);
+        t('andReturnsTheFileItFound', !!found.remote, true);
+        t('andThereIsNothingToReport', found.attempts, []);
+
+        // (b) An empty answer is not an answer until the other address has had
+        //     its turn: the file may still arrive.
+        window.fetch = async (url) => {
+          if (String(url).indexOf('192.168.1.10') >= 0) {
+            return { ok: false, status: 404, text: async () => '' };
+          }
+          return { ok: true, status: 200, text: async () => snapshot };
+        };
+        const emptyFirst = await readAnyAddress([LAN, TS]);
+        t('anEmptyAddressDoesNotSettleIt', emptyFirst.chosen, TS);
+        t('andTheFileStillArrives', !!emptyFirst.remote, true);
+
+        // (c) Both empty: the first address that answered is where the first
+        //     copy is created.
+        window.fetch = async () => ({ ok: false, status: 404, text: async () => '' });
+        const bothEmpty = await readAnyAddress([LAN, TS]);
+        t('bothEmptyChoosesTheFirstAnswer', bothEmpty.chosen, LAN);
+        t('andThereIsNoFile', bothEmpty.remote, null);
+        t('andNoAttemptFailed', bothEmpty.attempts.length, 0);
+
+        // (d) Both fail: the pass reports every attempt.
+        window.fetch = async () => { throw new Error('network down'); };
+        const bothDown = await readAnyAddress([LAN, TS]);
+        t('bothDownChoosesNothing', bothDown.chosen, null);
+        t('andReportsBothAttempts', bothDown.attempts.length, 2);
+
+        // (e) Tailscale is identified by its address range, which is what lets
+        //     a failure say the one thing that is specific to that route.
+        t('aTailscaleAddressIsRecognised', syncIsTailscaleAddress(TS), true);
+        t('andAnAddressJustOutsideItIsNot', syncIsTailscaleAddress('http://100.128.0.1:8787/x'), false);
+        t('andWifiIsNotTailscale', syncIsTailscaleAddress(LAN), false);
+        const hint = syncTailscaleHint([TS]);
+        t('theHintNamesBothEnds', hint.indexOf('connected on this device and on the computer') >= 0, true);
+        t('andThePort', hint.indexOf('port 8787') >= 0, true);
+        t('andWifiGetsNoTailscaleHint', syncTailscaleHint([LAN]), '');
+
+        window.fetch = async () => { throw new Error('network down'); };
+        setSyncSettings({ transport: 'network', urlLan: '', urlTailscale: TS });
+        const tailscaleDown = await syncNow();
+        t('aTailscaleFailureNamesTailscale', tailscaleDown.error.indexOf('Tailscale is connected') >= 0, true);
+        t('andStillSaysNoAnswer', tailscaleDown.error.indexOf('No answer from http://100.101.102.103:8787') >= 0, true);
+
+        setSyncSettings({ transport: 'network', urlLan: LAN, urlTailscale: '' });
+        const wifiDown = await syncNow();
+        t('aWifiFailureCarriesNoTailscaleHint', wifiDown.error.indexOf('Tailscale') >= 0, false);
+
+        // (f) The sync itself uses the race: a dead Wi-Fi box does not stop a
+        //     working Tailscale one.
+        window.fetch = async (url) => {
+          if (String(url).indexOf('192.168.1.10') >= 0) return new Promise(() => {});
+          return { ok: true, status: 200, text: async () => snapshot };
+        };
+        setSyncSettings({ transport: 'network', urlLan: LAN, urlTailscale: TS });
+        const startedSync = Date.now();
+        const overTailscale = await syncNow();
+        t('aDeadWifiAddressDoesNotBlockTailscale', overTailscale.did, 'pulled');
+        t('andThePassIsQuick', Date.now() - startedSync < 1500, true);
+        t('andTheDataCameAcross',
+          (await getAll('spend')).map((r) => r.title).indexOf('Over Tailscale') >= 0, true);
+
+        window.fetch = realFetch;
+        cancelAutoSync();
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('the first address to answer wins, so a dead Wi-Fi address does not hold up Tailscale',
+        addressRace.detail.theWorkingAddressWins.pass
+        && addressRace.detail.andDoesNotWaitForTheDeadOne.pass
+        && addressRace.detail.andReturnsTheFileItFound.pass
+        && addressRace.detail.andThereIsNothingToReport.pass
+        && addressRace.detail.anEmptyAddressDoesNotSettleIt.pass
+        && addressRace.detail.andTheFileStillArrives.pass
+        && addressRace.detail.bothEmptyChoosesTheFirstAnswer.pass
+        && addressRace.detail.andThereIsNoFile.pass
+        && addressRace.detail.andNoAttemptFailed.pass
+        && addressRace.detail.bothDownChoosesNothing.pass
+        && addressRace.detail.andReportsBothAttempts.pass, addressRace);
+      check('a Tailscale failure says what is specific to Tailscale, and a Wi-Fi one does not',
+        addressRace.detail.aTailscaleAddressIsRecognised.pass
+        && addressRace.detail.andAnAddressJustOutsideItIsNot.pass
+        && addressRace.detail.andWifiIsNotTailscale.pass
+        && addressRace.detail.theHintNamesBothEnds.pass
+        && addressRace.detail.andThePort.pass
+        && addressRace.detail.andWifiGetsNoTailscaleHint.pass
+        && addressRace.detail.aTailscaleFailureNamesTailscale.pass
+        && addressRace.detail.andStillSaysNoAnswer.pass
+        && addressRace.detail.aWifiFailureCarriesNoTailscaleHint.pass, addressRace);
+      check('and the sync itself takes the working address rather than waiting for the dead one',
+        addressRace.detail.aDeadWifiAddressDoesNotBlockTailscale.pass
+        && addressRace.detail.andThePassIsQuick.pass
+        && addressRace.detail.andTheDataCameAcross.pass, addressRace);
+
+      // 7e. Automatic sync. The manual buttons still report; these four moments
+      //     run on their own and stay quiet when they cannot.
+      console.log('\n# automatic sync: on a change, on return, and while open');
+
+      const automatic = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        const realFetch = window.fetch;
+        const url = 'http://sync.test/sorted-snapshot.json';
+        window.__autoCalls = [];
+        window.__autoRemote = null;
+        const respond = async (u, options) => {
+          window.__autoCalls.push({ method: (options && options.method) || 'GET' });
+          if ((options && options.method) === 'GET') {
+            if (window.__autoRemote === null) return { ok: false, status: 404, text: async () => '' };
+            return { ok: true, status: 200, text: async () => window.__autoRemote };
+          }
+          window.__autoRemote = options.body;
+          return { ok: true, status: 200, text: async () => '' };
+        };
+        window.fetch = respond;
+
+        // A poll left running by an earlier block must not blur these counts.
+        if (syncAutoPoll) { clearInterval(syncAutoPoll); syncAutoPoll = null; }
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-touched');
+        setSyncSettings({ transport: 'network', url: url });
+
+        // (a) A change queues one pass. Three quick changes are still one pass,
+        //     because each one moves the timer rather than adding to it.
+        window.__autoCalls.length = 0;
+        await addItem('spend', { title: 'First', amount: 1, date: localISO(), category: 'Groceries' });
+        await addItem('spend', { title: 'Second', amount: 2, date: localISO(), category: 'Groceries' });
+        await addItem('spend', { title: 'Third', amount: 3, date: localISO(), category: 'Groceries' });
+        t('aChangeQueuesASync', syncAutoTimer !== null, true);
+        await wait(2100);
+        t('andTheBurstBecomesOnePass', window.__autoCalls.filter((c) => c.method === 'PUT').length, 1);
+        t('andTheQueueIsClear', syncAutoTimer, null);
+        t('andTheFileHasAllThree',
+          JSON.parse(window.__autoRemote).data.spend.filter((r) => /First|Second|Third/.test(r.title)).length, 3);
+
+        // (b) A manual pass drops the queued one rather than doing it twice.
+        window.__autoCalls.length = 0;
+        await addItem('spend', { title: 'Manual', amount: 4, date: localISO(), category: 'Groceries' });
+        await syncNow();
+        t('aManualPassClearsTheQueue', syncAutoTimer, null);
+        await wait(2100);
+        t('andNoSecondPassFollows', window.__autoCalls.filter((c) => c.method === 'PUT').length, 1);
+
+        // (c) Two callers in the same tick queue. They must not read the same
+        //     remote and both decide to write it.
+        let active = 0;
+        let mostAtOnce = 0;
+        window.fetch = async (u, options) => {
+          active += 1;
+          mostAtOnce = Math.max(mostAtOnce, active);
+          await wait(60);
+          active -= 1;
+          return respond(u, options);
+        };
+        const both = await Promise.all([syncNow(), syncNow()]);
+        t('twoPassesAtOnceAreSerialised', mostAtOnce, 1);
+        t('andBothReport', both.length === 2 && both.every((one) => one.ok), true);
+        window.fetch = respond;
+
+        // (d) Failure is silent. The manual buttons report; the background does
+        //     not, because a toast every time the host is asleep is worse than
+        //     not syncing at all.
+        window.fetch = async () => { throw new Error('host asleep'); };
+        const toast = document.getElementById('toast');
+        toast.classList.remove('show');
+        let threw = false;
+        try { await autoSyncNow(); } catch (err) { threw = true; }
+        t('anAutomaticFailureDoesNotThrow', threw, false);
+        t('andSaysNothing', toast.classList.contains('show'), false);
+        window.fetch = respond;
+
+        // (e) Nothing configured means nothing queued and no poll.
+        cancelAutoSync();
+        if (syncAutoPoll) { clearInterval(syncAutoPoll); syncAutoPoll = null; }
+        localStorage.removeItem('sorted-sync-settings');
+        scheduleAutoSync(10);
+        t('nothingConfiguredQueuesNothing', syncAutoTimer, null);
+        t('andStartsNoPoll', syncAutoPoll, null);
+
+        // (f) With a route set up the poll exists once, and asking twice does
+        //     not give it two timers.
+        setSyncSettings({ transport: 'network', url: url });
+        startAutoSyncPoll();
+        const firstPoll = syncAutoPoll;
+        startAutoSyncPoll();
+        t('thePollStartsOnce', syncAutoPoll === firstPoll && firstPoll !== null, true);
+        clearInterval(syncAutoPoll);
+        syncAutoPoll = null;
+
+        cancelAutoSync();
+        window.fetch = realFetch;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-touched');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('a change syncs on its own, and a burst of changes is one pass',
+        automatic.detail.aChangeQueuesASync.pass
+        && automatic.detail.andTheBurstBecomesOnePass.pass
+        && automatic.detail.andTheQueueIsClear.pass
+        && automatic.detail.andTheFileHasAllThree.pass, automatic);
+      check('and a manual pass drops the queued one rather than running twice',
+        automatic.detail.aManualPassClearsTheQueue.pass
+        && automatic.detail.andNoSecondPassFollows.pass, automatic);
+      check('two passes asked for at once run one after the other',
+        automatic.detail.twoPassesAtOnceAreSerialised.pass
+        && automatic.detail.andBothReport.pass, automatic);
+      check('an automatic failure is silent, and no route means no timer at all',
+        automatic.detail.anAutomaticFailureDoesNotThrow.pass
+        && automatic.detail.andSaysNothing.pass
+        && automatic.detail.nothingConfiguredQueuesNothing.pass
+        && automatic.detail.andStartsNoPoll.pass
+        && automatic.detail.thePollStartsOnce.pass, automatic);
+
+      // 7f. The two places that answered "is sync set up?" and "what does the
       //     toast say?" differently. A chosen folder is set up; the toast names
       //     the folder rather than a server that was never part of the route.
       const routeWording = await run(`
@@ -6417,8 +6681,12 @@ async function runSuite(driverBase) {
         window.__ops.length = 0;
         const fileCreated = await syncNow();
         t('theFirstFilePassCreatesTheFile', fileCreated.did, 'created');
-        t('andReadsTheFileThatWasChosen', window.__ops[0], 'readFile ' + DOC_URI);
-        t('andWritesThatSameFile', window.__ops.indexOf('writeFile ' + DOC_URI) >= 0, true);
+        // A document the Save-to picker has just made is empty, and Proton will
+        // not serve a read of it until its first upload has finished. Reading it
+        // anyway is what produced "Cannot get drive link with upload id".
+        t('andNeverReadsTheNewDocument', window.__ops, ['writeFile ' + DOC_URI]);
+        t('andTheDocumentIsNoLongerNew', syncSettings().fileNew, false);
+        t('andThisDeviceStillOwnsIt', syncSettings().fileOwned, true);
         const fileUnchanged = await syncNow();
         t('anUnchangedFilePassSaysNone', fileUnchanged.did, 'none');
         await addItem('spend', { title: 'Through a file', amount: 8, date: localISO(), category: 'Groceries' });
@@ -6435,7 +6703,34 @@ async function runSuite(driverBase) {
         t('aNewerDocumentPulls', filePulled.did, 'pulled');
         t('andReplacesRatherThanMerging', (await getAll('spend')).map((r) => r.title).indexOf('From the file side') >= 0, true);
 
+        // Proton answers a read of a document it has not uploaded yet with
+        // "Cannot get drive link with upload id". On the device that made the
+        // file that means "nothing there yet": write, rather than report a
+        // pending upload as a dead file.
+        window.__ops.length = 0;
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async (o) => {
+            window.__ops.push('readFile ' + o.uri);
+            throw new Error('Cannot get drive link with upload id');
+          }
+        });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: true });
+        const pending = await syncNow();
+        t('aPendingUploadOnAFileThisDeviceMadeIsTreatedAsEmpty', pending.did, 'created');
+        t('andItWritesRatherThanFailing', window.__ops.indexOf('writeFile ' + DOC_URI) >= 0, true);
+
+        // On a device that did not make the file the same answer is a fault, and
+        // is reported in the provider's own words so it can be looked up.
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async () => { throw new Error('Cannot get drive link with upload id'); }
+        });
+        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false });
+        const foreignPending = await syncNow();
+        t('aPendingUploadOnSomeoneElsesFileIsStillAFailure', foreignPending.ok, false);
+        t('andKeepsTheProvidersWords', /Cannot get drive link/.test(foreignPending.error), true);
+
         // (i) Changing the file lets go of the last grant, the same as a folder.
+        window.syncFolderPlugin = fake;
         window.__forgot.length = 0;
         const firstFile = syncSettings().fileUri;
         window.__pickedFile = { uri: DOC_URI_2, name: 'sorted-snapshot-2.json' };
@@ -6457,7 +6752,7 @@ async function runSuite(driverBase) {
         localStorage.removeItem('sorted-sync-backup');
         return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
       `);
-      check('a browser is offered Network only, with both address boxes',
+      check('a browser without the File System Access API is offered Network only, with both address boxes',
         folderRoute.detail.aBrowserOffersOnlyNetwork.pass
         && folderRoute.detail.andDrawsBothAddressBoxes.pass, folderRoute);
       check('and the phone is offered all three: a folder, a file, and the addresses',
@@ -6502,18 +6797,220 @@ async function runSuite(driverBase) {
         && folderRoute.detail.andTheCloudStepsFoldAway.pass, folderRoute);
       check('and a file syncs the same four outcomes: creates into the empty document, pushes, pulls',
         folderRoute.detail.theFirstFilePassCreatesTheFile.pass
-        && folderRoute.detail.andReadsTheFileThatWasChosen.pass
-        && folderRoute.detail.andWritesThatSameFile.pass
+        && folderRoute.detail.andNeverReadsTheNewDocument.pass
+        && folderRoute.detail.andTheDocumentIsNoLongerNew.pass
+        && folderRoute.detail.andThisDeviceStillOwnsIt.pass
         && folderRoute.detail.anUnchangedFilePassSaysNone.pass
         && folderRoute.detail.aLocalChangePushesToTheFile.pass
         && folderRoute.detail.andTheFileCarriesIt.pass
         && folderRoute.detail.aNewerDocumentPulls.pass
         && folderRoute.detail.andReplacesRatherThanMerging.pass, folderRoute);
+      check('a pending Proton upload on the file this device made writes instead of failing',
+        folderRoute.detail.aPendingUploadOnAFileThisDeviceMadeIsTreatedAsEmpty.pass
+        && folderRoute.detail.andItWritesRatherThanFailing.pass
+        && folderRoute.detail.aPendingUploadOnSomeoneElsesFileIsStillAFailure.pass
+        && folderRoute.detail.andKeepsTheProvidersWords.pass, folderRoute);
       check('changing the Cloud file lets go of the last grant, and a file that has gone says so',
         folderRoute.detail.changingTheFileLetsGoOfTheLast.pass
         && folderRoute.detail.andKeepsTheNewOneFile.pass
         && folderRoute.detail.aMissingFileSaysSo.pass
         && folderRoute.detail.andSaysItWasTheFile.pass, folderRoute);
+
+      // 8b. The desktop browser. Chrome and Edge have the File System Access
+      //     API: a page asks for a directory or a file and gets a handle it can
+      //     use again after a reload. That is close enough to Android's picker
+      //     for sync-browser.js to present the same pick/read/write shape, so
+      //     the two folder routes become testable at a desktop.
+      console.log('\n# sync in a desktop browser: the File System Access handles');
+
+      const browserRoute = await run(`
+        const out = {};
+        const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
+        const card = () => [...document.querySelectorAll('.report-card')]
+          .find((x) => /set this up/i.test(x.textContent) && /Sync/.test(x.textContent));
+        const draw = async (patch) => {
+          setSyncSettings(patch);
+          currentPage = 'settings'; await renderPage();
+          await new Promise((r) => setTimeout(r, 400));
+          return card();
+        };
+        const labels = () => [...document.querySelectorAll('#sync-transport option')]
+          .map((o) => o.textContent.trim());
+
+        // Handles are structured-cloneable objects in the real API. The fakes
+        // carry functions, so the small handle store is swapped for an object
+        // in this page. Everything above it — pick, permission, read, write —
+        // is the real code.
+        const realSave = window.saveBrowserSyncHandle;
+        const realLoad = window.loadBrowserSyncHandle;
+        const realDrop = window.dropBrowserSyncHandle;
+        window.__handleStore = {};
+        window.saveBrowserSyncHandle = async (key, handle) => { window.__handleStore[key] = handle; return true; };
+        window.loadBrowserSyncHandle = async (key) => window.__handleStore[key] || null;
+        window.dropBrowserSyncHandle = async (key) => { delete window.__handleStore[key]; return true; };
+
+        window.__browserFiles = {};
+        window.__browserOps = [];
+        const makeFile = (label, key) => ({
+          name: label,
+          queryPermission: async () => 'granted',
+          requestPermission: async () => 'granted',
+          getFile: async () => {
+            window.__browserOps.push('read ' + key);
+            return { text: async () => window.__browserFiles[key] || '' };
+          },
+          createWritable: async () => {
+            let buffer = '';
+            return {
+              write: async (data) => { buffer += data; },
+              close: async () => { window.__browserFiles[key] = buffer; window.__browserOps.push('write ' + key); }
+            };
+          }
+        });
+        const dirFile = makeFile(SYNC_FILE, 'dir');
+        const cloudFile = makeFile('sorted-snapshot.json', 'cloud');
+        const dirHandle = {
+          name: 'Sorted',
+          queryPermission: async () => 'granted',
+          requestPermission: async () => 'granted',
+          getFileHandle: async (name, options) => {
+            window.__browserOps.push('open ' + name);
+            if (!Object.prototype.hasOwnProperty.call(window.__browserFiles, 'dir') && !(options && options.create)) {
+              const err = new Error('not found');
+              err.name = 'NotFoundError';
+              throw err;
+            }
+            return dirFile;
+          }
+        };
+
+        // (a) No File System Access API. Firefox and Safari land here, and the
+        //     two folder routes are not offered rather than offered and then
+        //     explained away.
+        delete window.showDirectoryPicker;
+        delete window.showOpenFilePicker;
+        delete window.showSaveFilePicker;
+        syncFolderCap = null;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        await draw({ transport: 'network' });
+        t('withoutTheApiOnlyNetworkIsOffered', labels(), ['Network']);
+        t('andTheProviderIsAbsent', syncFolderPlugin(), null);
+
+        // (b) With it, all three are offered and the pickers return handles.
+        window.showDirectoryPicker = async () => dirHandle;
+        window.showOpenFilePicker = async () => [cloudFile];
+        window.showSaveFilePicker = async () => cloudFile;
+        syncFolderCap = null;
+        setSyncSettings({ transport: 'syncthing', folderUri: '', folderName: '', fileUri: '', fileName: '' });
+        let c = await draw({ transport: 'syncthing' });
+        t('withTheApiAllThreeAreOffered', labels(), ['Syncthing', 'Cloud', 'Network']);
+        t('andTheCardAsksForAFolder', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
+
+        await chooseSyncFolderFromSettings(null);
+        t('theBrowserFolderIsKept', syncSettings().folderUri, 'browser:dir');
+        t('andNamedAfterTheHandle', syncSettings().folderName, 'Sorted');
+        t('andTheHandleIsRemembered', window.__handleStore.dir === dirHandle, true);
+        c = await draw({ transport: 'syncthing' });
+        t('andSyncCanRun', c.querySelector('.btn-primary').disabled, false);
+
+        // (c) The same four outcomes as the phone, over the browser handle.
+        window.__browserOps.length = 0;
+        const created = await syncNow();
+        t('theBrowserFolderCreatesTheFile', created.did, 'created');
+        t('andOpensTheOneFileItWants', window.__browserOps[0], 'open ' + SYNC_FILE);
+        t('andWritesItOnce', window.__browserOps.filter((one) => one === 'write dir').length, 1);
+        t('andTheFileIsASnapshot', JSON.parse(window.__browserFiles.dir).format, 1);
+        const unchanged = await syncNow();
+        t('anUnchangedBrowserPassSaysNone', unchanged.did, 'none');
+        await addItem('spend', { title: 'From the browser', amount: 6, date: localISO(), category: 'Groceries' });
+        const pushed = await syncNow();
+        t('aBrowserChangePushes', pushed.did, 'pushed');
+        t('andCarriesTheRow',
+          JSON.parse(window.__browserFiles.dir).data.spend.some((r) => r.title === 'From the browser'), true);
+        window.__browserFiles.dir = JSON.stringify({
+          format: 1, deviceId: 'phone',
+          updatedAt: new Date(Date.now() + 3600000).toISOString(),
+          data: { spend: [{ id: 'phone', title: 'From the phone', amount: 2, date: '2026-09-07', category: 'Groceries' }] }
+        });
+        const pulled = await syncNow();
+        t('aNewerBrowserFilePulls', pulled.did, 'pulled');
+        t('andReplacesTheData', (await getAll('spend')).map((r) => r.title).indexOf('From the phone') >= 0, true);
+
+        // (d) Cloud is one file handle, created by the Save picker. The first
+        //     pass writes without reading, exactly as it does on a phone.
+        setSyncSettings({ transport: 'cloud', fileUri: '', fileName: '' });
+        await chooseSyncFileFromSettings(null, true);
+        t('theBrowserFileIsKept', syncSettings().fileUri, 'browser:file');
+        t('andItsHandleIsRemembered', window.__handleStore.file === cloudFile, true);
+        window.__browserOps.length = 0;
+        const cloudCreated = await syncNow();
+        t('aNewBrowserFileIsNeverReadFirst',
+          window.__browserOps.filter((one) => one.indexOf('read ') === 0), []);
+        t('andTheBrowserFileIsCreated', cloudCreated.did, 'created');
+        t('andItsContentsAreASnapshot', JSON.parse(window.__browserFiles.cloud).format, 1);
+        const cloudUnchanged = await syncNow();
+        t('andTheNextBrowserPassReadsIt', cloudUnchanged.did, 'none');
+        t('soItWasReadAfterTheFirstWrite', window.__browserOps.filter((one) => one === 'read cloud').length, 1);
+        const beforeCancel = syncSettings().fileUri;
+        window.showOpenFilePicker = async () => {
+          const err = new Error('cancelled');
+          err.name = 'AbortError';
+          throw err;
+        };
+        await chooseSyncFileFromSettings(null, false);
+        t('closingTheBrowserPickerIsNotAFailure', syncSettings().fileUri, beforeCancel);
+
+        // (e) A handle that has gone is a reason, in the same words as Android.
+        window.__handleStore.dir = null;
+        setSyncSettings({ transport: 'syncthing', folderUri: 'browser:dir', folderName: 'Sorted' });
+        const noHandle = await syncNow();
+        t('aForgottenBrowserHandleSaysSo', /chosen again/.test(noHandle.error), true);
+        t('andSaysItWasTheFolder', noHandle.where, 'folder');
+
+        delete window.showDirectoryPicker;
+        delete window.showOpenFilePicker;
+        delete window.showSaveFilePicker;
+        window.saveBrowserSyncHandle = realSave;
+        window.loadBrowserSyncHandle = realLoad;
+        window.dropBrowserSyncHandle = realDrop;
+        syncFolderCap = null;
+        localStorage.removeItem('sorted-sync-settings');
+        localStorage.removeItem('sorted-sync-backup');
+        return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+      `);
+      check('a browser without the File System Access API is offered Network only',
+        browserRoute.detail.withoutTheApiOnlyNetworkIsOffered.pass
+        && browserRoute.detail.andTheProviderIsAbsent.pass, browserRoute);
+      check('a browser with it is offered all three, with a folder picker that is remembered',
+        browserRoute.detail.withTheApiAllThreeAreOffered.pass
+        && browserRoute.detail.andTheCardAsksForAFolder.pass
+        && browserRoute.detail.theBrowserFolderIsKept.pass
+        && browserRoute.detail.andNamedAfterTheHandle.pass
+        && browserRoute.detail.andTheHandleIsRemembered.pass
+        && browserRoute.detail.andSyncCanRun.pass, browserRoute);
+      check('and the browser folder creates, says so when nothing has changed, pushes and pulls',
+        browserRoute.detail.theBrowserFolderCreatesTheFile.pass
+        && browserRoute.detail.andOpensTheOneFileItWants.pass
+        && browserRoute.detail.andWritesItOnce.pass
+        && browserRoute.detail.andTheFileIsASnapshot.pass
+        && browserRoute.detail.anUnchangedBrowserPassSaysNone.pass
+        && browserRoute.detail.aBrowserChangePushes.pass
+        && browserRoute.detail.andCarriesTheRow.pass
+        && browserRoute.detail.aNewerBrowserFilePulls.pass
+        && browserRoute.detail.andReplacesTheData.pass, browserRoute);
+      check('and the browser file creates without a read, then syncs normally',
+        browserRoute.detail.theBrowserFileIsKept.pass
+        && browserRoute.detail.andItsHandleIsRemembered.pass
+        && browserRoute.detail.aNewBrowserFileIsNeverReadFirst.pass
+        && browserRoute.detail.andTheBrowserFileIsCreated.pass
+        && browserRoute.detail.andItsContentsAreASnapshot.pass
+        && browserRoute.detail.andTheNextBrowserPassReadsIt.pass
+        && browserRoute.detail.soItWasReadAfterTheFirstWrite.pass
+        && browserRoute.detail.closingTheBrowserPickerIsNotAFailure.pass, browserRoute);
+      check('and a browser handle that has gone is a reason, not a crash',
+        browserRoute.detail.aForgottenBrowserHandleSaysSo.pass
+        && browserRoute.detail.andSaysItWasTheFolder.pass, browserRoute);
 
       // The file name is written down twice — once in sync.js, once in the Java
       // plugin that reads and writes it — and the two halves only meet if the two

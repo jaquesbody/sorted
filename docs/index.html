@@ -167,6 +167,10 @@ try {
 <script defer src="static/js/utils.js"></script>
 <script defer src="static/js/settings.js"></script>
 <script defer src="static/js/notify.js"></script>
+<!-- The desktop's folder and file routes live here. sync.js calls into it when
+     the page has the File System Access API; without this file the two routes
+     are simply not offered in a browser, which is the old behaviour. -->
+<script defer src="static/js/sync-browser.js"></script>
 <script defer src="static/js/sync.js"></script>
 <script defer src="static/js/ocr.js"></script>
 <script defer src="static/js/pdf-to-image.js"></script>
