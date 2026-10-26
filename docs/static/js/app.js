@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.2';
+const APP_VERSION = '2.103.3';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1716,11 +1716,14 @@ function syncResultMessage(res) {
   const transport = SYNC_TRANSPORTS[syncSettings().transport];
   const byFolder = !!(transport && transport.needsFolder);
   const byFile = !!(transport && transport.needsFile);
+  // A pass that is waiting has not failed. The drive is still uploading, and
+  // "waiting" is the answer it has to give, which is the sentence that tells the
+  // reader what is actually happening rather than an error about a write.
+  if (res && res.did === 'waiting') return 'Waiting for the drive to finish uploading';
   if (!res.ok) return res.error;
   if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : (byFile ? 'Took the copy from the file' : 'Took data from your server');
   if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : (byFile ? 'Put your data in the file' : 'Sent your data');
   if (res.did === 'created') return byFolder ? 'Folder set up' : (byFile ? 'File set up' : 'Server set up');
-  if (res.did === 'waiting') return 'Waiting for the drive to finish uploading';
   return 'Already up to date';
 }
 

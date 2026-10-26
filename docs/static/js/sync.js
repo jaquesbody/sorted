@@ -1019,9 +1019,18 @@ async function writeLocalSnapshot(writeRemote, snapshot, where, byFile, retried)
       // real attempt waits for the upload window to pass. A new document is no
       // longer new either: whatever the provider did with it, the next pass
       // should read before deciding to write.
+      //
+      // The answer is "waiting", not a failure: the write was accepted, the
+      // upload is the thing still in flight, and the pass reports that rather
+      // than letting the caller fall through to compare or write again. Falling
+      // through was the loop that kept the card on "Waiting for the drive to
+      // finish uploading" long after the window had had its chance to pass: the
+      // busy answer refreshed the write time, the next pass read, saw the same
+      // pending upload, and waited again, with a fresh write queued in between.
       setSyncSettings({ fileNew: false, filePushedAt: new Date().toISOString() });
       return {
         ok: false,
+        did: 'waiting',
         error: 'The drive is still finishing the last upload. Wait a moment, then press Sync now.',
         where: 'file',
         detail: detail

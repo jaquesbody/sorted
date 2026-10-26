@@ -6787,6 +6787,10 @@ async function runSuite(driverBase) {
         const hardWrite = await syncNow();
         t('aPersistentBusyDriveSaysToWait', /still finishing the last upload/.test(hardWrite.error), true);
         t('andSaysItWasTheFile', hardWrite.where, 'file');
+        // The busy answer is the waiting state, not a failure: the write landed
+        // and the upload did not, and the pass has to keep saying so rather than
+        // let the caller read it as a write that failed and queued itself again.
+        t('andIsReportedAsWaiting', hardWrite.did, 'waiting');
 
         // A descriptor that dies under the write. Proton replaces the document
         // when another device has just uploaded, and the phone's descriptor then
@@ -6995,6 +6999,10 @@ async function runSuite(driverBase) {
         && folderRoute.detail.andKeepsTheProvidersWordsForTheDetail.pass
         && folderRoute.detail.anOrdinaryWriteFailureIsNotRetried.pass
         && folderRoute.detail.andKeepsItsOwnWords.pass, folderRoute);
+      check('and a busy drive is the waiting state, not a failed write',
+        folderRoute.detail.aPersistentBusyDriveSaysToWait.pass
+        && folderRoute.detail.andSaysItWasTheFile.pass
+        && folderRoute.detail.andIsReportedAsWaiting.pass, folderRoute);
       check('changing the Cloud file lets go of the last grant, and a file that has gone says so',
         folderRoute.detail.changingTheFileLetsGoOfTheLast.pass
         && folderRoute.detail.andKeepsTheNewOneFile.pass
