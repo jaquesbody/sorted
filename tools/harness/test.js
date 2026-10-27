@@ -6752,13 +6752,17 @@ async function runSuite(driverBase) {
         t('andDoesNotWriteAgain', window.__ops.filter((one) => one.indexOf('writeFile') === 0).length, 0);
         t('andSaysWhyItIsWaiting', pending.ok, true);
 
-        // Waiting forever would be the other fault. Once the upload window has
-        // passed, a document that still cannot be read is tried again.
+        // Waiting forever would be the other fault, and writing again is what
+        // caused it: once the window has passed and the drive still will not
+        // serve the document, a write is answered busy, which re-arms the wait.
+        // The pass has to stop and ask for a fresh grant instead.
         setSyncSettings({ fileNew: false, fileOwned: true, filePushedAt: new Date(Date.now() - 180000).toISOString() });
         window.__ops.length = 0;
         const afterWindow = await syncNow();
-        t('afterTheUploadWindowItTriesAgain', afterWindow.did, 'created');
-        t('andWritesThisTime', window.__ops.some((one) => one.indexOf('writeFile') === 0), true);
+        t('afterTheUploadWindowItStopsWaiting', afterWindow.ok, false);
+        t('andSaysToPickTheFileAgain', /Choose file, pick the same file/.test(afterWindow.error), true);
+        t('andDoesNotWriteAgainAfterTheWindow', window.__ops.filter((one) => one.indexOf('writeFile') === 0).length, 0);
+        t('andSaysItWasTheFile', afterWindow.where, 'file');
 
         // A provider that is not ready for the first write either gets one retry.
         // This is the same Proton window seen from the other end.
@@ -6886,15 +6890,17 @@ async function runSuite(driverBase) {
         t('anOrdinaryWriteFailureIsNotRetried', ordinaryReads, 1);
         t('andKeepsItsOwnWords', ordinaryFailure.error, 'That file is no longer there. Choose it again.');
 
-        // On a device that did not make the file the same answer is a fault, and
-        // is reported in the provider's own words so it can be looked up.
+        // On a device that did not make the file the same answer is a fault too,
+        // and it says the one thing that fixes it while keeping the provider's
+        // words in the detail for anyone who needs to look them up.
         window.syncFolderPlugin = () => Object.assign(fake(), {
           readFile: async () => { throw new Error('Cannot get drive link with upload id'); }
         });
         setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false, filePushedAt: '' });
         const foreignPending = await syncNow();
         t('aPendingUploadOnSomeoneElsesFileIsStillAFailure', foreignPending.ok, false);
-        t('andKeepsTheProvidersWords', /Cannot get drive link/.test(foreignPending.error), true);
+        t('andSaysToPickTheFileAgain', /Choose file, pick the same file/.test(foreignPending.error), true);
+        t('andKeepsTheProvidersWordsInTheDetail', /Cannot get drive link/.test(foreignPending.detail), true);
 
         // (i) Changing the file lets go of the last grant, the same as a folder.
         window.syncFolderPlugin = fake;
@@ -6976,10 +6982,12 @@ async function runSuite(driverBase) {
         folderRoute.detail.aPendingUploadOnAFileThisDeviceMadeWaits.pass
         && folderRoute.detail.andDoesNotWriteAgain.pass
         && folderRoute.detail.andSaysWhyItIsWaiting.pass
-        && folderRoute.detail.afterTheUploadWindowItTriesAgain.pass
-        && folderRoute.detail.andWritesThisTime.pass
+        && folderRoute.detail.afterTheUploadWindowItStopsWaiting.pass
+        && folderRoute.detail.andSaysToPickTheFileAgain.pass
+        && folderRoute.detail.andDoesNotWriteAgainAfterTheWindow.pass
+        && folderRoute.detail.andSaysItWasTheFile.pass
         && folderRoute.detail.aPendingUploadOnSomeoneElsesFileIsStillAFailure.pass
-        && folderRoute.detail.andKeepsTheProvidersWords.pass, folderRoute);
+        && folderRoute.detail.andKeepsTheProvidersWordsInTheDetail.pass, folderRoute);
       check('and a drive that is not ready for the write gets one retry, then says to wait',
         folderRoute.detail.aFirstWriteTheDriveIsNotReadyForIsRetried.pass
         && folderRoute.detail.andOnlyOnceMore.pass
@@ -7367,6 +7375,7 @@ async function runSuite(driverBase) {
         t('andTheCloudStepsNameTheDrivesTheUserNames', /Proton Drive/.test(cloudSteps.textContent), true);
         t('andSayHowToMakeAndChooseTheFile',
           /Save new copy/.test(cloudSteps.textContent) && /Choose file/.test(cloudSteps.textContent), true);
+        t('andTheSaveIsRunOnceOnOneDevice', /once, and on one device only/.test(cloudSteps.textContent), true);
         c = await draw({ transport: 'syncthing' });
         t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
         window.syncFolderPlugin = realLookup;
@@ -7431,6 +7440,7 @@ async function runSuite(driverBase) {
         && stepsUi.detail.andHasNothingToCopy.pass
         && stepsUi.detail.andTheCloudStepsNameTheDrivesTheUserNames.pass
         && stepsUi.detail.andSayHowToMakeAndChooseTheFile.pass
+        && stepsUi.detail.andTheSaveIsRunOnceOnOneDevice.pass
         && stepsUi.detail.andTheSyncthingStepsUseTheFolderButton.pass, stepsUi);
       check('and the Network steps carry both addresses and stand on their own, with no em dash',
         stepsUi.detail.networkCarriesItsOwnTwoCommands.pass

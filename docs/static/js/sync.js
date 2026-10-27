@@ -158,7 +158,9 @@ const SYNC_SETUP_STEPS = {
 
     'Tap <strong>Sync now</strong>.',
 
-    'On the other devices, tap <strong>Choose file</strong> above and pick that same file, then tap <strong>Sync now</strong>. Done.'
+    'On the other devices, tap <strong>Choose file</strong> above and pick that same file, then tap <strong>Sync now</strong>. Done.',
+
+    'Run <strong>Save new copy</strong> once, and on one device only. It makes a new file in the drive each time it is used, and every other device has to point at that same file with <strong>Choose file</strong>. Once the first copy is made, later devices just choose that file and press <strong>Sync now</strong>.'
   ]
 };
 
@@ -652,6 +654,14 @@ function isPendingUploadError(err) {
   return /cannot get drive link|upload id/i.test(text);
 }
 
+// What to say when a document is still unreadable long after this device's own
+// write. It is not a failed sync and it is not a reason to write again: the
+// grant the app holds is on a document the drive has moved on from, and picking
+// the same file again is the one thing that gets a working one.
+function pendingFileMessage() {
+  return 'The drive is still holding that file from an earlier upload. Tap Choose file, pick the same file, then press Sync now.';
+}
+
 // Proton keeps uploading after the write returns. Opening the same document for
 // writing during that window fails with this, which is a wait rather than a
 // fault. It is also the message the user saw after a copy had in fact uploaded.
@@ -911,12 +921,28 @@ async function syncPassOnce(retried) {
       try {
         remote = await fileReadSnapshot(settings.fileUri);
       } catch (err) {
-        if (!(settings.fileOwned && isPendingUploadError(err))) {
-          const detail = String((err && err.message) || err);
+        const detail = String((err && err.message) || err);
+        // A read that fails for any other reason is the provider's answer, and
+        // repeating it would only say the same thing twice.
+        if (!isPendingUploadError(err)) {
           return { ok: false, error: detail, where: 'file', detail: detail };
         }
-        fileWaiting = fileOwnUploadRecent(settings);
-        remote = null;
+        // Proton answers a read of a document it is still uploading with
+        // "Cannot get drive link with upload id". Straight after this device's
+        // own write that is the upload in flight, and the honest answer is to
+        // wait. At any other time it means the document has been replaced under
+        // us: Proton replaces it when another device uploads, and the old
+        // document never becomes readable again. Writing again does not fix
+        // that; it produces "could not be opened for writing" and re-arms the
+        // wait, which is how the card sat on "Waiting for the drive to finish
+        // uploading" long after the drive had in fact taken the copy. The way
+        // out is a fresh grant on the same file, which is one tap.
+        if (settings.fileOwned && fileOwnUploadRecent(settings)) {
+          fileWaiting = true;
+          remote = null;
+        } else {
+          return { ok: false, error: pendingFileMessage(), where: 'file', detail: detail };
+        }
       }
       if (remote === null && settings.fileOwned && fileOwnUploadRecent(settings)) {
         fileWaiting = true;
