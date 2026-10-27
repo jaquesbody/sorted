@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.5';
+const APP_VERSION = '2.103.6';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1736,16 +1736,21 @@ function syncResultMessage(res) {
   return 'Already up to date';
 }
 
-// The drive's modified time as a short clock reading, or '' when it makes no
-// sense to print one.
+// The drive's modified time as an age, not a clock reading. Someone deciding
+// whether the file is stale already knows what time it is; the gap is the number
+// that answers the question, and "2 hrs ago" needs no arithmetic.
 function syncFileClock(ms) {
   const at = Number(ms);
   if (!Number.isFinite(at) || at <= 0) return '';
   const when = new Date(at);
   if (!Number.isFinite(when.getTime())) return '';
-  return when.toLocaleString([], {
-    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-  });
+  const minutes = Math.floor((Date.now() - at) / 60000);
+  // A small negative is a clock that is a little ahead, not a future file.
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return minutes + (minutes === 1 ? ' min ago' : ' mins ago');
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + (hours === 1 ? ' hr ago' : ' hrs ago');
+  return when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
 // The dashboard's refresh button: sync if there is somewhere to sync to, then

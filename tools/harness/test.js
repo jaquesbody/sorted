@@ -6515,9 +6515,19 @@ async function runSuite(driverBase) {
         // With the drive's own modified time, "nothing to do" says which copy
         // it compared. A stale file and an identical file used to read the same.
         setSyncSettings({ transport: 'cloud' });
-        const withTime = syncResultMessage({ ok: true, did: 'none', fileAt: Date.now() - 3600000 });
-        t('andWithAFileTimeItSaysWhenTheFileLastChanged',
-          /^Already up to date \\(file changed .+\\)$/.test(withTime), withTime);
+        const withTime = syncResultMessage({ ok: true, did: 'none', fileAt: Date.now() - 7200000 });
+        t('andWithAFileTimeItSaysHowOldTheFileIs',
+          withTime, 'Already up to date (file changed 2 hrs ago)');
+        // An age, not a clock reading: the reader should not have to subtract
+        // the file's time from the current one to see that it is stale.
+        t('anAgeJustNow', syncFileClock(Date.now()), 'just now');
+        t('anAgeInMinutes', syncFileClock(Date.now() - 5 * 60000), '5 mins ago');
+        t('anAgeOfOneMinute', syncFileClock(Date.now() - 60000), '1 min ago');
+        t('anAgeInHours', syncFileClock(Date.now() - 3 * 3600000), '3 hrs ago');
+        t('anAgeOfOneHour', syncFileClock(Date.now() - 3600000), '1 hr ago');
+        t('anAgePastADayIsADate',
+          /^\\d{1,2} \\w{3}$/.test(syncFileClock(Date.now() - 3 * 86400000)), syncFileClock(Date.now() - 3 * 86400000));
+        t('andATimeThatMakesNoSensePrintsNothing', syncFileClock(0), '');
         setSyncSettings({ transport: 'network' });
         t('andOnlyTheFileRouteCarriesATime',
           syncResultMessage({ ok: true, did: 'none', fileAt: Date.now() }), 'Already up to date');
@@ -7328,6 +7338,18 @@ async function runSuite(driverBase) {
       check('and the drive\'s modified time comes back with the content',
         /COLUMN_LAST_MODIFIED/.test(folderSource)
         && /out\.put\("modified"/.test(folderSource), {});
+      // A provider may answer from a cache, and Proton's Android provider does:
+      // a phone can return a document hours old while the file has already been
+      // replaced. refresh() is the platform's one ask to reconcile it, it exists
+      // from API 31, and its failure must not stop the read.
+      const refreshSource = (folderSource.match(/private void refreshDocument[\s\S]*?\n    }/) || [''])[0];
+      check('a read asks the provider to refresh its cached copy first',
+        /ContentResolver\(\)\.refresh\(file, null, null\)/.test(refreshSource)
+        && /Build\.VERSION\.SDK_INT < 31/.test(refreshSource)
+        && /catch \(Exception ignored\)/.test(refreshSource), refreshSource.length);
+      check('and the refresh is asked for before the time or the content',
+        folderSource.indexOf('refreshDocument(file)') > 0
+        && folderSource.indexOf('refreshDocument(file)') < folderSource.indexOf('long modified = modifiedAt(file)'), {});
       check('and a close that fails after the whole write landed is not a failure',
         /complete && deadDescriptor\(failure\)/.test(folderSource)
         && /bad file descriptor/.test(folderSource), { deadDescriptor: /deadDescriptor/.test(folderSource) });

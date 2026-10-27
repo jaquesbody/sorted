@@ -5,6 +5,7 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 
@@ -195,11 +196,19 @@ public class SortedFolderPlugin extends Plugin {
         if (file == null) return;
         JSObject out = new JSObject();
         try {
+            // Ask the provider to bring its copy up to date first. A provider is
+            // allowed to answer a read from a cache, and Proton's Android
+            // provider does: after another device uploads, a phone can return a
+            // document hours old while its Modified column still carries the old
+            // time. That is indistinguishable from "the copies match" in the web
+            // layer, so the nudge is worth trying here rather than deciding on
+            // stale bytes.
+            refreshDocument(file);
             // Asking for the document's own metadata before its content is
             // deliberate. Providers that keep a local copy of a cloud document
             // refresh it on a query more readily than on a bare open, and the
             // time is worth having on the card: "Already up to date" with the
-            // file's timestamp beside it is a fact, rather than a mystery.
+            // file's age beside it is a fact, rather than a mystery.
             long modified = modifiedAt(file);
             out.put("exists", true);
             out.put("modified", modified);
@@ -359,6 +368,27 @@ public class SortedFolderPlugin extends Plugin {
             // A provider that will not name the folder still handed us one.
         }
         return "the folder you chose";
+    }
+
+    /**
+     * Asks the provider to reconcile the document with its source before a read.
+     *
+     * A content provider is allowed to serve a cached copy, and Proton's Android
+     * provider does: a phone can answer with a document that is hours old while
+     * the file has already been replaced elsewhere. `refresh` is the one call
+     * the platform offers for exactly this, and it exists from API 31. It is
+     * advisory — a provider may ignore it — so this is best effort and its
+     * failure must never stop the read. The read still happens either way, and
+     * the web layer's pending clock covers the case where the refresh was not
+     * honoured.
+     */
+    private void refreshDocument(Uri file) {
+        if (Build.VERSION.SDK_INT < 31) return;
+        try {
+            getContext().getContentResolver().refresh(file, null, null);
+        } catch (Exception ignored) {
+            // Best effort: the content is still worth reading as it stands.
+        }
     }
 
     /**

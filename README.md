@@ -95,11 +95,11 @@ Served over HTTPS, Chrome will also offer to install it — there's a web manife
 
     npm test
 
-729 functional checks, and none of them are unit tests: it drives the real UI in headless Chromium, adds accounts and bills and goals, and asserts on what appears. It needs a static server on `docs` (see above, on port 8141) and `chromedriver` on your PATH, and it exits non-zero if any check fails. The suite lives in `tools/harness/` — including the README of traps it has caught, which is the more useful half.
+731 functional checks, and none of them are unit tests: it drives the real UI in headless Chromium, adds accounts and bills and goals, and asserts on what appears. It needs a static server on `docs` (see above, on port 8141) and `chromedriver` on your PATH, and it exits non-zero if any check fails. The suite lives in `tools/harness/` — including the README of traps it has caught, which is the more useful half.
 
 ### Android (APK)
 
-Grab [`sorted-v2-2.103.5-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.103.5/sorted-v2-2.103.5-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
+Grab [`sorted-v2-2.103.6-debug.apk`](https://github.com/jaquesbody/sorted/releases/download/v2.103.6/sorted-v2-2.103.6-debug.apk) from the [releases page](https://github.com/jaquesbody/sorted/releases/latest) and sideload it (your phone will ask to allow installs from unknown sources). It's the same app wrapped in a WebView — fully offline, data stored on the phone. The phone build moves the six destinations into a bottom bar; append `?native` to the web URL to preview that layout in a desktop browser.
 
 APKs are build artefacts, so they live in releases rather than in this repo — every past build is still on the releases page.
 
