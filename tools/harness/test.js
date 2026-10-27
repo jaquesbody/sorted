@@ -7331,6 +7331,14 @@ async function runSuite(driverBase) {
         && /writeSeekable\(file, bytes\)/.test(writeBytesSource)
         && /openFileDescriptor\(file, "rw"\)/.test(folderSource)
         && /truncate\(0\)/.test(folderSource), {});
+      // Proton opens "rw" and hands back a pipe, then answers "Invalid argument"
+      // on truncate. That is not a refusal: a pipe carries the whole document
+      // and the provider replaces the file on close. Treating it as a failure is
+      // why every Android write ended in EINVAL while reads still worked.
+      check('and a descriptor that cannot truncate is written to as a whole document',
+        /notSeekable\(ex\)/.test(folderSource)
+        && /invalid argument/.test(folderSource)
+        && /writeThrough\(out, bytes\)/.test(folderSource), {});
       // A provider is entitled to refuse a mode with a runtime exception rather
       // than an IOException, and Proton does: "wt is not supported, only r".
       // Catching only IOException ended the attempt at "wt" and never reached

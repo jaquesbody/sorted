@@ -575,21 +575,41 @@ public class SortedFolderPlugin extends Plugin {
             getContext().getContentResolver().openFileDescriptor(file, "rw");
         if (descriptor == null) throw new IOException("that file could not be opened for writing");
         FileOutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(descriptor);
+        // Truncating first is what makes a shorter snapshot safe on a real file:
+        // without it, a shorter document leaves the old tail behind and nothing
+        // can read it.
+        //
+        // A provider that hands back a pipe cannot truncate, and Proton does
+        // exactly that: the descriptor opens for "rw", then answers "Invalid
+        // argument" (EINVAL) on truncate. That is not the write being refused. A
+        // pipe carries the whole document to the provider, which replaces the
+        // file when the stream closes, so there is no old tail to remove.
+        // Aborting there was why every Android write ended in "Invalid
+        // argument" while the same file could still be read.
         try {
-            // A pipe cannot seek, so this shape is simply not offered by that
-            // provider. Aborting before the write is what keeps a failure from
-            // leaving half a snapshot behind.
-            out.getChannel().truncate(0);
-            out.write(bytes);
-            out.flush();
-        } finally {
+            try {
+                out.getChannel().truncate(0);
+            } catch (IOException ex) {
+                if (!notSeekable(ex)) throw ex;
+            }
+        } catch (IOException ex) {
             try {
                 out.close();
             } catch (IOException ignored) {
-                // The bytes are in. A descriptor the provider has already taken
-                // is the case this shape exists for.
+                // The failure that matters is the one being thrown.
             }
+            throw ex;
         }
+        // writeThrough closes the stream, and a close that fails after every
+        // byte was accepted is the case it already knows how to read.
+        writeThrough(out, bytes);
+    }
+
+    /** The descriptor is a pipe rather than a seekable file. */
+    private boolean notSeekable(IOException ex) {
+        String message = String.valueOf(ex.getMessage()).toLowerCase(Locale.US);
+        return message.contains("invalid argument") || message.contains("illegal seek")
+            || message.contains("not seekable") || message.contains("espipe");
     }
 
     /** Whether the file already holds exactly this text, whatever the stream said. */
