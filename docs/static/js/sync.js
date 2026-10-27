@@ -152,15 +152,15 @@ const SYNC_SETUP_STEPS = {
     'Repeat step 2 on the other devices. Done.'
   ],
   cloud: [
-    'Install and set up the drive you use: <strong>Google Drive</strong>, <strong>Proton Drive</strong> or <strong>OneDrive</strong>, and sign in.',
+    'Install and sign in to the drive you use: <strong>Google Drive</strong>, <strong>Proton Drive</strong> or <strong>OneDrive</strong>.',
 
-    'On the first device, tap <strong>Save new copy</strong> above and save <strong>sorted-snapshot.json</strong> into that drive.',
+    'On <strong>one device</strong>, tap <strong>Save new copy</strong> above and save <strong>sorted-snapshot.json</strong> into that drive. This makes the file, so it is done once, and on one device only.',
 
-    'Tap <strong>Sync now</strong>.',
+    'Tap <strong>Sync now</strong> and let the drive finish uploading it.',
 
-    'On the other devices, tap <strong>Choose file</strong> above and pick that same file, then tap <strong>Sync now</strong>. Done.',
+    'On every other device, tap <strong>Choose file</strong> above and pick that same <strong>sorted-snapshot.json</strong>, then tap <strong>Sync now</strong>.',
 
-    'Run <strong>Save new copy</strong> once, and on one device only. It makes a new file in the drive each time it is used, and every other device has to point at that same file with <strong>Choose file</strong>. Once the first copy is made, later devices just choose that file and press <strong>Sync now</strong>.'
+    'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other.'
   ]
 };
 
@@ -220,7 +220,12 @@ function syncSettings() {
     // uploading after the write returns, and a second write during that window
     // fails with "that file could not be opened for writing". This is what tells
     // an empty or pending read apart from a document that really is empty.
-    filePushedAt: typeof set.filePushedAt === 'string' ? set.filePushedAt : ''
+    filePushedAt: typeof set.filePushedAt === 'string' ? set.filePushedAt : '',
+    // When this device first found the document unreadable because the drive was
+    // still uploading it. Another device's upload looks the same from here, so
+    // this is the clock that lets a read wait instead of asking for a tap. A
+    // successful read or write clears it.
+    filePendingSince: typeof set.filePendingSince === 'string' ? set.filePendingSince : ''
   };
 }
 
@@ -627,14 +632,15 @@ async function fileReadSnapshot(uri) {
   const plugin = syncFolderPlugin();
   if (!plugin) throw new Error('Syncing to a file needs a file picker.');
   const res = await plugin.readFile({ uri: uri });
-  if (!res || !res.exists) return null;
-  if (!String(res.data || '').trim()) return null;
+  const modified = res && Number(res.modified) > 0 ? Number(res.modified) : 0;
+  if (!res || !res.exists) return { snapshot: null, modified: modified };
+  if (!String(res.data || '').trim()) return { snapshot: null, modified: modified };
   let parsed;
   try { parsed = JSON.parse(res.data); } catch (err) {
     throw new Error("That file isn't a Sorted snapshot.");
   }
   if (!isSyncSnapshot(parsed)) throw new Error("That file isn't a Sorted snapshot.");
-  return parsed;
+  return { snapshot: parsed, modified: modified };
 }
 
 async function fileWriteSnapshot(uri, snapshot) {
@@ -684,9 +690,32 @@ function isDeadDescriptorError(err) {
 // short enough that a genuinely empty document is written to again.
 const FILE_PENDING_MS = 120000;
 
+// How long a device that did not write will keep waiting for another device's
+// upload to become readable. This is deliberately longer than the write window:
+// the delay here is the drive delivering the copy, not this device uploading it,
+// and a phone reading Proton after a desktop write has been measured at around
+// two minutes. A window that expired at the same two minutes would ask for a
+// fresh pick at the exact moment the file arrived.
+const FILE_REMOTE_PENDING_MS = 300000;
+
 function fileOwnUploadRecent(settings) {
   const pushed = Date.parse((settings && settings.filePushedAt) || '');
   return Number.isFinite(pushed) && Date.now() - pushed < FILE_PENDING_MS;
+}
+
+// Whether this device is still inside the window it gives a document the drive
+// says it is uploading. The first unreadable read starts the clock; every read
+// after that is measured against it, so a document that never becomes readable
+// stops being "waiting" rather than waiting forever. Nothing clears this except
+// a read or a write that worked, because a clock that reset itself every pass
+// would be a clock that never ran out.
+function filePendingRecent(settings) {
+  const since = Date.parse((settings && settings.filePendingSince) || '');
+  if (!Number.isFinite(since)) {
+    setSyncSettings({ filePendingSince: new Date().toISOString() });
+    return true;
+  }
+  return Date.now() - since < FILE_REMOTE_PENDING_MS;
 }
 
 // ---------------------------------------------------------------- diagnosis
@@ -884,6 +913,10 @@ async function syncPassOnce(retried) {
   let remote = null;
   let writeRemote = null;
   let fileWaiting = false;
+  // The drive's own answer for when the document last changed, where the
+  // provider keeps one. It is evidence, not a comparison: the snapshot's own
+  // stamp is what decides a pull or a push.
+  let fileModified = 0;
 
   if (byFolder) {
     writeRemote = (snapshot) => folderWriteSnapshot(settings.folderUri, snapshot);
@@ -919,7 +952,12 @@ async function syncPassOnce(retried) {
     // our own write means "wait", not "write it again".
     if (!settings.fileNew) {
       try {
-        remote = await fileReadSnapshot(settings.fileUri);
+        const read = await fileReadSnapshot(settings.fileUri);
+        remote = read.snapshot;
+        fileModified = read.modified;
+        // The document answered. Whatever the drive was still uploading is not
+        // any more, so the clock a failed read started is done with.
+        if (settings.filePendingSince) setSyncSettings({ filePendingSince: '' });
       } catch (err) {
         const detail = String((err && err.message) || err);
         // A read that fails for any other reason is the provider's answer, and
@@ -928,16 +966,28 @@ async function syncPassOnce(retried) {
           return { ok: false, error: detail, where: 'file', detail: detail };
         }
         // Proton answers a read of a document it is still uploading with
-        // "Cannot get drive link with upload id". Straight after this device's
-        // own write that is the upload in flight, and the honest answer is to
-        // wait. At any other time it means the document has been replaced under
-        // us: Proton replaces it when another device uploads, and the old
-        // document never becomes readable again. Writing again does not fix
-        // that; it produces "could not be opened for writing" and re-arms the
-        // wait, which is how the card sat on "Waiting for the drive to finish
-        // uploading" long after the drive had in fact taken the copy. The way
-        // out is a fresh grant on the same file, which is one tap.
+        // "Cannot get drive link with upload id". That is not always this
+        // device's own upload: it is also what another device's upload looks
+        // like from here, because the provider's copy of the document is still
+        // catching up. So the answer is to wait, on every device, for the same
+        // window a write gets.
+        //
+        // It used to be an immediate dead end on a device that had not created
+        // the file, telling the person to pick it again. That is exactly the
+        // cross-device case: one device writes, the others read while the drive
+        // is still settling, and every other device asks for a tap it does not
+        // need. The clock is kept per device, and a read that succeeds clears
+        // it.
+        //
+        // Waiting forever would be the other fault. Once the window has passed
+        // and the document is still unreadable, the grant the app holds is on a
+        // document the drive has moved on from, and a fresh pick is the only
+        // thing that gets a working one. That is one tap, and it is only asked
+        // for when it is the only way out.
         if (settings.fileOwned && fileOwnUploadRecent(settings)) {
+          fileWaiting = true;
+          remote = null;
+        } else if (filePendingRecent(settings)) {
           fileWaiting = true;
           remote = null;
         } else {
@@ -1028,7 +1078,12 @@ async function syncPassOnce(retried) {
     if (byFile) noteFileWritten();
     return { ok: true, did: 'pushed', at: local.updatedAt };
   }
-  return { ok: true, did: 'none', at: local.updatedAt };
+  // "Nothing to do" is the answer that reads as a fault when the person knows
+  // another device has changed something. The file's own modified time is what
+  // tells the two apart: an old one means the drive has not delivered the newer
+  // copy yet, and a current one means the copies really are the same. Only the
+  // file route has a time to give.
+  return { ok: true, did: 'none', at: local.updatedAt, fileAt: fileModified };
 }
 
 // One write, with the provider's "still busy" answer turned into something the
@@ -1084,7 +1139,11 @@ async function writeLocalSnapshot(writeRemote, snapshot, where, byFile, retried)
 // no longer new, and the time of the write is what tells a later pending read
 // apart from a document that really is empty.
 function noteFileWritten() {
-  setSyncSettings({ fileNew: false, filePushedAt: new Date().toISOString() });
+  setSyncSettings({
+    fileNew: false,
+    filePushedAt: new Date().toISOString(),
+    filePendingSince: ''
+  });
 }
 
 // ---------------------------------------------------------------- automatic

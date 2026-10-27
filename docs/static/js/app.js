@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.4';
+const APP_VERSION = '2.103.5';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1724,7 +1724,28 @@ function syncResultMessage(res) {
   if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : (byFile ? 'Took the copy from the file' : 'Took data from your server');
   if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : (byFile ? 'Put your data in the file' : 'Sent your data');
   if (res.did === 'created') return byFolder ? 'Folder set up' : (byFile ? 'File set up' : 'Server set up');
+  // Nothing to do, with the drive's own timestamp beside it. Without the time,
+  // "Already up to date" reads as a fault when the person knows another device
+  // has just changed something: it is the same sentence whether the copies
+  // really match or the drive has not delivered the newer one yet. With it, the
+  // old copy is visible, and so is whose turn it is to catch up.
+  if (res.did === 'none' && byFile && res.fileAt) {
+    const when = syncFileClock(res.fileAt);
+    if (when) return 'Already up to date (file changed ' + when + ')';
+  }
   return 'Already up to date';
+}
+
+// The drive's modified time as a short clock reading, or '' when it makes no
+// sense to print one.
+function syncFileClock(ms) {
+  const at = Number(ms);
+  if (!Number.isFinite(at) || at <= 0) return '';
+  const when = new Date(at);
+  if (!Number.isFinite(when.getTime())) return '';
+  return when.toLocaleString([], {
+    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+  });
 }
 
 // The dashboard's refresh button: sync if there is somewhere to sync to, then
@@ -2016,7 +2037,12 @@ async function chooseSyncFileFromSettings(btn, create) {
         fileUri: res.uri,
         fileName: res.name || '',
         fileNew: !!create,
-        fileOwned: !!create
+        fileOwned: !!create,
+        // A different document starts with a clean slate. A clock or a write
+        // time from the file this one replaced would make the first read of the
+        // new file look like something that had already been waiting.
+        filePushedAt: '',
+        filePendingSince: ''
       });
       message = create ? 'File set. Syncing now.' : 'File set. Tap Sync now to use it.';
     }

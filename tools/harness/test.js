@@ -6512,6 +6512,16 @@ async function runSuite(driverBase) {
         t('aServerPushNamesTheServer', say('pushed', 'network'), 'Sent your data');
         t('aServerCreationNamesTheServer', say('created', 'network'), 'Server set up');
         t('nothingToDoSaysTheSameThingEitherWay', say('none', 'cloud'), 'Already up to date');
+        // With the drive's own modified time, "nothing to do" says which copy
+        // it compared. A stale file and an identical file used to read the same.
+        setSyncSettings({ transport: 'cloud' });
+        const withTime = syncResultMessage({ ok: true, did: 'none', fileAt: Date.now() - 3600000 });
+        t('andWithAFileTimeItSaysWhenTheFileLastChanged',
+          /^Already up to date \\(file changed .+\\)$/.test(withTime), withTime);
+        setSyncSettings({ transport: 'network' });
+        t('andOnlyTheFileRouteCarriesATime',
+          syncResultMessage({ ok: true, did: 'none', fileAt: Date.now() }), 'Already up to date');
+        setSyncSettings({ transport: 'cloud' });
         setSyncSettings({ transport: 'network' });
         t('aFailureKeepsItsOwnWording',
           syncResultMessage({ ok: false, error: 'No answer from http://192.168.1.10:8787.' }),
@@ -6755,8 +6765,16 @@ async function runSuite(driverBase) {
         // Waiting forever would be the other fault, and writing again is what
         // caused it: once the window has passed and the drive still will not
         // serve the document, a write is answered busy, which re-arms the wait.
-        // The pass has to stop and ask for a fresh grant instead.
-        setSyncSettings({ fileNew: false, fileOwned: true, filePushedAt: new Date(Date.now() - 180000).toISOString() });
+        // The pass has to stop and ask for a fresh grant instead. The window is
+        // the one the first unreadable read opened, not only the one this
+        // device's own write opened, because another device's upload looks the
+        // same from here.
+        setSyncSettings({
+          fileNew: false,
+          fileOwned: true,
+          filePushedAt: new Date(Date.now() - 180000).toISOString(),
+          filePendingSince: new Date(Date.now() - 400000).toISOString()
+        });
         window.__ops.length = 0;
         const afterWindow = await syncNow();
         t('afterTheUploadWindowItStopsWaiting', afterWindow.ok, false);
@@ -6890,17 +6908,41 @@ async function runSuite(driverBase) {
         t('anOrdinaryWriteFailureIsNotRetried', ordinaryReads, 1);
         t('andKeepsItsOwnWords', ordinaryFailure.error, 'That file is no longer there. Choose it again.');
 
-        // On a device that did not make the file the same answer is a fault too,
-        // and it says the one thing that fixes it while keeping the provider's
-        // words in the detail for anyone who needs to look them up.
+        // On a device that did not make the file, the same answer is what the
+        // other device's upload looks like from here. It has to wait rather than
+        // demand a pick: this is the ordinary cross-device case, not a fault.
         window.syncFolderPlugin = () => Object.assign(fake(), {
           readFile: async () => { throw new Error('Cannot get drive link with upload id'); }
         });
-        setSyncSettings({ transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false, filePushedAt: '' });
+        setSyncSettings({
+          transport: 'cloud', fileUri: DOC_URI, fileNew: false, fileOwned: false,
+          filePushedAt: '', filePendingSince: ''
+        });
+        window.__ops.length = 0;
         const foreignPending = await syncNow();
-        t('aPendingUploadOnSomeoneElsesFileIsStillAFailure', foreignPending.ok, false);
-        t('andSaysToPickTheFileAgain', /Choose file, pick the same file/.test(foreignPending.error), true);
-        t('andKeepsTheProvidersWordsInTheDetail', /Cannot get drive link/.test(foreignPending.detail), true);
+        t('aPendingUploadOnSomeoneElsesFileWaits', foreignPending.ok, true);
+        t('andIsReportedAsWaiting', foreignPending.did, 'waiting');
+        t('andDoesNotWriteWhileItWaits', window.__ops.filter((one) => one.indexOf('writeFile') === 0).length, 0);
+        t('andStartsTheClockForTheNextRead', syncSettings().filePendingSince !== '', true);
+
+        // The clock is not a way of never asking: once it has run out the
+        // document really is not coming back, and a fresh pick is the only
+        // thing that gets a working grant.
+        setSyncSettings({ fileOwned: false, filePendingSince: new Date(Date.now() - 400000).toISOString() });
+        const foreignExpired = await syncNow();
+        t('aPendingUploadOnSomeoneElsesFileStopsWaitingEventually', foreignExpired.ok, false);
+        t('andSaysToPickTheFileAgain', /Choose file, pick the same file/.test(foreignExpired.error), true);
+        t('andKeepsTheProvidersWordsInTheDetail', /Cannot get drive link/.test(foreignExpired.detail), true);
+
+        // A read that works is what clears the clock, so the next upload from
+        // another device starts from zero rather than inheriting this one.
+        const readable = await buildSyncSnapshot();
+        window.syncFolderPlugin = () => Object.assign(fake(), {
+          readFile: async () => ({ exists: true, data: JSON.stringify(readable) })
+        });
+        setSyncSettings({ fileOwned: false, filePendingSince: new Date(Date.now() - 30000).toISOString() });
+        await syncNow();
+        t('aReadThatWorksClearsTheClock', syncSettings().filePendingSince, '');
 
         // (i) Changing the file lets go of the last grant, the same as a folder.
         window.syncFolderPlugin = fake;
@@ -6986,8 +7028,14 @@ async function runSuite(driverBase) {
         && folderRoute.detail.andSaysToPickTheFileAgain.pass
         && folderRoute.detail.andDoesNotWriteAgainAfterTheWindow.pass
         && folderRoute.detail.andSaysItWasTheFile.pass
-        && folderRoute.detail.aPendingUploadOnSomeoneElsesFileIsStillAFailure.pass
-        && folderRoute.detail.andKeepsTheProvidersWordsInTheDetail.pass, folderRoute);
+        && folderRoute.detail.aPendingUploadOnSomeoneElsesFileWaits.pass
+        && folderRoute.detail.andIsReportedAsWaiting.pass
+        && folderRoute.detail.andDoesNotWriteWhileItWaits.pass
+        && folderRoute.detail.andStartsTheClockForTheNextRead.pass
+        && folderRoute.detail.aPendingUploadOnSomeoneElsesFileStopsWaitingEventually.pass
+        && folderRoute.detail.andSaysToPickTheFileAgain.pass
+        && folderRoute.detail.andKeepsTheProvidersWordsInTheDetail.pass
+        && folderRoute.detail.aReadThatWorksClearsTheClock.pass, folderRoute);
       check('and a drive that is not ready for the write gets one retry, then says to wait',
         folderRoute.detail.aFirstWriteTheDriveIsNotReadyForIsRetried.pass
         && folderRoute.detail.andOnlyOnceMore.pass
@@ -7258,10 +7306,28 @@ async function runSuite(driverBase) {
       // The phone retries that once, and a close that fails after every byte was
       // accepted is not a failed write.
       const writeTextSource = (folderSource.match(/private void writeText[\s\S]*?\n    }/) || [''])[0];
-      check('the phone retries a descriptor that died under the write, once',
-        /attempt < 2/.test(writeTextSource)
-        && /deadDescriptor\(ex\)/.test(writeTextSource)
+      const writeBytesSource = (folderSource.match(/private void writeBytes[\s\S]*?\n    }/) || [''])[0];
+      // A provider can open a document happily and then kill the stream on the
+      // first write. That is what a receiving device does after another one has
+      // just uploaded. The shapes have to be tried on the file, not on the open,
+      // or "rwt" is retried forever and the reader is told the drive lost hold
+      // of the file.
+      check('the phone tries every shape of write, not only the one that opened',
+        /for \(String mode : new String\[\] \{ "rwt", "wt", "w" \}\)/.test(writeBytesSource)
+        && /writeThrough\(resolver\.openOutputStream\(file, mode\)/.test(writeBytesSource)
+        && !/if \(out != null\) break;/.test(folderSource), writeBytesSource.length);
+      check('and a shape that dies hands over to the next, ending at a seekable descriptor',
+        /writeThrough\(resolver\.openOutputStream\(file\)/.test(writeBytesSource)
+        && /writeSeekable\(file, bytes\)/.test(writeBytesSource)
+        && /openFileDescriptor\(file, "rw"\)/.test(folderSource)
+        && /truncate\(0\)/.test(folderSource), {});
+      check('and a write that landed is read back before it is called a failure',
+        /readBackMatches\(file, data\)/.test(writeTextSource)
+        && /round < 2/.test(writeTextSource)
         && /Thread\.sleep\(700\)/.test(writeTextSource), writeTextSource.length);
+      check('and the drive\'s modified time comes back with the content',
+        /COLUMN_LAST_MODIFIED/.test(folderSource)
+        && /out\.put\("modified"/.test(folderSource), {});
       check('and a close that fails after the whole write landed is not a failure',
         /complete && deadDescriptor\(failure\)/.test(folderSource)
         && /bad file descriptor/.test(folderSource), { deadDescriptor: /deadDescriptor/.test(folderSource) });

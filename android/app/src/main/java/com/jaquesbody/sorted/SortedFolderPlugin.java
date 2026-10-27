@@ -5,6 +5,7 @@ import android.content.ContentResolver;
 import android.content.Intent;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
 
 import androidx.activity.result.ActivityResult;
@@ -18,6 +19,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.ByteArrayOutputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -193,7 +195,14 @@ public class SortedFolderPlugin extends Plugin {
         if (file == null) return;
         JSObject out = new JSObject();
         try {
+            // Asking for the document's own metadata before its content is
+            // deliberate. Providers that keep a local copy of a cloud document
+            // refresh it on a query more readily than on a bare open, and the
+            // time is worth having on the card: "Already up to date" with the
+            // file's timestamp beside it is a fact, rather than a mystery.
+            long modified = modifiedAt(file);
             out.put("exists", true);
+            out.put("modified", modified);
             out.put("data", readText(file));
             call.resolve(out);
         } catch (Exception ex) {
@@ -352,6 +361,24 @@ public class SortedFolderPlugin extends Plugin {
         return "the folder you chose";
     }
 
+    /**
+     * When the provider says the document was last changed, in milliseconds, or
+     * zero when it will not say. A provider that does not keep the column is not
+     * a fault here; it only means the card cannot show a time.
+     */
+    private long modifiedAt(Uri file) {
+        try (Cursor cursor = getContext().getContentResolver().query(
+            file, new String[] { DocumentsContract.Document.COLUMN_LAST_MODIFIED },
+            null, null, null)) {
+            if (cursor != null && cursor.moveToFirst() && !cursor.isNull(0)) {
+                return cursor.getLong(0);
+            }
+        } catch (Exception ignored) {
+            // The content is still worth reading without a timestamp.
+        }
+        return 0;
+    }
+
     /** The document's own display name, for the row on the card. */
     private String displayName(Uri file) {
         try (Cursor cursor = getContext().getContentResolver()
@@ -381,53 +408,87 @@ public class SortedFolderPlugin extends Plugin {
     }
 
     /**
-     * Overwriting in place, truncated.
+     * Overwriting in place, truncated, trying every shape the provider might
+     * accept before calling it a failure.
      *
-     * The mode is tried in this order on purpose. "rwt" is the one the Storage
-     * Access Framework documents for a provider to implement; "wt" is what the
-     * export path uses and what filesystem providers accept; plain "w" is the
-     * last resort. Truncation is not a nicety here: a snapshot is one JSON
-     * document and a *shorter* one written over a longer one leaves the old tail
-     * behind, which is a file nothing can read. Android's own export path gets
-     * away with "wt" because every file it writes is new.
+     * Truncation is not a nicety: a snapshot is one JSON document and a shorter
+     * one written over a longer one leaves the old tail behind, which is a file
+     * nothing can read.
+     *
+     * The shapes are tried on the file rather than on the open. That is the
+     * whole point of this method: a provider can hand back a stream that opens
+     * happily and then dies on the first write. The old code only moved to the
+     * next mode when *opening* failed, so a document that opened "rwt" and then
+     * answered EBADF was retried as "rwt" forever, which is the message about
+     * the drive losing hold of the file that kept coming back after a second
+     * device had written to it.
      */
     private void writeText(Uri file, String data) throws IOException {
         byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
         IOException last = null;
-        // A provider can hand back a descriptor that dies under the write. Proton
-        // Drive replaces the document when another device has just uploaded to
-        // it, and a descriptor opened before that replacement answers EBADF, so
-        // the same write a moment later succeeds. One retry, then the failure is
-        // reported in the provider's own words.
-        for (int attempt = 0; attempt < 2; attempt++) {
+        for (int round = 0; round < 2; round++) {
             try {
                 writeBytes(file, bytes);
                 return;
             } catch (IOException ex) {
                 last = ex;
-                if (!deadDescriptor(ex)) throw ex;
+            }
+            // A provider can accept every byte and then fail the close, which is
+            // what Proton does after its uploader has taken the content. The
+            // file itself is the only authority on whether the write landed, so
+            // read it before calling the write a failure.
+            if (readBackMatches(file, data)) return;
+            if (round == 0) {
                 try {
                     Thread.sleep(700);
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
-                    throw ex;
+                    throw last;
                 }
             }
         }
         throw last;
     }
 
+    /**
+     * One write, in every shape the provider offers.
+     *
+     * A shape that dies is not the end of the attempt: the next one truncates
+     * the file and starts again. A provider that answers the first shape with a
+     * dead descriptor often accepts the second, and the cost of trying is one
+     * open rather than a failed sync.
+     */
     private void writeBytes(Uri file, byte[] bytes) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
-        OutputStream out = null;
-        for (String mode : new String[] { "rwt", "wt", null }) {
+        IOException last = null;
+        for (String mode : new String[] { "rwt", "wt", "w" }) {
             try {
-                out = mode == null ? resolver.openOutputStream(file) : resolver.openOutputStream(file, mode);
-            } catch (Exception ignored) {
-                out = null;
+                writeThrough(resolver.openOutputStream(file, mode), bytes);
+                return;
+            } catch (IOException ex) {
+                last = ex;
             }
-            if (out != null) break;
         }
+        try {
+            writeThrough(resolver.openOutputStream(file), bytes);
+            return;
+        } catch (IOException ex) {
+            last = ex;
+        }
+        // Last resort: a descriptor opened read/write and truncated by hand.
+        // Some providers will not open a document for truncation at all but
+        // will hand out a seekable descriptor.
+        try {
+            writeSeekable(file, bytes);
+            return;
+        } catch (IOException ex) {
+            last = ex;
+        }
+        throw last;
+    }
+
+    /** One stream, written and closed, with a close that failed after the bytes still a success. */
+    private void writeThrough(OutputStream out, byte[] bytes) throws IOException {
         if (out == null) throw new IOException("that file could not be opened for writing");
         boolean complete = false;
         IOException failure = null;
@@ -437,20 +498,50 @@ public class SortedFolderPlugin extends Plugin {
             complete = true;
         } catch (IOException ex) {
             failure = ex;
-        }
-        try {
-            out.close();
-        } catch (IOException closeError) {
-            if (failure == null) failure = closeError;
+        } finally {
+            try {
+                out.close();
+            } catch (IOException closeError) {
+                if (failure == null) failure = closeError;
+            }
         }
         if (failure == null) return;
         // Every byte was accepted before the failure, so what the provider is
         // complaining about is the close of a descriptor it has already taken
-        // the content from. Proton does this after a successful upload, and
-        // reporting it as a failed sync is how a copy that had reached the drive
-        // looked like it had not.
+        // the content from.
         if (complete && deadDescriptor(failure)) return;
         throw failure;
+    }
+
+    private void writeSeekable(Uri file, byte[] bytes) throws IOException {
+        ParcelFileDescriptor descriptor =
+            getContext().getContentResolver().openFileDescriptor(file, "rw");
+        if (descriptor == null) throw new IOException("that file could not be opened for writing");
+        FileOutputStream out = new ParcelFileDescriptor.AutoCloseOutputStream(descriptor);
+        try {
+            // A pipe cannot seek, so this shape is simply not offered by that
+            // provider. Aborting before the write is what keeps a failure from
+            // leaving half a snapshot behind.
+            out.getChannel().truncate(0);
+            out.write(bytes);
+            out.flush();
+        } finally {
+            try {
+                out.close();
+            } catch (IOException ignored) {
+                // The bytes are in. A descriptor the provider has already taken
+                // is the case this shape exists for.
+            }
+        }
+    }
+
+    /** Whether the file already holds exactly this text, whatever the stream said. */
+    private boolean readBackMatches(Uri file, String expected) {
+        try {
+            return expected.equals(readText(file));
+        } catch (Exception ex) {
+            return false;
+        }
     }
 
     /** The descriptor died under us, rather than the provider refusing the file. */

@@ -126,7 +126,10 @@ async function readBrowserFileHandle(handle, fileName, noun) {
   try {
     const fileHandle = fileName === null ? handle : await handle.getFileHandle(fileName);
     const file = await fileHandle.getFile();
-    return { exists: true, data: await file.text() };
+    // `getFile()` re-reads from disk every time, so this is the file's real
+    // modified time rather than a cached one. It is what lets the card say how
+    // old the copy it is looking at is.
+    return { exists: true, modified: file.lastModified || 0, data: await file.text() };
   } catch (err) {
     if (err && err.name === 'NotFoundError') return { exists: false };
     if (err && err.name === 'NotAllowedError') {
