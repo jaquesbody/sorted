@@ -487,6 +487,15 @@ public class SortedFolderPlugin extends Plugin {
      * the file and starts again. A provider that answers the first shape with a
      * dead descriptor often accepts the second, and the cost of trying is one
      * open rather than a failed sync.
+     *
+     * The catch is deliberately broad. A provider is entitled to answer an
+     * unsupported mode with a runtime exception rather than an IOException, and
+     * Proton does: asking for "wt" on a document it will only open for "r"
+     * throws "wt is not supported, only r". Catching only IOException there
+     * ended the whole attempt at the second shape, so "w" and the seekable
+     * fallback were never tried and the reader was shown the provider's mode
+     * jargon. Every shape is now tried whatever it throws, and only the last
+     * failure leaves this method.
      */
     private void writeBytes(Uri file, byte[] bytes) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
@@ -495,15 +504,15 @@ public class SortedFolderPlugin extends Plugin {
             try {
                 writeThrough(resolver.openOutputStream(file, mode), bytes);
                 return;
-            } catch (IOException ex) {
-                last = ex;
+            } catch (Exception ex) {
+                last = writeFailure(ex);
             }
         }
         try {
             writeThrough(resolver.openOutputStream(file), bytes);
             return;
-        } catch (IOException ex) {
-            last = ex;
+        } catch (Exception ex) {
+            last = writeFailure(ex);
         }
         // Last resort: a descriptor opened read/write and truncated by hand.
         // Some providers will not open a document for truncation at all but
@@ -511,10 +520,28 @@ public class SortedFolderPlugin extends Plugin {
         try {
             writeSeekable(file, bytes);
             return;
-        } catch (IOException ex) {
-            last = ex;
+        } catch (Exception ex) {
+            last = writeFailure(ex);
         }
+        // No shape throws nothing, so this is only a guard for the compiler and
+        // for the one case where a provider returns without opening anything.
+        if (last == null) last = new IOException("that file could not be written to");
         throw last;
+    }
+
+    /**
+     * The failure from one write shape, as an IOException the caller can report.
+     *
+     * A provider's own IOException is kept as it is, because its words are
+     * sometimes the only explanation there is. Anything else is wrapped, so a
+     * rejected mode cannot escape as an unchecked exception and take the rest of
+     * the attempt with it.
+     */
+    private IOException writeFailure(Exception ex) {
+        if (ex instanceof IOException) return (IOException) ex;
+        String message = ex.getMessage();
+        return new IOException(message == null || message.isEmpty()
+            ? "that file could not be written to" : message, ex);
     }
 
     /** One stream, written and closed, with a close that failed after the bytes still a success. */
@@ -626,6 +653,13 @@ public class SortedFolderPlugin extends Plugin {
             return "That file is no longer there. Choose it again.";
         }
         String message = ex.getMessage();
+        // A provider that will only open a document for reading says so in the
+        // vocabulary of file modes ("wt is not supported, only r"). That is not
+        // a sentence for the person holding the phone, and it reads as a Sorted
+        // fault when it is a permission the drive gave.
+        if (message != null && message.toLowerCase(Locale.US).matches(".*(only r\\b|read-only|readonly).*")) {
+            return "Android only gave Sorted read access to that file, so it cannot save to it.";
+        }
         return message == null || message.isEmpty()
             ? "That file could not be used."
             : message;

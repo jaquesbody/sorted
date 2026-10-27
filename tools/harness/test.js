@@ -7331,6 +7331,18 @@ async function runSuite(driverBase) {
         && /writeSeekable\(file, bytes\)/.test(writeBytesSource)
         && /openFileDescriptor\(file, "rw"\)/.test(folderSource)
         && /truncate\(0\)/.test(folderSource), {});
+      // A provider is entitled to refuse a mode with a runtime exception rather
+      // than an IOException, and Proton does: "wt is not supported, only r".
+      // Catching only IOException ended the attempt at "wt" and never reached
+      // "w", so the phone stopped writing to a file it could read.
+      check('and a mode refused with a runtime exception still hands over to the next',
+        (writeBytesSource.match(/catch \(Exception ex\)/g) || []).length >= 3
+        && !/catch \(IOException ex\)/.test(writeBytesSource)
+        && /writeFailure\(ex\)/.test(writeBytesSource)
+        && /ex instanceof IOException/.test(folderSource), writeBytesSource.length);
+      check('and a read-only refusal is said in words, not file modes',
+        /only gave Sorted read access/.test(folderSource)
+        && /read-only|readonly/.test(folderSource), {});
       check('and a write that landed is read back before it is called a failure',
         /readBackMatches\(file, data\)/.test(writeTextSource)
         && /round < 2/.test(writeTextSource)
