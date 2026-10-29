@@ -685,6 +685,17 @@ function isDeadDescriptorError(err) {
   return /ebadf|bad file descriptor|epipe|broken pipe/i.test(text);
 }
 
+// The drive's answer to a write it would not take, with every shape's reason
+// after it. The plugin builds that sentence only after every shape was refused,
+// and one shape's reason can name a broken pipe, so this is checked before the
+// dead-descriptor reading: the report is the whole diagnosis, and swallowing it
+// back into "lost hold of that file" is how v2.103.8 stayed a guess.
+function isWriteRefusalReport(err) {
+  const text = String((err && err.message) || err);
+  return /^the drive refused the write \(/i.test(text)
+    || /^the drive only opened that file for reading/i.test(text);
+}
+
 // How long after a write this device still treats an empty or pending read as
 // its own upload in flight. Long enough for a large snapshot on a slow link,
 // short enough that a genuinely empty document is written to again.
@@ -1116,6 +1127,12 @@ async function writeLocalSnapshot(writeRemote, snapshot, where, byFile, retried)
         where: 'file',
         detail: detail
       };
+    }
+    if (byFile && isWriteRefusalReport(err)) {
+      // Every write shape was refused and the drive has said why for each one.
+      // This is the provider's own verdict, not a broken moment to retry, so it
+      // is shown exactly as it stands.
+      return { ok: false, error: detail, where: 'file', detail: detail };
     }
     if (byFile && isDeadDescriptorError(err) && !retried) {
       // The document was replaced under the write. Starting the pass again

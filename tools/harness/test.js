@@ -3192,8 +3192,12 @@ async function runSuite(driverBase) {
       paidHasCountdown: /Today|\\d+ days? late/.test(document.body.textContent)
     };
   `);
-  check('an unpaid bill counts down on the same line as its date',
-    /^\d+ days?$/.test(billWhen.far || ''), billWhen);
+  // The unpaid Rent is seeded on the 28th of the current month, so what it says
+  // depends on the calendar: a countdown before the 28th, an overdue marker
+  // after it. Both are the app telling the truth, and the placement is what
+  // this block exists to check, so both are accepted here.
+  check('an unpaid bill says when it is due, on the same line as its date',
+    /^\d+ days?$|^\d+ days? late$/.test(billWhen.far || ''), billWhen);
   check('on the date line, with the rest of the detail',
     billWhen.billWhenIsOnDateLine === true, billWhen);
   check('a paid bill says when it was paid',
@@ -7348,9 +7352,23 @@ async function runSuite(driverBase) {
         && !/catch \(IOException ex\)/.test(writeBytesSource)
         && /writeFailure\(ex\)/.test(writeBytesSource)
         && /ex instanceof IOException/.test(folderSource), writeBytesSource.length);
-      check('and a read-only refusal is said in words, not file modes',
-        /only gave Sorted read access/.test(folderSource)
-        && /read-only|readonly/.test(folderSource), {});
+      // One refused write used to be reported as whichever shape happened to
+      // fail last, which is how the same fault read as "only r", then "Invalid
+      // argument", then a dead descriptor. Every shape's answer, labelled by
+      // shape, is what makes the next report a diagnosis.
+      check('and a refused write names what every shape answered',
+        /writeRefusalMessage\(refusals\)/.test(writeBytesSource)
+        && /refusals\.add\(mode \+ " " \+ shortReason\(last\)\)/.test(writeBytesSource)
+        && /"descriptor " \+ shortReason\(last\)/.test(writeBytesSource)
+        && /everyShapeReadOnly/.test(folderSource), writeBytesSource.length);
+      // One shape's reason can name a broken pipe, and the card's dead-descriptor
+      // reading would swallow the whole report back into "lost hold of that file".
+      // The report is the diagnosis, so it is shown as it stands.
+      check('and a refusal report is shown as it stands, not read as a lost descriptor',
+        /if \(byFile && isWriteRefusalReport\(err\)\)/.test(syncSource)
+        && /function isWriteRefusalReport/.test(syncSource)
+        && syncSource.indexOf('if (byFile && isWriteRefusalReport(err))')
+          < syncSource.indexOf('if (byFile && isDeadDescriptorError(err))'), {});
       check('and a write that landed is read back before it is called a failure',
         /readBackMatches\(file, data\)/.test(writeTextSource)
         && /round < 2/.test(writeTextSource)

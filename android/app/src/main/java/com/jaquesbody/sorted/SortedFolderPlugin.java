@@ -25,6 +25,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -496,16 +498,23 @@ public class SortedFolderPlugin extends Plugin {
      * fallback were never tried and the reader was shown the provider's mode
      * jargon. Every shape is now tried whatever it throws, and only the last
      * failure leaves this method.
+     *
+     * When every shape is refused, the report carries what each shape said,
+     * labelled by shape. One line per attempt is what turns "Invalid argument"
+     * from a guess into a diagnosis: the shape that opened, the one that
+     * refused, and the one that died are different faults.
      */
     private void writeBytes(Uri file, byte[] bytes) throws IOException {
         ContentResolver resolver = getContext().getContentResolver();
         IOException last = null;
+        List<String> refusals = new ArrayList<>();
         for (String mode : new String[] { "rwt", "wt", "w" }) {
             try {
                 writeThrough(resolver.openOutputStream(file, mode), bytes);
                 return;
             } catch (Exception ex) {
                 last = writeFailure(ex);
+                refusals.add(mode + " " + shortReason(last));
             }
         }
         try {
@@ -513,6 +522,7 @@ public class SortedFolderPlugin extends Plugin {
             return;
         } catch (Exception ex) {
             last = writeFailure(ex);
+            refusals.add("default " + shortReason(last));
         }
         // Last resort: a descriptor opened read/write and truncated by hand.
         // Some providers will not open a document for truncation at all but
@@ -522,11 +532,48 @@ public class SortedFolderPlugin extends Plugin {
             return;
         } catch (Exception ex) {
             last = writeFailure(ex);
+            refusals.add("descriptor " + shortReason(last));
         }
         // No shape throws nothing, so this is only a guard for the compiler and
         // for the one case where a provider returns without opening anything.
         if (last == null) last = new IOException("that file could not be written to");
-        throw last;
+        throw new IOException(writeRefusalMessage(refusals), last);
+    }
+
+    /** The one sentence a refused write deserves, with every shape's answer after it. */
+    private String writeRefusalMessage(List<String> refusals) {
+        String detail = joinRefusals(refusals);
+        boolean everyShapeReadOnly = !refusals.isEmpty();
+        for (String refusal : refusals) {
+            if (!isReadOnlyReason(refusal)) everyShapeReadOnly = false;
+        }
+        if (everyShapeReadOnly) {
+            return "The drive only opened that file for reading, so Sorted could not save to it ("
+                + detail + ")";
+        }
+        return "The drive refused the write (" + detail + ")";
+    }
+
+    private String joinRefusals(List<String> refusals) {
+        StringBuilder joined = new StringBuilder();
+        for (String refusal : refusals) {
+            if (joined.length() > 0) joined.append("; ");
+            joined.append(refusal);
+        }
+        return joined.toString();
+    }
+
+    /** A provider's reason for refusing, short enough to fit beside its shape. */
+    private String shortReason(IOException ex) {
+        String reason = String.valueOf(ex.getMessage()).replace('\n', ' ').trim();
+        if (reason.isEmpty()) reason = ex.getClass().getSimpleName();
+        return reason.length() > 80 ? reason.substring(0, 79) + "..." : reason;
+    }
+
+    /** Whether the reason is the provider saying the document is read-only. */
+    private boolean isReadOnlyReason(String refusal) {
+        String lower = refusal.toLowerCase(Locale.US);
+        return lower.contains("only r") || lower.contains("read-only") || lower.contains("readonly");
     }
 
     /**
@@ -672,14 +719,10 @@ public class SortedFolderPlugin extends Plugin {
         if (ex instanceof FileNotFoundException) {
             return "That file is no longer there. Choose it again.";
         }
+        // A write refusal arrives with its own plain sentence and every shape's
+        // answer after it, so it is passed through as it stands. Trimming it to
+        // one line would delete the evidence the next report needs.
         String message = ex.getMessage();
-        // A provider that will only open a document for reading says so in the
-        // vocabulary of file modes ("wt is not supported, only r"). That is not
-        // a sentence for the person holding the phone, and it reads as a Sorted
-        // fault when it is a permission the drive gave.
-        if (message != null && message.toLowerCase(Locale.US).matches(".*(only r\\b|read-only|readonly).*")) {
-            return "Android only gave Sorted read access to that file, so it cannot save to it.";
-        }
         return message == null || message.isEmpty()
             ? "That file could not be used."
             : message;
