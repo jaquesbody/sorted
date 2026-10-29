@@ -537,21 +537,47 @@ public class SortedFolderPlugin extends Plugin {
         // No shape throws nothing, so this is only a guard for the compiler and
         // for the one case where a provider returns without opening anything.
         if (last == null) last = new IOException("that file could not be written to");
-        throw new IOException(writeRefusalMessage(refusals), last);
+        throw new IOException(writeRefusalMessage(file, refusals), last);
     }
 
     /** The one sentence a refused write deserves, with every shape's answer after it. */
-    private String writeRefusalMessage(List<String> refusals) {
+    private String writeRefusalMessage(Uri file, List<String> refusals) {
         String detail = joinRefusals(refusals);
         boolean everyShapeReadOnly = !refusals.isEmpty();
         for (String refusal : refusals) {
             if (!isReadOnlyReason(refusal)) everyShapeReadOnly = false;
         }
         if (everyShapeReadOnly) {
-            return "The drive only opened that file for reading, so Sorted could not save to it ("
+            String app = driveApp(file);
+            String lead = "The drive app " + app
+                + " only opened that file for reading, so Sorted could not save to it ("
                 + detail + ")";
+            // Proton's Android app opens existing documents read-only by design:
+            // its own published source serves every existing file through a
+            // MODE_READ_ONLY descriptor and refuses every write-only mode. The
+            // pointer saves the next guess, because no state on the phone changes
+            // that answer.
+            if (app.contains("proton")) {
+                return lead + " Proton's Android app hands out existing files for reading only,"
+                    + " so saving from a phone works on the Syncthing or Network route.";
+            }
+            return lead;
         }
         return "The drive refused the write (" + detail + ")";
+    }
+
+    /**
+     * The app behind a document, named by its authority:
+     * me.proton.android.drive.documents is the app me.proton.android.drive.
+     * Naming it in the report is what separates one drive's rule from another
+     * drive's temporary state.
+     */
+    private String driveApp(Uri file) {
+        String authority = file.getAuthority();
+        if (authority == null || authority.isEmpty()) return "the drive";
+        return authority.endsWith(".documents")
+            ? authority.substring(0, authority.length() - ".documents".length())
+            : authority;
     }
 
     private String joinRefusals(List<String> refusals) {

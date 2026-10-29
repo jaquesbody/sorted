@@ -160,7 +160,7 @@ const SYNC_SETUP_STEPS = {
 
     'On every other device, tap <strong>Choose file</strong> above and pick that same <strong>sorted-snapshot.json</strong>, then tap <strong>Sync now</strong>.',
 
-    'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other.'
+    'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other. One drive limit to know before you choose: Proton Drive hands phones a file for reading only, so a phone can save only the file it has just made here. For phones to keep saving, use the Syncthing or Network route.'
   ]
 };
 
@@ -693,7 +693,7 @@ function isDeadDescriptorError(err) {
 function isWriteRefusalReport(err) {
   const text = String((err && err.message) || err);
   return /^the drive refused the write \(/i.test(text)
-    || /^the drive only opened that file for reading/i.test(text);
+    || /^the drive app \S+ only opened that file for reading/i.test(text);
 }
 
 // How long after a write this device still treats an empty or pending read as

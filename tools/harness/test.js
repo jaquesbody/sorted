@@ -7357,16 +7357,29 @@ async function runSuite(driverBase) {
       // argument", then a dead descriptor. Every shape's answer, labelled by
       // shape, is what makes the next report a diagnosis.
       check('and a refused write names what every shape answered',
-        /writeRefusalMessage\(refusals\)/.test(writeBytesSource)
+        /writeRefusalMessage\(file, refusals\)/.test(writeBytesSource)
         && /refusals\.add\(mode \+ " " \+ shortReason\(last\)\)/.test(writeBytesSource)
         && /"descriptor " \+ shortReason\(last\)/.test(writeBytesSource)
         && /everyShapeReadOnly/.test(folderSource), writeBytesSource.length);
+      // The read-only answer is a property of the drive app, not of the moment,
+      // so the report names the app and, where the app is Proton, says what
+      // works instead. Proton's own published source serves every existing
+      // document through a MODE_READ_ONLY descriptor.
+      const refusalSource = (folderSource.match(/private String writeRefusalMessage[\s\S]*?\n    }/) || [''])[0];
+      check('and a read-only refusal names the drive app',
+        /driveApp\(file\)/.test(folderSource)
+        && /\.documents/.test(folderSource)
+        && /The drive app " \+ app/.test(refusalSource), refusalSource.length);
+      check('and the read-only refusal points a Proton phone at the routes that save',
+        /contains\("proton"\)/.test(refusalSource)
+        && /Syncthing or Network route/.test(refusalSource), refusalSource.length);
       // One shape's reason can name a broken pipe, and the card's dead-descriptor
       // reading would swallow the whole report back into "lost hold of that file".
       // The report is the diagnosis, so it is shown as it stands.
       check('and a refusal report is shown as it stands, not read as a lost descriptor',
         /if \(byFile && isWriteRefusalReport\(err\)\)/.test(syncSource)
         && /function isWriteRefusalReport/.test(syncSource)
+        && /the drive app \\S\+ only opened/.test((syncSource.match(/function isWriteRefusalReport[\s\S]*?\n}/) || [''])[0])
         && syncSource.indexOf('if (byFile && isWriteRefusalReport(err))')
           < syncSource.indexOf('if (byFile && isDeadDescriptorError(err))'), {});
       check('and a write that landed is read back before it is called a failure',
@@ -7502,6 +7515,11 @@ async function runSuite(driverBase) {
         t('andSayHowToMakeAndChooseTheFile',
           /Save new copy/.test(cloudSteps.textContent) && /Choose file/.test(cloudSteps.textContent), true);
         t('andTheSaveIsRunOnceOnOneDevice', /once, and on one device only/.test(cloudSteps.textContent), true);
+        // Proton's Android app opens existing documents read-only by design, so a
+        // phone choosing it has to hear before it invests what still works.
+        t('andTheCloudStepsSayTheReadOnlyLimit',
+          /for reading only/.test(cloudSteps.textContent)
+          && /Syncthing or Network route/.test(cloudSteps.textContent), true);
         c = await draw({ transport: 'syncthing' });
         t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
         window.syncFolderPlugin = realLookup;
