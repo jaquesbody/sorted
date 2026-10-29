@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.10';
+const APP_VERSION = '2.103.11';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1721,6 +1721,7 @@ function syncResultMessage(res) {
   // reader what is actually happening rather than an error about a write.
   if (res && res.did === 'waiting') return 'Waiting for the drive to finish uploading';
   if (!res.ok) return res.error;
+  if (res.did === 'held') return 'Changes made here stay on this device';
   if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : (byFile ? 'Took the copy from the file' : 'Took data from your server');
   if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : (byFile ? 'Put your data in the file' : 'Sent your data');
   if (res.did === 'created') return byFolder ? 'Folder set up' : (byFile ? 'File set up' : 'Server set up');
@@ -1898,6 +1899,7 @@ function syncSettingsHtml() {
       <div class="setting-text">
         <div class="setting-label" id="sync-file-label">File</div>
         ${s.fileUri ? `<div class="setting-hint" style="margin-top: 2px;">${escapeHTML(shortFolderName(s.fileName))}</div>` : ''}
+        ${s.fileUri && s.fileReadOnly ? `<div class="setting-hint" style="margin-top: 2px;">This drive gives this device the file for reading only, so changes made here stay here. Updates from the other devices still arrive.</div>` : ''}
       </div>
       <div class="setting-control" style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
         <button class="btn btn-ghost" id="sync-file"
@@ -2043,11 +2045,13 @@ async function chooseSyncFileFromSettings(btn, create) {
         fileName: res.name || '',
         fileNew: !!create,
         fileOwned: !!create,
-        // A different document starts with a clean slate. A clock or a write
-        // time from the file this one replaced would make the first read of the
-        // new file look like something that had already been waiting.
+        // A different document starts with a clean slate. A clock, a write
+        // time, or a read-only verdict from the file this one replaced would
+        // make the first read of the new file look like something that had
+        // already been waiting.
         filePushedAt: '',
-        filePendingSince: ''
+        filePendingSince: '',
+        fileReadOnly: ''
       });
       message = create ? 'File set. Syncing now.' : 'File set. Tap Sync now to use it.';
     }

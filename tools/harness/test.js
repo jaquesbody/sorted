@@ -7382,6 +7382,17 @@ async function runSuite(driverBase) {
         && /the drive app \\S\+ only opened/.test((syncSource.match(/function isWriteRefusalReport[\s\S]*?\n}/) || [''])[0])
         && syncSource.indexOf('if (byFile && isWriteRefusalReport(err))')
           < syncSource.indexOf('if (byFile && isDeadDescriptorError(err))'), {});
+      // A read-only refusal is a standing property, not a broken moment: it is
+      // remembered so the card says it once and the automatic passes stop
+      // asking a drive that has said no. A manual Sync now still asks, and a
+      // write that lands clears the verdict.
+      check('and a read-only verdict is remembered and the automatic passes hold their changes',
+        /function isReadOnlyRefusalReport/.test(syncSource)
+        && /if \(isReadOnlyRefusalReport\(err\)\) setSyncSettings\(\{ fileReadOnly: true \}\)/.test(syncSource)
+        && /function heldLocalChanges/.test(syncSource)
+        && (syncSource.match(/heldLocalChanges\(local, fileModified\)/g) || []).length >= 3, {});
+      check('and a write that lands clears the verdict',
+        /fileReadOnly: ''/.test(syncSource), {});
       check('and a write that landed is read back before it is called a failure',
         /readBackMatches\(file, data\)/.test(writeTextSource)
         && /round < 2/.test(writeTextSource)
@@ -7520,6 +7531,14 @@ async function runSuite(driverBase) {
         t('andTheCloudStepsSayTheReadOnlyLimit',
           /for reading only/.test(cloudSteps.textContent)
           && /Syncthing or Network route/.test(cloudSteps.textContent), true);
+        // A drive that answers a write with a read-only verdict is remembered,
+        // and the card says in one line what stays here and what still arrives,
+        // so nobody has to test drives to find out what a route can do.
+        c = await draw({ transport: 'cloud', fileUri: 'u', fileName: 'sorted-snapshot.json', fileReadOnly: true });
+        t('theReadOnlyCardSaysWhatStaysAndWhatArrives',
+          /reading only, so changes made here stay here/.test(c.textContent)
+          && /Updates from the other devices still arrive/.test(c.textContent), true);
+        c = await draw({ transport: 'cloud', fileUri: '', fileName: '', fileReadOnly: '' });
         c = await draw({ transport: 'syncthing' });
         t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
         window.syncFolderPlugin = realLookup;

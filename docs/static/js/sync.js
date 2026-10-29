@@ -696,6 +696,18 @@ function isWriteRefusalReport(err) {
     || /^the drive app \S+ only opened that file for reading/i.test(text);
 }
 
+// The read-only kind of refusal: the drive named itself and said it hands this
+// file out for reading only. That is a standing property of the drive app, not
+// a broken moment, so it is remembered until a write lands or the file is
+// picked again. No drive's own declaration can be trusted instead: Proton's
+// provider declares its files writable and serves them read-only, so what the
+// drive actually does is the only evidence worth keeping, and nobody has to
+// test drives one by one for the app to know.
+function isReadOnlyRefusalReport(err) {
+  return /^the drive app \S+ only opened that file for reading/i
+    .test(String((err && err.message) || err));
+}
+
 // How long after a write this device still treats an empty or pending read as
 // its own upload in flight. Long enough for a large snapshot on a slow link,
 // short enough that a genuinely empty document is written to again.
@@ -901,8 +913,20 @@ async function syncNowOnce() {
   return syncPassOnce(true);
 }
 
+// A remembered read-only drive means the automatic passes stop asking: the
+// drive answered the same way to every write shape, and asking again every 15
+// seconds would be churn on a drive that has said no. A manual Sync now still
+// asks, which is the one path that notices the drive changing its mind, and a
+// write that lands there clears the verdict. The changes are not lost: they
+// stay on this device, still stamped as the newest copy, and a drive that
+// starts taking writes gets them on the next pass.
+function heldLocalChanges(local, fileModified) {
+  return { ok: true, did: 'held', at: local.updatedAt, fileAt: fileModified };
+}
+
 async function syncPassOnce(retried) {
   const settings = syncSettings();
+  const automatic = syncAutoRunning;
   const transport = SYNC_TRANSPORTS[settings.transport];
   if (!transport || !transport.available) {
     return { ok: false, error: 'That sync option is not available yet.' };
@@ -1062,6 +1086,7 @@ async function syncPassOnce(retried) {
   // everything on purpose and its stamp says so; an install that has never been
   // written to is stamped at the epoch, so it can only ever pull.
   if (syncRowCount(remote) === 0 && syncRowCount(local) > 0) {
+    if (byFile && automatic && settings.fileReadOnly) return heldLocalChanges(local, fileModified);
     const failed = await writeLocalSnapshot(writeRemote, local, where, byFile, retried);
     if (failed) return failed;
     syncRecordPushed(local.updatedAt);
@@ -1083,6 +1108,7 @@ async function syncPassOnce(retried) {
     return { ok: true, did: 'pulled', at: remote.updatedAt, backup: true };
   }
   if (localT > remoteT) {
+    if (byFile && automatic && settings.fileReadOnly) return heldLocalChanges(local, fileModified);
     const failed = await writeLocalSnapshot(writeRemote, local, where, byFile, retried);
     if (failed) return failed;
     syncRecordPushed(local.updatedAt);
@@ -1131,7 +1157,10 @@ async function writeLocalSnapshot(writeRemote, snapshot, where, byFile, retried)
     if (byFile && isWriteRefusalReport(err)) {
       // Every write shape was refused and the drive has said why for each one.
       // This is the provider's own verdict, not a broken moment to retry, so it
-      // is shown exactly as it stands.
+      // is shown exactly as it stands, and the read-only kind is remembered:
+      // the card says it once, and the automatic passes stop asking a drive
+      // that has said no.
+      if (isReadOnlyRefusalReport(err)) setSyncSettings({ fileReadOnly: true });
       return { ok: false, error: detail, where: 'file', detail: detail };
     }
     if (byFile && isDeadDescriptorError(err) && !retried) {
@@ -1159,7 +1188,9 @@ function noteFileWritten() {
   setSyncSettings({
     fileNew: false,
     filePushedAt: new Date().toISOString(),
-    filePendingSince: ''
+    filePendingSince: '',
+    // A write that landed is the drive taking writes, whatever it said before.
+    fileReadOnly: ''
   });
 }
 
