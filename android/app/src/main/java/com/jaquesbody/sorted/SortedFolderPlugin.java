@@ -558,8 +558,9 @@ public class SortedFolderPlugin extends Plugin {
             // pointer saves the next guess, because no state on the phone changes
             // that answer.
             if (app.contains("proton")) {
-                return lead + " Proton's Android app hands out existing files for reading only,"
-                    + " so saving from a phone works on the Syncthing or Network route.";
+                return lead + " Proton Drive is not compatible with the Cloud route:"
+                    + " its Android app hands out existing files for reading only."
+                    + " Use the Syncthing or Network route to save from a phone.";
             }
             return lead;
         }

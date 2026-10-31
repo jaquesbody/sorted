@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.11';
+const APP_VERSION = '2.103.12';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1899,7 +1899,7 @@ function syncSettingsHtml() {
       <div class="setting-text">
         <div class="setting-label" id="sync-file-label">File</div>
         ${s.fileUri ? `<div class="setting-hint" style="margin-top: 2px;">${escapeHTML(shortFolderName(s.fileName))}</div>` : ''}
-        ${s.fileUri && s.fileReadOnly ? `<div class="setting-hint" style="margin-top: 2px;">This drive gives this device the file for reading only, so changes made here stay here. Updates from the other devices still arrive.</div>` : ''}
+        ${s.fileUri && s.fileReadOnly ? `<div class="setting-hint" style="margin-top: 2px;">This drive opened the file for reading only, so changes made here stay here. Updates from the other devices still arrive. Cloud needs a drive app that can write to an existing file; the setup steps name one that cannot.</div>` : ''}
       </div>
       <div class="setting-control" style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
         <button class="btn btn-ghost" id="sync-file"
@@ -1944,6 +1944,7 @@ function syncSettingsHtml() {
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
+      ${SYNC_SETUP_NOTES[key] ? `<div class="setup-note">${SYNC_SETUP_NOTES[key]}</div>` : ''}
     </details>
     ${hasBackup ? `
     <div class="setting-row setting-row--inline setting-row--tight">

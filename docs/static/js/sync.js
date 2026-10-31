@@ -62,7 +62,7 @@ const SYNC_TRANSPORTS = {
   cloud: {
     label: 'Cloud',
     available: true,
-    blurb: 'One file in your own drive: Google Drive, Proton Drive, OneDrive',
+    blurb: 'One file in your own drive, on a drive app that can write to it',
     needsFile: true
   },
   network: {
@@ -152,7 +152,7 @@ const SYNC_SETUP_STEPS = {
     'Repeat step 2 on the other devices. Done.'
   ],
   cloud: [
-    'Install and sign in to the drive you use: <strong>Google Drive</strong>, <strong>Proton Drive</strong> or <strong>OneDrive</strong>.',
+    'Install and sign in to a drive app that can <strong>write to a file it opened</strong>. That is the requirement: Sorted opens <strong>sorted-snapshot.json</strong> and saves back into that same file, so an app that can only upload a new copy will not keep the devices in sync. <strong>Proton Drive is not compatible</strong>: its Android app opens an existing file for reading only. Google Drive and OneDrive are the common choices, but no drive is guaranteed, because a drive app can change.',
 
     'On <strong>one device</strong>, tap <strong>Save new copy</strong> above and save <strong>sorted-snapshot.json</strong> into that drive. This makes the file, so it is done once, and on one device only.',
 
@@ -160,8 +160,17 @@ const SYNC_SETUP_STEPS = {
 
     'On every other device, tap <strong>Choose file</strong> above and pick that same <strong>sorted-snapshot.json</strong>, then tap <strong>Sync now</strong>.',
 
-    'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other. One drive limit to know before you choose: Proton Drive hands phones a file for reading only, so a phone can save only the file it has just made here. For phones to keep saving, use the Syncthing or Network route.'
+    'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other. If a phone cannot write to the file, Sorted says so on the first Sync now and keeps that phone\'s changes on the phone.'
   ]
+};
+
+// What a route costs, said under the steps where the choice is made. Cloud is
+// the only route that puts the whole file on somebody else's computer, so its
+// note is blunt: this is a bank statement, not a shopping list. The two routes
+// that do not use a cloud are named in the same breath, because "your data
+// leaves your phone" is only a fair warning if the alternative is one tap away.
+const SYNC_SETUP_NOTES = {
+  cloud: '<strong>What Cloud costs you in privacy.</strong> The file leaves your devices and is stored by the company that runs the drive. Unless the drive is end-to-end encrypted, that company can read it, and it holds every account, balance and bill in Sorted. Choose a provider you would trust with a bank statement, and turn on two-factor authentication. If that trade is not for you, the <strong>Syncthing</strong> route keeps the file on your own devices, and the <strong>Network</strong> route keeps it on a computer you own; neither uses a cloud. Proton Drive is respected for privacy, and it is the one this route cannot use.'
 };
 
 // ---------------------------------------------------------------- settings

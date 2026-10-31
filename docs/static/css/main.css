@@ -934,6 +934,24 @@ body {
   font-size: var(--fs-sm);
 }
 
+/* What a route costs, set below its steps. Cloud is the only route that puts the
+   file on somebody else's computer, and this is the one paragraph in the steps
+   that is not an instruction, so it is marked off rather than left to read as
+   another thing to do. */
+.setup-note {
+  margin-top: 12px;
+  padding: 9px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--bg-surface);
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.setup-note strong {
+  color: var(--text-primary);
+}
+
 .setting-row--add {
   margin-top: 14px;
   padding-top: 14px;

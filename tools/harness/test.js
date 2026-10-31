@@ -7372,6 +7372,7 @@ async function runSuite(driverBase) {
         && /The drive app " \+ app/.test(refusalSource), refusalSource.length);
       check('and the read-only refusal points a Proton phone at the routes that save',
         /contains\("proton"\)/.test(refusalSource)
+        && /not compatible with the Cloud route/.test(refusalSource)
         && /Syncthing or Network route/.test(refusalSource), refusalSource.length);
       // One shape's reason can name a broken pipe, and the card's dead-descriptor
       // reading would swallow the whole report back into "lost hold of that file".
@@ -7526,18 +7527,35 @@ async function runSuite(driverBase) {
         t('andSayHowToMakeAndChooseTheFile',
           /Save new copy/.test(cloudSteps.textContent) && /Choose file/.test(cloudSteps.textContent), true);
         t('andTheSaveIsRunOnceOnOneDevice', /once, and on one device only/.test(cloudSteps.textContent), true);
-        // Proton's Android app opens existing documents read-only by design, so a
-        // phone choosing it has to hear before it invests what still works.
-        t('andTheCloudStepsSayTheReadOnlyLimit',
-          /for reading only/.test(cloudSteps.textContent)
-          && /Syncthing or Network route/.test(cloudSteps.textContent), true);
+        // Cloud works only on a drive app that can write back into the file it
+        // opened. Proton cannot, by design, so it is named as incompatible
+        // before anyone invests the setup, not discovered after a refusal.
+        t('andTheCloudStepsStateTheWriteToFileRequirement',
+          /write to a file it opened/.test(cloudSteps.textContent)
+          && /saves back into that same file/.test(cloudSteps.textContent), true);
+        t('andNameProtonDriveAsNotCompatible',
+          /Proton Drive is not compatible/.test(cloudSteps.textContent)
+          && /reading only/.test(cloudSteps.textContent), true);
+        t('andSayNoDriveIsGuaranteed',
+          /no drive is guaranteed/.test(cloudSteps.textContent), true);
+        // The privacy cost is not left to a README: it sits under the steps,
+        // with the two routes that keep the file on devices the person owns.
+        const cloudNote = cloudSteps.querySelector('.setup-note');
+        t('andTheCloudStepsWarnAboutPrivacy', /privacy/.test(cloudNote.textContent), true);
+        t('andSayWhatLeavesTheDeviceAndWhoCanReadIt',
+          /stored by the company that runs the drive/.test(cloudNote.textContent)
+          && /end-to-end encrypted/.test(cloudNote.textContent)
+          && /bank statement/.test(cloudNote.textContent), true);
+        t('andOfferRoutesThatDoNotUseACloud',
+          /Syncthing/.test(cloudNote.textContent) && /Network/.test(cloudNote.textContent), true);
         // A drive that answers a write with a read-only verdict is remembered,
         // and the card says in one line what stays here and what still arrives,
         // so nobody has to test drives to find out what a route can do.
         c = await draw({ transport: 'cloud', fileUri: 'u', fileName: 'sorted-snapshot.json', fileReadOnly: true });
         t('theReadOnlyCardSaysWhatStaysAndWhatArrives',
           /reading only, so changes made here stay here/.test(c.textContent)
-          && /Updates from the other devices still arrive/.test(c.textContent), true);
+          && /Updates from the other devices still arrive/.test(c.textContent)
+          && /drive app that can write to an existing file/.test(c.textContent), true);
         c = await draw({ transport: 'cloud', fileUri: '', fileName: '', fileReadOnly: '' });
         c = await draw({ transport: 'syncthing' });
         t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
