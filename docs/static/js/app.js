@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.14.0';
+const APP_VERSION = '2.103.12';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -18,7 +18,7 @@ let dashViewedDate = new Date();
 dashViewedDate.setDate(1);
 let spendFilter = 'all';
 let dueFilter = 'all'; // Bills page: 'all' | 'pending' | 'confirmed' | 'recurring'
-let reportRange = 'all'; // Reports date range: 'all' | 'month' | 'year'
+let reportRange = 'month'; // Reports date range: 'month' | 'year' | 'all'
 
 /* -----------------------------------------------------------------------------
    People
@@ -47,16 +47,6 @@ const CURRENT_PERSON_KEY = 'sorted-current-person';
    number has to not do.
    -------------------------------------------------------------------------- */
 
-// The Cash account has to exist for every install, including the ones that
-// were seeded long before accounts existed — so this runs on boot rather than
-// as part of the sample data, which only ever runs once on a fresh database.
-async function ensureDefaults() {
-  const accounts = await getAll('accounts');
-  if (!accounts.some((a) => a.type === CASH_TYPE)) {
-    await addItem('accounts', { name: 'Cash', type: CASH_TYPE, opening: 0, adjustment: 0, personId: null });
-  }
-}
-
 let accountsCache = new Map();
 
 async function loadAccounts() {
@@ -67,12 +57,17 @@ async function loadAccounts() {
     const bCash = b.type === CASH_TYPE ? 0 : 1;
     return aCash - bCash || String(a.name).localeCompare(String(b.name));
   });
-  accountsCache = new Map(accounts.map((a) => [a.id, a]));
+  // Keyed by the id as a lookup will hand it over, not as it happens to be
+  // stored: rows made before ids were UUIDs have numeric keys, and a <select>
+  // or a data attribute always gives a string back. Without this a legacy
+  // account could be chosen by name and never matched — money linked to it
+  // moved nothing.
+  accountsCache = new Map(accounts.map((a) => [normaliseId(a.id), a]));
   return accountsCache;
 }
 
 function accountById(id) {
-  return id ? accountsCache.get(id) || null : null;
+  return id ? accountsCache.get(normaliseId(id)) || null : null;
 }
 
 function accountName(id) {
@@ -104,10 +99,12 @@ async function accountBalances() {
 
   const out = new Map();
   for (const a of accounts) {
-    out.set(a.id, { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, income: 0, transferIn: 0, transferOut: 0, balance: 0 });
+    out.set(normaliseId(a.id), { id: a.id, name: a.name, type: a.type, personId: a.personId || null, opening: a.opening || 0, adjustment: a.adjustment || 0, spend: 0, bills: 0, savings: 0, income: 0, transferIn: 0, transferOut: 0, balance: 0 });
   }
 
-  const get = (id) => (id ? out.get(id) || null : null);
+  // Same reason the cache is keyed this way: an id can arrive as a number from
+  // a legacy row or as a string off a form, and the two have to meet.
+  const get = (id) => (id ? out.get(normaliseId(id)) || null : null);
 
   for (const item of spend) {
     const row = get(item.accountId);
@@ -117,7 +114,9 @@ async function accountBalances() {
     // here — otherwise every bill they have already paid would silently vanish
     // from their balances. New payments never produce one of these.
     if (item.paid) row.bills += item.amount;
-    else row.spend += item.amount;
+    // An unticked row is money that has not left yet, so it is not drawn
+    // against the balance. Ticking it is what moves it.
+    else if (item.confirmed !== false) row.spend += item.amount;
   }
   // A bill that has been paid leaves the account from Bills, which is where it
   // now stays. Only paid ones count: an unpaid bill has not been paid yet.
@@ -154,21 +153,198 @@ async function accountBalances() {
   return [...out.values()];
 }
 
+// Everything that moved one account, oldest first, as a flat list of dated
+// entries. A balance is a single number, and a number that has moved is a
+// question; this is the answer to it.
+//
+// Built from the same stores accountBalances() reads, so the entries always
+// add up to the balance shown on the row. Anything with no date of its own — a
+// goal's running total, a one-off adjustment to the opening figure — has no
+// place on a timeline and is listed after the dated entries instead of being
+// given a date it never had.
+// The money there was at the end of a month.
+//
+// The Total Money card is scoped by the month selector, so it asks a question
+// with a month in it: "what was my balance in January?" A balance has to be able
+// to answer that, and "the same figure for every month" is not an answer — it is
+// what the card used to say, because the total was simply today's balance
+// whatever month was on screen. With income and spending in between, January's
+// balance and October's cannot be the same number.
+//
+// Built *backwards* from today rather than forwards from the opening balance,
+// because the opening balance is a snapshot with no date on it — nobody said
+// which month they typed it in. Everything that has moved since the month ended
+// is therefore undone: spending that came later, income that arrived later, bills
+// that were settled later, and savings that went in later. A transfer between
+// two of your own accounts is skipped deliberately: it moves money, but it does
+// not change the total.
+//
+// The month on screen gets today's balance, because nothing has moved since.
+async function totalMoneyAtEndOf(monthEndIso) {
+  const [spend, income, dueItems, goals, topUps, balances] = await Promise.all([
+    getAll('spend'), getAll('income'), getAll('due'), getAll('savings'),
+    getAll('savingsTopUps'), accountBalances()
+  ]);
+  const now = balances.reduce((n, b) => n + (b.balance || 0), 0);
+  const later = (iso) => String(iso || '').slice(0, 10) > monthEndIso;
+
+  // How much the total has grown by since the month ended. Spending and settled
+  // bills took money out; income put it in; a goal contribution moved money out
+  // of reach, so it is added back as money that was still there.
+  //
+  // Only what is attached to an account counts. `accountBalances` attributes by
+  // accountId, so a row with none never moved a balance — and counting it here
+  // would make the card disagree with the figure it is derived from. Unticked
+  // spending is held back for the same reason it is in the balance itself.
+  const moves = (row) => !!row.accountId;
+  let net = 0;
+  for (const s of spend) {
+    if (moves(s) && s.confirmed !== false && later(s.date)) net -= Number(s.amount) || 0;
+  }
+  for (const i of income) if (moves(i) && later(i.date)) net += Number(i.amount) || 0;
+  for (const b of dueItems) {
+    if (b.paid === true && moves(b) && later(b.dueDate)) net -= Number(b.amount) || 0;
+  }
+  for (const g of goals) {
+    if (!moves(g)) continue;
+    const contributed = Number(g.current) || 0;
+    const byThen = goalContributedBy(g, topUps, monthEndIso);
+    net -= Math.max(0, contributed - byThen);
+  }
+  return now - net;
+}
+
+// The last day of the month a date falls in, as an ISO date. Comparisons here
+// are on ISO strings, where lexicographic order is chronological order.
+function endOfMonthIso(date) {
+  const last = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${last.getFullYear()}-${pad(last.getMonth() + 1)}-${pad(last.getDate())}`;
+}
+
+// The first month worth showing a balance for: the oldest date anything on the
+// device carries, or the month the app was first opened, whichever is earlier.
+// Before it there is nothing to show, because the opening balance has no date of
+// its own — it is a snapshot of what an account holds now — and reading it back
+// into months that predate every record invents money that was never there.
+// That is what put a balance on the Total Money card for months before the app
+// had been used. A row a person has genuinely backdated carries its own date, so
+// a month they have actually put something in still counts.
+async function firstTrackedMonth() {
+  const [spend, due, income, topUps, goals] = await Promise.all([
+    getAll('spend'), getAll('due'), getAll('income'), getAll('savingsTopUps'), getAll('savings')
+  ]);
+  const dated = [
+    ...spendingHistory(spend).map((s) => s.date),
+    ...due.map((d) => d.dueDate),
+    ...income.map((i) => i.date),
+    ...topUps.map((t) => t.date),
+    ...goals.map((g) => g.createdAt)
+  ].filter(Boolean).map((d) => String(d).slice(0, 10));
+
+  let earliest = null;
+  for (const d of dated) {
+    const parsed = parseDateOnly(d);
+    if (parsed && (!earliest || parsed < earliest)) earliest = parsed;
+  }
+  if (!localStorage.getItem('SORTED_FIRST_USE')) {
+    localStorage.setItem('SORTED_FIRST_USE', localISO());
+  }
+  const installed = parseDateOnly(localStorage.getItem('SORTED_FIRST_USE')) || new Date();
+  const start = earliest && earliest < installed ? earliest : installed;
+  return new Date(start.getFullYear(), start.getMonth(), 1);
+}
+
+async function accountActivity(accountId) {
+  const [spend, savings, transfers, income, dueItems] = await Promise.all([
+    getAll('spend'), getAll('savings'), getAll('transfers'), getAll('income'), getAll('due')
+  ]);
+  const entries = [];
+  const add = (date, label, amount, tone, extra) => {
+    entries.push(Object.assign({ date: date || '', label, amount, tone }, extra || {}));
+  };
+  // A legacy row's accountId is the number the account was keyed by, while this
+  // arrives as the string off the row's own data-id: compare them the same way.
+  const wanted = normaliseId(accountId);
+
+  // The opening balance and any one-off adjustment lead the list, undated. They
+  // are what the account held before anything was tracked, and leaving them out
+  // would make a list that visibly fails to add up to the balance above it —
+  // which is the one thing a list of movements has to be able to do.
+  const opening = accountById(accountId);
+  if (opening) {
+    if (Number(opening.opening)) add('', 'Opening balance', Number(opening.opening), 'in', { title: '' });
+    if (Number(opening.adjustment)) add('', 'Adjusted', Number(opening.adjustment), opening.adjustment < 0 ? 'out' : 'in', { title: '' });
+  }
+
+  for (const item of spend) {
+    if (normaliseId(item.accountId) !== wanted) continue;
+    // A row written before 2.8.3 paid a bill by writing it into Spend. It is
+    // read as a bill here for the same reason it is in accountBalances(), so
+    // this list and the balance can't disagree about what a row was.
+    if (item.paid) add(item.date || item.dueDate, 'Bill paid', -Number(item.amount) || 0, 'out', { title: item.title });
+    else add(item.date, 'Spent', -Number(item.amount) || 0, 'out', { title: item.title });
+  }
+  for (const item of dueItems) {
+    if (item.paid !== true || normaliseId(item.accountId) !== wanted) continue;
+    add(item.date, 'Bill paid', -Number(item.amount) || 0, 'out', { title: item.title });
+  }
+  for (const item of income) {
+    if (normaliseId(item.accountId) !== wanted) continue;
+    add(item.date, 'Income', Number(item.amount) || 0, 'in', { title: item.title });
+  }
+  for (const t of transfers) {
+    if (normaliseId(t.fromId) === wanted) add(t.date, 'Moved out', -Number(t.amount) || 0, 'out', { title: accountName(t.toId) });
+    if (normaliseId(t.toId) === wanted) add(t.date, 'Moved in', Number(t.amount) || 0, 'in', { title: accountName(t.fromId) });
+  }
+  for (const goal of savings) {
+    if (normaliseId(goal.accountId) !== wanted) continue;
+    add('', 'Saved to ' + (goal.title || 'goal'), -(Number(goal.current) || 0), 'out', { title: goal.category || '' });
+  }
+
+  const dated = entries.filter((e) => e.date).sort((a, b) => a.date.localeCompare(b.date));
+  // Undated entries last: the opening balance is where the story starts, but it
+  // has no date to sit in a timeline with, and showing it under a made-up date
+  // would be worse than showing it in its own group.
+  const undated = entries.filter((e) => !e.date);
+  return dated.concat(undated);
+}
+
 // Returns the new account's id, or null when it couldn't be added. The id
 // rather than a bare true, because a caller that just added an account almost
 // always wants to do something with it next — and a boolean that gets passed
 // to deleteItem() as an id fails at the point of use, not here.
-async function addAccount(name, type, opening) {
+// What an account can be. Cash is an account rather than a payment method, so it
+// sits in the same list; business and savings are here because a sole trader's
+// spending is not household spending, and a report about where money sits has
+// to be able to tell them apart.
+const ACCOUNT_TYPES = [
+  ['bank', 'Bank account'],
+  ['business', 'Business account'],
+  ['savings', 'Savings account'],
+  ['cash', 'Cash'],
+];
+
+function accountTypeLabel(type) {
+  const found = ACCOUNT_TYPES.find(([value]) => value === type);
+  return found ? found[1] : 'Bank account';
+}
+
+async function addAccount(name, type, opening, cardLast4, personId) {
   const clean = String(name || '').trim().slice(0, 40);
   if (!clean) return null;
   const accounts = await getAll('accounts');
   if (accounts.some((a) => a.type === type && String(a.name).toLowerCase() === clean.toLowerCase())) return null;
   return addItem('accounts', {
     name: clean,
-    type: type === CASH_TYPE ? CASH_TYPE : 'bank',
+    // Anything the form offers is a real type; only an unknown value falls back.
+    type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
     opening: Number.isFinite(Number(opening)) ? Number(opening) : 0,
     adjustment: 0,
-    personId: null
+    cardLast4: String(cardLast4 || '').replace(/\D/g, '').slice(0, 4) || null,
+    // An account can belong to somebody, which is what lets an income paid
+    // into it be that person's without being asked twice.
+    personId: personId || null
   });
 }
 
@@ -301,7 +477,15 @@ async function addPerson(name) {
 async function removePerson(id) {
   // Their entries are left alone — a spend doesn't stop being real because
   // the person is removed — they just become unattributed.
-  for (const store of ['spend', 'due', 'savings']) {
+  //
+  // Every store that names them, not just the first three. The removal dialog
+  // promises "spending, bills, savings, accounts, income and reports", and
+  // accounts and income were the two it skipped: an account stayed owned by a
+  // person who could no longer be selected, and income stayed theirs, so both
+  // kept resolving to null in every breakdown and quietly reappeared in the
+  // Anyone row of Who Spent What — a different fate from the same person's
+  // spending in the same list.
+  for (const store of ['spend', 'due', 'savings', 'accounts', 'income']) {
     const items = await getAll(store);
     for (const item of items) {
       if (item.personId === id) await updateItem(store, { ...item, personId: null });
@@ -361,9 +545,41 @@ if (IS_NATIVE) {
   const list = document.querySelector('.sidebar .nav-list');
   if (bar && list) {
     bar.appendChild(list.cloneNode(true));
+    // On <html> as well as <body>: the head script sets it before first paint to
+    // stop the rail flashing, and the two have to agree or the phone layout is
+    // half applied depending on which one the cascade sees.
+    document.documentElement.classList.add('is-native');
     document.body.classList.add('is-native');
   }
 }
+
+// Coming back to the front re-renders whatever tab you were on.
+//
+// Android suspends the WebView in the background, and it closes IndexedDB while
+// it is away. Anything that rendered during that window failed, and nothing
+// re-rendered on the way back — so you returned to a blank or stale page with
+// the nav still highlighting the tab you had asked for. That is the whole of
+// "the Reports tab sometimes doesn't load": the page that most needs to be
+// re-read is the one with the most work in it.
+let resumeRenderedAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  // A read in flight owns the receipt panel. Re-rendering it here wipes the
+  // status line and the thumbnail for a read that is still running, and the
+  // flow that produces this event is the photo picker — the same flow that
+  // starts the read.
+  if (typeof isOcrReading === 'function' && isOcrReading()) return;
+  // Android fires this more than once for a single return to the app, and
+  // re-rendering the heaviest page on each one is the last thing a phone needs.
+  const now = Date.now();
+  if (now - resumeRenderedAt < 1500) return;
+  resumeRenderedAt = now;
+  renderPage();
+  // Coming back is also the moment another device's change is most likely to
+  // be waiting. Queued rather than awaited: the page is already being drawn,
+  // and a pull redraws it again once the data has landed.
+  if (typeof scheduleAutoSync === 'function') scheduleAutoSync(0);
+});
 
 // Modal — openModal moves focus into the modal (first field, or the
 // close button when there are none, so Enter can never fire a
@@ -408,6 +624,49 @@ function openModal(title, content) {
   focusTarget.focus();
 }
 
+// The first thing a new install shows, and once only. Everything the app
+// records stays on the device, and saying so plainly — before anything is
+// entered — is the point of the notice. It is the site's own privacy notice
+// (jaquesbody.github.io/know) with Sorted's words: the wordmark, what the app
+// does with your data, the line to the code that proves it, and one button to
+// acknowledge. Its own overlay, not the app modal, so no title bar or close
+// cross sits on top of it.
+const PRIVACY_SEEN_KEY = 'SORTED_PRIVACY_SEEN';
+
+function dismissPrivacyNotice() {
+  const el = document.getElementById('privacy-notice');
+  if (el) el.remove();
+}
+
+function maybeShowPrivacyNotice() {
+  if (localStorage.getItem(PRIVACY_SEEN_KEY)) return;
+  // A locked app is waiting for a PIN, and the notice belongs to a first open
+  // rather than to the lock screen. The flag is left alone so it still appears
+  // once the app is actually opened.
+  if (typeof isLocked === 'function' && isLocked()) return;
+  localStorage.setItem(PRIVACY_SEEN_KEY, '1');
+  const overlay = document.createElement('div');
+  overlay.className = 'notice-overlay';
+  overlay.id = 'privacy-notice';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', 'Privacy');
+  overlay.innerHTML = `
+    <div class="notice-box">
+      <img src="static/icons/wordmark-sorted.png" alt="Sorted" class="notice-logo">
+      <p>Privately track your spending and saving.</p>
+      <p>Sorted stores everything locally. Nothing leaves your device without your permission.</p>
+      <p>Fully open source.
+        <a href="https://github.com/jaquesbody/sorted" target="_blank" rel="noopener">Review the code on GitHub</a></p>
+      <button class="btn btn-primary" onclick="dismissPrivacyNotice()">Got it</button>
+    </div>`;
+  // The card opens with the button centred and the app still visible behind
+  // it. The button is not focused on opening: focusing it is what paints a
+  // ring over the accent fill on Android, and a modal card with one button
+  // has nothing a ring could be useful against. It stays reachable by Tab.
+  document.body.appendChild(overlay);
+}
+
 // The passcode lock screen is a full-screen overlay, so nothing behind it can
 // be reached by pointer — but the keyboard still can. Escape is the one that
 // matters: it would otherwise close whatever modal happened to be open at the
@@ -421,10 +680,12 @@ document.addEventListener('keydown', (e) => {
 // buttons share these handlers so both entry points behave identically.
 // Electron exposes a narrow preload bridge (no Node in the renderer).
 async function handleExport() {
+  // Electron gets its own dialog through the bridge; everywhere else the menu
+  // is the same three formats, so the choice is the same wherever it is tapped.
   if (window.sortedBridge) {
     await window.sortedBridge.exportData();
   } else {
-    await exportData();
+    openExportModal();
   }
 }
 
@@ -450,40 +711,192 @@ if (window.sortedBridge) {
 // generation it started in and only the newest one is allowed to paint.
 let renderToken = 0;
 
+
+// The two one-time sweeps that used to run here — deleting due rows whose
+// account no longer existed, and deleting rows that shared a title and month —
+// were removed. Both deleted user data on a schedule, silently, with no way to
+// undo it: an account that happened to be missing from the cache took its bills
+// with it, and two legitimately different bills that shared a name in a month
+// lost one of them. They were treating a duplication bug in materialise (since
+// fixed, and now serialised) by throwing away the symptom's data.
+
 async function renderPage() {
+
   const content = document.getElementById('content');
-  renderToken++;
+  // Both captured here, before the first await. Reading `currentPage` after the
+  // loads meant a render could be asked for one tab and draw another, and
+  // letting each render function capture `renderToken` itself meant a
+  // superseded render picked up the *newest* token and was therefore allowed to
+  // paint over the one that replaced it — which is how a slow page could leave
+  // the wrong tab on screen with the nav highlighting the right one.
+  const token = ++renderToken;
+  const page = currentPage;
 
-  // Every page needs the people list: to resolve a row's dot, to offer the
-  // filter, or to stamp a form. One read, shared by the render below.
-  await loadPeople();
-  // Same for accounts — a row's allocation and every form's dropdown need them.
-  await loadAccounts();
-  renderPersonChip();
+  try {
+    // Every page needs the people list: to resolve a row's dot, to offer the
+    // filter, or to stamp a form. One read, shared by the render below.
+    await loadPeople();
+    // Same for accounts — a row's allocation and every form's dropdown need them.
+    await loadAccounts();
+    // Somebody asked for a different page while these were loading.
+    if (token !== renderToken) return;
+    renderPersonChip();
 
-  switch(currentPage) {
-    case 'dashboard':
-      await renderDashboard(content);
-      break;
-    case 'spend':
-      await renderSpend(content);
-      break;
-    case 'due':
-      await renderDue(content);
-      break;
-    case 'savings':
-      await renderSavings(content);
-      break;
-    case 'reports':
-      await renderReports(content);
-      break;
-    case 'settings':
-      renderSettings(content);
-      break;
+    switch (page) {
+      case 'dashboard':
+        await renderDashboard(content);
+        break;
+      case 'spend':
+        await renderSpend(content);
+        break;
+      case 'due':
+        await renderDue(content);
+        break;
+      case 'savings':
+        await renderSavings(content);
+        break;
+      case 'reports':
+        await renderReports(content);
+        break;
+      case 'settings':
+        renderSettings(content);
+        break;
+    }
+  } catch (err) {
+    // A read can fail for reasons that are not about the data at all — most
+    // often Android suspending the WebView and closing IndexedDB underneath a
+    // render. Swallowing that left the previous page sitting there under a nav
+    // highlighting the tab you had just asked for, which reads as "the tab
+    // doesn't load". One retry with the connection re-opened, then say so
+    // rather than leaving it blank.
+    console.error('Render failed:', err);
+    if (token !== renderToken) return;
+    try {
+      resetDbConnection();
+      await loadPeople();
+      await loadAccounts();
+      if (token !== renderToken) return;
+      console.warn('Retrying render after a connection reset');
+      renderPage();
+    } catch (retryErr) {
+      console.error('Render failed again:', retryErr);
+      if (token !== renderToken) return;
+      content.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-text">Could not load this page</div>
+          <p class="setting-hint" style="margin-bottom: 20px;">
+            ${escapeHTML(String((retryErr && retryErr.message) || retryErr))}
+          </p>
+          <button class="btn btn-primary" onclick="renderPage()">Try again</button>
+        </div>`;
+    }
   }
 }
 
+// Savings, at the Accounts section. The Total Money card's figures are account
+// balances, so that is where its number is explained — and the card used to go
+// nowhere at all.
+function goToAccounts() {
+  navigate('savings');
+  // The section exists as soon as the page is drawn; wait for the render that
+  // navigate() starts before scrolling, or there is nothing to scroll to.
+  setTimeout(() => {
+    const el = document.getElementById('accounts-section');
+    if (el) el.scrollIntoView({ block: 'start' });
+  }, 260);
+}
+
 // Dashboard
+function renderTotalMoneyCard(balances, spent, due, outstanding, saved, savedTarget, totalAt, firstMonthDate) {
+  const count = balances.length;
+  // A month that predates every record has no balance to show. The opening
+  // figure is a snapshot of now with no date on it, so reading it back this far
+  // invents money that was never there — the balance that appeared in months
+  // before the app was used. A backdated row carries its own date, so a month a
+  // person has actually put something in is past this line and still shows.
+  const beforeTracking = firstMonthDate
+    && (dashViewedDate.getFullYear() < firstMonthDate.getFullYear()
+      || (dashViewedDate.getFullYear() === firstMonthDate.getFullYear()
+        && dashViewedDate.getMonth() < firstMonthDate.getMonth()));
+  if (beforeTracking) {
+    return `
+      <div class="stat-card total-card" role="button" tabindex="0" onclick="goToAccounts()">
+        <div class="stat-card-header">
+          <span class="stat-card-title">Total money</span>
+          <span class="stat-card-sub">${count === 0 ? 'No accounts' : `${count} account${count === 1 ? '' : 's'}`}</span>
+        </div>
+        <div class="stat-card-value" style="color: var(--text-muted);">—</div>
+        <div class="stat-card-sub">No records before ${escapeHTML(formatMonth(firstMonthDate))}</div>
+      </div>`;
+  }
+
+  // The balance for the month on screen, passed in. The card used to work this
+  // out from the accounts, which made it today's balance whatever month was
+  // showing — and a January card then carried the same figure as an October one,
+  // which is the thing that was reported as wrong.
+  const total = Number.isFinite(totalAt)
+    ? totalAt
+    : balances.reduce((n, b) => n + b.balance, 0);
+  const over = total < 0;
+
+  // Two different figures about the month's bills, because they answer two
+  // different questions. `due` is what the month cost, which is what the card
+  // shows: a bill that has been paid is still a bill, and £0.00 there reads as
+  // "there were no bills in January" when the truth is "they were all settled".
+  // `outstanding` is what is still owed, and that is the only part drawn
+  // against the money.
+  //
+  // The same rule has to cover spending, for the same reason: money that has
+  // already left the balance is not taken out of "Left" a second time. £1,000
+  // with a £100 spend ticked off reads £800 total, and Left is £800 rather
+  // than £600 — the spend shows on the card as how the month went, not as
+  // money still owed. Only what is still owed, and what is set aside in goals,
+  // comes off what is left.
+  const billsShown = Math.max(0, due);
+  const committed = Math.max(0, outstanding);
+  const savedPart = Math.max(0, saved);
+  const spare = total - committed - savedPart;
+
+  // The bar is scaled to the biggest thing on it, so a month with no bills
+  // still shows the parts it has. What is left is not the remainder of the
+  // total any more, so the scale has to hold the four parts as well: money
+  // already spent shows on the bar, and drawing it against a smaller total
+  // would push the last segment off the end.
+  const barTotal = spent + billsShown + savedPart + spare;
+  const scale = Math.max(total, barTotal, 1);
+  const pct = (n) => Math.max(0, Math.min(100, (Math.max(0, n) / scale) * 100));
+
+  const parts = [
+    { key: 'spent', label: 'Spent', value: spent, tone: 'accent' },
+    { key: 'bills', label: 'Bills', value: billsShown, tone: 'danger' },
+    { key: 'savings', label: 'Savings', value: savedPart, tone: 'success' },
+    { key: 'left', label: 'Left', value: spare, tone: 'muted' }
+  ];
+
+  // Clicking the card goes to where the money is: Savings, at the Accounts
+  // section. It used to go nowhere, which is a card that is only ever read.
+  return `
+    <div class="stat-card total-card" role="button" tabindex="0" onclick="goToAccounts()">
+      <div class="stat-card-header">
+        <span class="stat-card-title">Total money</span>
+        <span class="stat-card-sub">${count === 0 ? 'No accounts' : `${count} account${count === 1 ? '' : 's'}`}</span>
+      </div>
+      <div class="stat-card-value${over ? ' tone-danger' : ''}">${currency(total)}</div>
+      ${count === 0 ? '' : `
+      <div class="total-bar" role="img"
+           aria-label="${escapeHTML(parts.map((p) => `${p.label} ${currency(p.value)}`).join(', '))}">
+        ${parts.filter((p) => p.value > 0).map((p) => `
+          <span class="total-seg tone-${p.tone}" style="width: ${pct(p.value).toFixed(2)}%"
+                title="${escapeHTML(`${p.label} ${currency(p.value)}`)}"></span>`).join('')}
+      </div>
+      <div class="total-legend">
+        ${parts.map((p) => `
+          <span class="total-key"><i class="account-seg-swatch tone-${p.tone}"></i>${p.label} ${currency(p.value)}</span>`).join('')}
+      </div>
+      `}
+    </div>`;
+}
+
 async function renderDashboard(container) {
   const token = renderToken;
   
@@ -496,15 +909,49 @@ async function renderDashboard(container) {
   // The month selector at the top scopes the two cards that have dates. The
   // Bills card uses the same rule as the Bills page, so the two never
   // disagree about what "September" owes.
-  const spendMonth = spendItems.filter(i => isSameMonth(i.date, dashViewedDate));
-  const spendYear = spendItems.filter(i => isSameYear(i.date, dashViewedDate));
+  // Spending is what is left once the bills are taken out of it. A bill paid
+  // before 2.8.3 was written into Spend, so every one of those rows is still in
+  // this store carrying `paid: true` and a `dueDate` — and counting them as
+  // spending here put the same rent on the Dashboard under "Spent" *and* on the
+  // Bills page under "Paid": two screens describing the same money as two
+  // different things. Reports and Save Report already used this rule; the
+  // Dashboard and the Spend page were the two it never reached.
+  const realSpend = spendingHistory(spendItems);
+  const spendMonth = realSpend.filter(i => isSameMonth(i.date, dashViewedDate));
+  const spendYear = realSpend.filter(i => isSameYear(i.date, dashViewedDate));
   const spendMonthTotal = spendMonth.reduce((sum, i) => sum + i.amount, 0);
   const spendYearTotal = spendYear.reduce((sum, i) => sum + i.amount, 0);
   const dashYear = dashViewedDate.getFullYear();
   
-  const { items: dueShown, overdueElsewhere } = billsForMonth(dueItems, dashViewedDate);
+  const { items: dueShown, overdueElsewhere, projections } = billsForMonth(dueItems, dashViewedDate);
   const dueTotal = dueShown.reduce((sum, i) => sum + i.amount, 0);
   const overdueCount = dueShown.filter(i => isOverdue(i.dueDate)).length;
+
+  // "Monthly total", the figure the Bills page shows beside its own
+  // total. Everything landing in the month on screen, settled or not, plus the
+  // projections a month ahead carries because nothing is stored for it yet.
+  // Without the projections a future month would read the bills of whichever
+  // rows happened to be stored there, which is usually none.
+  const billsThisMonthTotal = dueItems
+    .filter(i => isSameMonth(i.dueDate, dashViewedDate))
+    .reduce((sum, i) => sum + i.amount, 0)
+    + projections.reduce((sum, i) => sum + i.amount, 0);
+
+  // Two figures for the card, from one month, because they answer two
+  // different questions. `dueForTotal` is what the month cost, settled or not:
+  // a paid bill is still a bill, and £0.00 there reads as "there were no bills
+  // in January" when the truth is "they were all settled". `dueTotal` is what
+  // is still owed, and that is the only part drawn against the money — a
+  // settled bill has already left the balance, so counting it again took the
+  // same £100 out of "Left" a second time. A month ahead is the one place
+  // `dueTotal` alone is right, because its projections are the only bills it
+  // has.
+  const billsThisMonth = dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate));
+  const dashInFuture = !isBeforeThisMonth(dashViewedDate)
+    && !isSameMonth(dashViewedDate, new Date());
+  const dueForTotal = dashInFuture
+    ? dueTotal
+    : billsThisMonth.reduce((sum, i) => sum + i.amount, 0);
   
   const savingsCurrent = savingsItems.reduce((sum, i) => sum + i.current, 0);
   const savingsTarget = savingsItems.reduce((sum, i) => sum + i.target, 0);
@@ -512,13 +959,37 @@ async function renderDashboard(container) {
   
   // Category breakdowns
   const spendByCategory = groupByCategory(spendMonth, 'amount');
-  const dueByCategory = groupByCategory(dueShown, 'amount');
-  
+  // The same set the "Monthly total" figure is built from, projections
+  // included. It used to count only rows dated in the month, so a future month
+  // whose bills were still projections showed a total with no category beside
+  // it — which is how the phantom figure was spotted in the first place. The
+  // breakdown now adds up to the total it sits under.
+  const billsThisMonthItems = [
+    ...dueItems.filter(i => isSameMonth(i.dueDate, dashViewedDate)),
+    ...projections
+  ];
+  const dueByCategory = groupByCategory(billsThisMonthItems, 'amount');
+
+  // What there is, and what has already been spoken for. Read once here and
+  // handed to both the new card and the trend below.
+  const balancesForDash = await accountBalances();
+  // The balance the card's own month belongs to. The month on screen gets
+  // today's balance, because nothing has moved since it ended.
+  const totalAt = await totalMoneyAtEndOf(endOfMonthIso(dashViewedDate));
+  // Shared with the trend below, so the card and the chart agree on where the
+  // records begin.
+  const firstMonthDate = await firstTrackedMonth();
+
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       ${monthNavHtml('dash', dashViewedDate)}
+      <button class="icon-btn icon-btn--float${syncConfigured() ? '' : ' icon-btn--quiet'}" id="sync-refresh"
+              onclick="dashboardSyncNow(this)" aria-label="Sync and refresh"
+              title="${syncConfigured() ? 'Sync with your server' : 'Set up sync in Settings'}">${REFRESH_SVG}</button>
     </div>
+
+    ${renderTotalMoneyCard(balancesForDash, spendMonthTotal, dueForTotal, dueTotal, savingsCurrent, savingsTarget, totalAt, firstMonthDate)}
 
     <div class="dashboard-grid">
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('spend')">
@@ -536,17 +1007,22 @@ async function renderDashboard(container) {
       
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('due')">
         <div class="stat-card-header">
-          <span class="stat-card-title">Bills</span>
-          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'}</span>
+          <span class="stat-card-title">Bills due</span>
+          <span class="stat-card-sub">${dueShown.length} item${dueShown.length === 1 ? '' : 's'} · <span style="color: ${overdueCount > 0 ? 'var(--danger)' : 'inherit'}">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</span></span>
         </div>
         <div class="stat-card-value" style="color: ${overdueCount > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(dueTotal)}</div>
-        <div class="stat-card-sub">${overdueCount > 0 ? overdueCount + ' overdue' : 'Nothing overdue'}</div>
+        <div class="stat-card-sub">Monthly total = ${currency(billsThisMonthTotal)}</div>
         ${overdueElsewhere.length > 0
           ? `<div class="stat-card-sub">includes ${overdueElsewhere.length} from an earlier month</div>` : ''}
-        <div class="stat-card-progress">
-          <div class="stat-card-progress-fill progress-due" style="width: ${Math.min(100, (dueTotal / 500) * 100)}%"></div>
+        <div class="stat-card-progress" style="position: relative;">
+          <div class="stat-card-progress-fill progress-due" style="position: absolute; left: 0; top: 0; width: ${Math.min(100, ((billsThisMonthTotal - dueTotal) / billsThisMonthTotal) * 100)}%;"></div>
+          <div class="stat-card-progress-fill progress-due progress-due--striped" style="position: absolute; left: ${Math.min(100, ((billsThisMonthTotal - dueTotal) / billsThisMonthTotal) * 100)}%; top: 0; width: ${Math.min(100, (dueTotal / billsThisMonthTotal) * 100)}%;"></div>
         </div>
-        ${renderCategoryBreakdown(dueByCategory, dueTotal, 'danger')}
+        <div class="stat-card-sub">
+          <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px;"><i style="display:inline-block;width:12px;height:6px;background:var(--danger);border-radius:2px"></i>Paid</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;"><i style="display:inline-block;width:12px;height:6px;background-color:var(--danger);background-image:repeating-linear-gradient(45deg, rgba(255,255,255,.34) 0 6px, transparent 6px 12px);border-radius:2px"></i>Due</span>
+        </div>
+        ${renderCategoryBreakdown(dueByCategory, billsThisMonthTotal, 'danger')}
       </div>
       
       <div class="stat-card" role="button" tabindex="0" onclick="navigate('savings')">
@@ -563,14 +1039,17 @@ async function renderDashboard(container) {
     </div>
     
     <div class="chart-container">
-      <div class="chart-header">
-        <h2 class="chart-title">Monthly Trend</h2>
-        <div class="chart-legend">
-          <span class="legend-item"><span class="legend-swatch legend-recurring"></span>Recurring</span>
-          <span class="legend-item"><span class="legend-swatch legend-oneoff"></span>One-off</span>
-        </div>
+      <div class="chart-header chart-header--link" role="button" tabindex="0"
+           onclick="navigate('reports')" title="See the Reports breakdowns">
+        <h2 class="chart-title">Monthly trend</h2>
       </div>
       <canvas id="trend-chart" class="chart-canvas"></canvas>
+      <div class="chart-legend">
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:var(--accent);border-radius:2px;margin-right:4px"></span>Spent</span>
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:var(--danger);border-radius:2px;margin-right:4px"></span>Bills</span>
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:#94a3b8;border-radius:2px;margin-right:4px"></span>Left</span>
+        <span class="legend-item"><span style="display:inline-block;width:10px;height:10px;background:#22c55e;border-radius:2px;margin-right:4px"></span>Savings</span>
+      </div>
     </div>
   `;
   
@@ -578,20 +1057,92 @@ async function renderDashboard(container) {
   // wrote a payment into Spend and the trend picked it up for free; when that
   // stopped, a month where the only activity was paying bills went blank —
   // which is exactly the month a trend is most worth looking at.
-  const paidBills = dueItems
-    .filter((d) => d.paid === true && d.dueDate)
-    .map((d) => ({ ...d, date: d.dueDate, confirmed: true }));
+  // Render each stored bill into the month it falls due, so every month bar
+  // carries its own bills rather than only the ones already paid.
+  const chartBills = dueItems
+    .filter((d) => d.dueDate)
+    .map((d) => ({ ...d, date: d.dueDate, type: 'bill', recurring: false }));
 
+  // Build the trend as six month-end snapshots: each bar is fixed to its own
+  // spent / bills / savings / left, so revisiting a later month can never
+  // rewrite what an earlier one actually did. The chart is no longer driven by
+  // "this month's" constants repeated across all six months (which was the
+  // thing that moved every bar when the displayed month changed).
+  // `firstMonthDate` is worked out with the Total Money card above, so the chart
+  // and the card start their records in the same month: the install month
+  // backstops both, and a backdated row already on the device still shows from
+  // its real month.
+  const monthTopUps = await getAll('savingsTopUps');
+  const chartItems = [];
+  const end = dashViewedDate ? new Date(dashViewedDate.getFullYear(), dashViewedDate.getMonth(), 1) : new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
+    if (d < firstMonthDate) continue;
+    const iso = endOfMonthIso(d);
+    const monthSpent = realSpend
+      .filter((s) => isSameMonth(s.date, d))
+      .reduce((n, s) => n + (Number(s.amount) || 0), 0);
+    const monthBills = dueItems
+      .filter((b) => b.dueDate && isSameMonth(b.dueDate, d))
+      .reduce((n, b) => n + (Number(b.amount) || 0), 0);
+    const monthSavings = savingsItems.reduce((n, g) => n + goalContributedBy(g, monthTopUps, iso), 0);
+    const monthTotal = await totalMoneyAtEndOf(iso);
+    const monthLeft = Math.max(0, monthTotal - monthSpent - monthBills - monthSavings);
+    if (monthSpent > 0) chartItems.push({ amount: monthSpent, date: iso, type: 'spend', recurring: false });
+    if (monthBills > 0) chartItems.push({ amount: monthBills, date: iso, type: 'bill', recurring: false });
+    if (monthSavings > 0) chartItems.push({ amount: monthSavings, date: iso, type: 'savings', recurring: false });
+    if (monthLeft > 0) chartItems.push({ amount: monthLeft, date: iso, type: 'left', recurring: false });
+  }
   // Draw simple bar chart
-  drawTrendChart([...spendItems, ...paidBills], dashViewedDate);
+  drawTrendChart(chartItems, dashViewedDate);
 }
 
+// A bill payment written into Spend. Until 2.8.3, paying a bill wrote its
+// payment into Spend rather than marking one in Bills, so every bill settled
+// before then is a spend row carrying `paid: true` and a `dueDate` — the two
+// fields are what make it a bill rather than an expense. `paidBillsForMonth`
+// has always read that convention, and the Bills page shows them in its Paid
+// section; nothing else did, so the same rent was counted once as a bill and
+// once as spending.
+function isSettledBillPayment(row) {
+  return !!row && row.paid === true && !!row.dueDate;
+}
+
+// Every bill a store holds, as history rather than as a status: the Bills
+// store paid or not, plus the payments older bills left in Spend.
+function billHistory(dueItems, spendItems) {
+  return dueItems.concat(spendItems.filter(isSettledBillPayment));
+}
+
+// Spending, which is what is left once the bills are taken out of it, and once
+// the unticked rows are taken out of that.
+//
+// The tick on the Spent tab is what says the money has actually gone: an
+// unticked row is spending recorded but not yet made, so it belongs to
+// nothing — not the balance, not the dashboard, not a report, not a
+// projection. Every row a form writes now carries the tick one way or the
+// other; a row that predates it has no `confirmed` field at all and reads as
+// ticked, so nothing already recorded stops counting.
+function spendingHistory(spendItems) {
+  return spendItems.filter((i) => !isSettledBillPayment(i) && i.confirmed !== false);
+}
+
+// Grouped by category. Built through a Map and converted once at the end,
+// because the keys are free text that can come from an imported file: a
+// category named `toString`, `__proto__` or `constructor` is not a shelf
+// ornament on a plain object, it is a lookup that returns a function — so the
+// total becomes a string, real money reads as £0.00, and `__proto__` vanishes
+// from the breakdown entirely. Object.fromEntries writes each key as an own
+// property, which is the one safe way to get a plain object out of this.
 function groupByCategory(items, amountKey) {
-  const totals = {};
+  const totals = new Map();
   items.forEach(item => {
-    totals[item.category] = (totals[item.category] || 0) + item[amountKey];
+    // A row saved before the category was required has none; calling it
+    // "undefined" in a report is not a description of anything.
+    const key = String(item.category == null || item.category === '' ? 'Uncategorised' : item.category);
+    totals.set(key, (totals.get(key) || 0) + (Number(item[amountKey]) || 0));
   });
-  return totals;
+  return Object.fromEntries(totals);
 }
 
 // Bills for the month on screen: what's due then, plus — while you're looking
@@ -601,23 +1152,149 @@ function groupByCategory(items, amountKey) {
 // what it held, and dragging the current overdue pile into it makes the
 // history unreadable. Shared by the Bills page and the dashboard card so
 // the two never disagree.
-function billsForMonth(dueItems, date) {
+// Whether a month is strictly before the one we are in. A month that has gone
+// past has had its bills paid, so a figure that means "still to pay" is £0.00
+// for it — which is true of the question and misleading as an answer.
+function isBeforeThisMonth(date) {
   const now = new Date();
-  const lookingBack = date.getFullYear() < now.getFullYear()
+  return date.getFullYear() < now.getFullYear()
     || (date.getFullYear() === now.getFullYear() && date.getMonth() < now.getMonth());
+}
+
+// A bill's identity across the months it recurs through. A row and the
+// projection of that same row must resolve to one key, or the bill is counted
+// as two; the name alone is enough here because it is the name the rest of the
+// code keys on too (`markDuePaid` asks whether the title is already on the next
+// date, and the Bills page draws one row per name per month).
+function billSeriesKey(item) {
+  return (frequencyOf(item) || '') + '|' + String(item.title || '').trim().toLowerCase();
+}
+
+// A future month's bills become real when you look at them.
+//
+// They used to be projections: cards with no id, that could not be tapped,
+// edited or paid, and that Total Due did not count — so a month you were about
+// to pay for read £0.00 and its bills were a gallery you could only look at.
+// That is the fault described as "static cards ... that do not contribute to
+// Total Due", and the fix is one rule rather than two: a recurring bill leaves
+// a real row behind for its next occurrence.
+//
+// Nothing is invented for a month that has already happened — those bills are
+// stored, and adding to them would rewrite history.
+//
+// One row per bill per month, and only when that month's row is not already
+// there. The pass is serialised, and that is the whole of the phantom-bill
+// fault: it reads the store, decides which rows are missing and writes them,
+// and two of those passes running at once — which a fast page turn or a sync
+// refresh produces — both read the same store, both decide the same row is
+// missing, and both write it. The duplicate that stacked up was invisible until
+// it fell overdue, when its sum rode into every later month as a figure with no
+// category to its name. One pass at a time, re-reading inside the lock, makes
+// each decision against rows the previous pass has already committed.
+let materialiseQueue = Promise.resolve();
+function materialiseBillsForMonth(viewDate) {
+  const run = () => materialiseBillsForMonthNow(viewDate);
+  // The queue is carried even when a pass fails, so one bad write cannot wedge
+  // every later page.
+  const queued = materialiseQueue.then(run, run);
+  materialiseQueue = queued.then(() => {}, () => {});
+  return queued;
+}
+
+async function materialiseBillsForMonthNow(viewDate) {
+  const now = new Date();
+  const inFuture = !isSameMonth(viewDate, now) && !isBeforeThisMonth(viewDate);
+  if (!inFuture) return getAll('due');
+
+  const dueItems = await getAll('due');
+  // Bills the month already has a row for. A series here needs nothing added,
+  // and this is also what stops two stored occurrences of one bill from each
+  // leaving their own copy.
+  const represented = new Set(
+    dueItems
+      .filter((i) => isSameMonth(i.dueDate, viewDate))
+      .map(billSeriesKey)
+  );
+  // One entry per bill, however many of its own months are stored. Paying a
+  // bill leaves the settled row and writes the next, so a series legitimately
+  // holds several rows at once — they are still one bill.
+  const series = new Map();
+  for (const item of dueItems) {
+    if (item.paid === true) continue;
+    if (!frequencyOf(item)) continue;
+    const key = billSeriesKey(item);
+    if (!series.has(key)) series.set(key, []);
+    series.get(key).push(item);
+  }
+
+  let wrote = false;
+  for (const rows of series.values()) {
+    const key = billSeriesKey(rows[0]);
+    if (represented.has(key)) continue;
+    // Any stored occurrence of the bill can be the one that lands here; the
+    // chain does not have to have been walked in order. The first that lands
+    // supplies the date, so visiting a far month and then an earlier one still
+    // fills the earlier one in.
+    let occurrence = null;
+    for (const row of rows) {
+      const lands = occurrenceInMonth(row.dueDate, frequencyOf(row), viewDate, row.repeatUntil, dueDayValue(row));
+      if (lands && !isSameMonth(row.dueDate, viewDate)) { occurrence = lands; break; }
+    }
+    if (!occurrence) continue;
+
+    // The newest occurrence carries the fields a person would have edited most
+    // recently. A future occurrence has not been photographed yet, and copying
+    // the id or the receipt would attach them to a row they do not belong to.
+    const template = rows.slice().sort((a, b) => String(a.dueDate || '').localeCompare(String(b.dueDate || ''))).pop();
+    const copy = { ...template };
+    delete copy.id;
+    delete copy.receipt;
+    delete copy.createdAt;
+    delete copy.updatedAt;
+    delete copy.seededNext;
+    await addItem('due', Object.assign(copy, { paid: false, dueDate: occurrence }));
+    represented.add(key);
+    wrote = true;
+  }
+  return wrote ? await getAll('due') : dueItems;
+}
+
+function billsForMonth(dueItems, date) {
+  const lookingBack = isBeforeThisMonth(date);
   // A recurring bill's next occurrences, so stepping forward through the
   // months shows what they hold rather than an empty page. Kept out of
   // `inMonth` so the Total Due card still counts only what is actually stored
   // and actually owed — a projection is not a bill.
   const projections = projectionsForMonth(dueItems, date, 'dueDate');
   const inMonth = dueItems.filter((i) => i.paid !== true && isSameMonth(i.dueDate, date));
-  // A paid bill is not overdue and is not outstanding. Left in, every future
-  // month would carry this month's settled bill *and* project the next
-  // occurrence of it — the same money twice, which is precisely what this
-  // function's separation of stored from projected exists to prevent.
-  const overdueElsewhere = lookingBack
-    ? []
-    : dueItems.filter((i) => i.paid !== true && isOverdue(i.dueDate) && !isSameMonth(i.dueDate, date));
+  // A bill that has not been paid still has to be payable, so it rides forward
+  // into the month being viewed — but only while that month has no row of its
+  // own for it. Once the month holds the bill (a stored row, or the projection
+  // standing in for one), the rider and the month's own row are the same bill,
+  // and carrying both counted the same rent twice. The rider is deduped by
+  // bill-and-date as well, so a row that got written twice cannot double the
+  // month's total.
+  //
+  // It also has an end. It belongs to the month you are in and the one after —
+  // the two places a missed bill is still "now, and about to be missed again".
+  // With no end it rode into every month ahead without limit: a figure on a
+  // month years away, with nothing on that month to explain it, because the
+  // rider is not part of the month's own bills. That is the phantom. A past
+  // month is a third case: it is a record of what it held, and dragging the
+  // current overdue pile into it makes the history unreadable.
+  const now = new Date();
+  const monthsAhead = (date.getFullYear() - now.getFullYear()) * 12 + (date.getMonth() - now.getMonth());
+  const ridingWindow = !lookingBack && monthsAhead >= 0 && monthsAhead <= 1;
+  const representedThisMonth = new Set([...inMonth, ...projections].map(billSeriesKey));
+  const seenOverdue = new Set();
+  const overdueElsewhere = !ridingWindow ? [] : dueItems.filter((i) => {
+    if (i.paid === true || !isOverdue(i.dueDate) || isSameMonth(i.dueDate, date)) return false;
+    if (representedThisMonth.has(billSeriesKey(i))) return false;
+    const key = billSeriesKey(i) + '@' + String(i.dueDate || '').slice(0, 10);
+    if (seenOverdue.has(key)) return false;
+    seenOverdue.add(key);
+    return true;
+  });
   // Real and projected are handed back separately, never mixed into one list:
   // anything that sums what a month costs has to be able to tell them apart,
   // and a caller that can't is how a forecast ends up in a Total Due figure.
@@ -625,6 +1302,223 @@ function billsForMonth(dueItems, date) {
   const stored = [...inMonth, ...overdueElsewhere].sort(byDate);
   const items = [...stored, ...projections].sort(byDate);
   return { items, stored, projections, inMonth, overdueElsewhere };
+}
+
+// The projected rows for a month: one per recurring item that lands here and
+// isn't already stored here. The "isn't already stored" part is what stops a
+// bill showing twice — paying a recurring bill rolls its stored date forward
+// into the very month we're projecting, so without that check the paid bill
+// and its own projection would both appear.
+function projectionsForMonth(items, viewDate, dateKey) {
+  const rows = [];
+  // One projection per bill, not one per stored row. A monthly bill that has
+  // been made real month by month keeps a row for every one of those months, and
+  // each of those rows was being projected into the month on screen on its own:
+  // a year of rows put the same bill in the month twelve times over, and the
+  // Bills Due card, which sums the month, read twelve times the bill. The
+  // freshest row anchors the projection, so it lands on the bill's real day
+  // rather than being taken from some older occurrence.
+  const seen = new Set();
+  const anchors = [...items].sort((a, b) => String(b[dateKey] || '').localeCompare(String(a[dateKey] || '')));
+  for (const item of anchors) {
+    // A settled bill has no future occurrences. Paying one leaves a fresh row
+    // for the next date, and that row is what projects from then on — so
+    // projecting the settled bill as well put the same occurrence in the month
+    // twice, once real and once as a forecast.
+    if (item.paid === true) continue;
+    const frequency = frequencyOf(item);
+    if (!frequency) continue;
+    const stored = item[dateKey];
+    const occurrence = occurrenceInMonth(stored, frequency, viewDate, item.repeatUntil, dueDayValue(item));
+    if (!occurrence || occurrence === stored) continue;
+    // Another row already holds this date and this name, so the occurrence is
+    // real and not a forecast. Without this, a month whose bills have been
+    // materialised shows each of them twice — once as a row and once as the
+    // projection that row has now replaced.
+    if (items.some((r) => r !== item && r[dateKey] === occurrence && r.title === item.title)) continue;
+    const series = billSeriesKey(item);
+    if (seen.has(series)) continue;
+    seen.add(series);
+    rows.push({
+      ...item,
+      [dateKey]: occurrence,
+      id: null,
+      projected: true
+    });
+  }
+  return rows;
+}
+
+// Modal Forms
+/* How often a recurring item repeats
+   --------------------------------------------------------------------------
+   Stored as `frequency` on the item: 'monthly' or 'annually', or absent for a
+   one-off. The older boolean `recurring` is still read and written, because
+   every store on a device already holds rows that predate this and nothing
+   should be rewritten to suit it — `recurring: true` with no frequency means
+   monthly, which is exactly how those items behaved before.
+
+   What the frequency buys is the future. A bill is only ever stored with the
+   date it's *currently* due, so stepping forward through the months used to
+   show nothing at all after the current one. A recurring item now projects its
+   own next occurrences into the months on screen, up to a year ahead.
+   ------------------------------------------------------------------------ */
+
+const RECURRING_HORIZON_MONTHS = 12;
+
+// The third choice opens a calendar for the last month a bill should be rolled
+// into. "Cancelled my subscription in June" was a thing people had to remember
+// by hand, and a bill that keeps rolling after that is a bill that keeps
+// appearing in the forecast for a thing nobody pays any more.
+const FREQUENCY_CHOICES = [
+  { value: 'no', label: 'No' },
+  { value: 'monthly', label: 'Yes, monthly' },
+  { value: 'annually', label: 'Yes, annually' },
+  { value: 'until', label: 'Yes, until this date' }
+];
+
+// The period, asked again only for the choice that needs a second answer. "Yes,
+// until this date" says when a bill stops but not how often it runs in the
+// meantime, and assuming monthly would quietly turn a yearly bill into twelve
+// of them the first time someone gave it an end date. The wording repeats the
+// dropdown's own so it reads as the same choice.
+const REPEAT_PERIODS = [
+  { value: 'monthly', label: 'Every month' },
+  { value: 'annually', label: 'Every year' }
+];
+
+// The frequency a form answer really means. 'until' is not a frequency — it is
+// a bill with an end date, so it answers "how often" from the period beside the
+// calendar and "until when" from the date. Falling back to monthly there would
+// quietly turn a yearly bill into twelve of them the first time someone gave it
+// an end date.
+function frequencyFromChoice(choice, period) {
+  if (choice === 'no') return null;
+  if (choice === 'until') return period === 'annually' ? 'annually' : 'monthly';
+  return choice;
+}
+
+// Monthly is the fallback for anything that was already flagged recurring.
+function frequencyOf(item) {
+  if (item.frequency === 'monthly' || item.frequency === 'annually') return item.frequency;
+  return item.recurring === true ? 'monthly' : null;
+}
+
+function isRecurring(item) {
+  return frequencyOf(item) !== null;
+}
+
+// How the frequency badge reads. A bill told to stop says so, because
+// "Monthly" on its own promises it goes on for ever, and the row is the only
+// place the end date can be seen without reopening the form. The year is
+// short because the row has no room for a long one: "until 31 Jan 27".
+function repeatLabel(item) {
+  const base = item.frequency === 'annually' ? 'Yearly' : 'Monthly';
+  if (!item.repeatUntil) return base;
+  // The local day, not the UTC one: `new Date('2027-01-31')` is the 30th in
+  // the evening in any zone west of Greenwich, and the lozenge would read
+  // "until 30 Jan".
+  const date = parseDateOnly(item.repeatUntil);
+  if (!date) return base;
+  const day = date.getDate();
+  const month = date.toLocaleDateString('en-GB', { month: 'short' });
+  const year = String(date.getFullYear()).slice(-2);
+  return `${base} · until ${day} ${month} ${year}`;
+}
+
+// The ISO date this item would land on in the month on screen, or null if it
+// doesn't land there. Day-of-month is preserved and clamped to the target
+// month's length, so the 31st still means "the 31st" except where there isn't
+// one, exactly as the stored roll-forward already does.
+//
+// `day` is the day the bill is really on, which is not always the day of the
+// stored date: a bill due 31 January that has rolled through a February is
+// stored on the 28th, and rolling from *that* would keep it on the 28th for
+// good. The stored day is therefore passed in (see `dueDayValue`) and the
+// stored date is only used as the anchor for which month to step to.
+//
+// `until` is the last date a recurring bill should land on. Without it, a
+// cancelled subscription keeps appearing in every month ahead of it for the
+// rest of the forecast — a bill nobody pays any more. The date itself decides,
+// not just its month: choosing the 5th means a bill that lands on the 10th does
+// not come again, which is what picking a date on a calendar promises.
+//
+// The item's own month is exempt. That row is stored, real money that was
+// already promised, and muting it would make the bill look like it vanished
+// rather than stopped.
+function occurrenceInMonth(startDate, frequency, viewDate, until, day) {
+  if (!startDate || !frequency) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
+  if (!m) return null;
+  const startYear = Number(m[1]);
+  const startMonth = Number(m[2]);
+  const startDay = Number(m[3]);
+  const onDay = (day === undefined || day === null) ? startDay : (Number(day) || startDay);
+
+  const gap = (viewDate.getFullYear() - startYear) * 12 + (viewDate.getMonth() + 1 - startMonth);
+  if (gap < 0) return null;                                   // the month is behind the item
+  if (gap === 0) return startDate;                            // the item's own month
+  if (frequency === 'annually' && gap % 12 !== 0) return null;
+  if (gap > RECURRING_HORIZON_MONTHS) return null;            // nothing projected a year out
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth() + 1;
+  const lastDay = new Date(year, month, 0).getDate();
+  const occurrence = localISO(new Date(year, month - 1, Math.min(onDay, lastDay)));
+  if (until && occurrence > until) return null;               // the bill has stopped by then
+  return occurrence;
+}
+
+
+/* Income
+   --------------------------------------------------------------------------
+   The only thing that arrives rather than leaves. It exists so the forecast has
+   a real "in" side — until this, the cashflow chart's income column was
+   transfers between your own accounts, which is the same money counted twice.
+
+   Salary, sale and other are categories rather than different types of entry:
+   the form and the forecast treat all three identically, and the category is
+   there so "how much of this was a one-off sale" is answerable later without
+   another field.
+   -------------------------------------------------------------------------- */
+
+// db.js owns the list — one definition, read by the form here and by the
+// sanitiser there, so what a form offers and what an import accepts cannot
+// drift apart again.
+
+function incomeCategoryLabel(value) {
+  const found = INCOME_CATEGORIES.find(([v]) => v === value);
+  return found ? found[1] : 'Other';
+}
+
+async function addIncome(entry) {
+  return addItem('income', entry);
+}
+
+async function removeIncome(id) {
+  await deleteItem('income', id);
+}
+
+// The repeat toggle offers the opposite of what its label currently says, so
+// tapping it changes the label. Three things made that read as broken rather
+// than as a confirmation: the button grew from 89px to 142px and slid sideways
+// under the thumb; a full re-render four seconds later replaced every row on
+// the page; and the "you have tapped this once" flag lived on the button
+// The frequency button on an income row. It now says what the row is — Monthly
+// or One-off — and changes it on the tap. It used to need a second tap to
+// confirm, because the first tap swapped the label to "Stop repeating" and a
+// row could be flipped by a mis-tap that was never intended; the state is
+// trivially undone and a control that changes what it says before it does
+// anything read as broken.
+function incomeRepeatLabel(item) {
+  return item.frequency ? 'Monthly' : 'One-off';
+}
+
+async function toggleIncomeRecurring(id) {
+  const item = await getItem('income', id);
+  if (!item) return;
+  await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
+  renderPage();
 }
 
 function renderCategoryBreakdown(totals, grandTotal, tone) {
@@ -648,6 +1542,15 @@ function renderCategoryBreakdown(totals, grandTotal, tone) {
       }).join('')}
     </div>
   `;
+}
+
+// A CSS token read as a pixel number. Canvas text cannot take a var(), so the
+// token is resolved against the root font size — the same 16px the rem scale
+// assumes. `css` is the computed style of the document element.
+function remPx(css, token, fallback) {
+  const n = parseFloat(css.getPropertyValue(token));
+  if (!Number.isFinite(n)) return fallback;
+  return n * (parseFloat(css.fontSize) || 16);
 }
 
 function drawTrendChart(spendItems, focusDate) {
@@ -681,6 +1584,10 @@ function drawTrendChart(spendItems, focusDate) {
   // --bg-surface left a visible inset rectangle of a different shade.
   const surface = css.getPropertyValue('--bg-card').trim() || '#222228';
   const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  // Chart text follows the type scale like everything else. These were the last
+  // hardcoded sizes in the app, and the axis ran at 10px — below the --fs-2xs
+  // floor the scale sets.
+  const axisPx = remPx(css, '--fs-xs', 12);
 
   // The window ends on the month being looked at, so stepping back shows the
   // six months that led to it, and the month in question is marked.
@@ -690,16 +1597,20 @@ function drawTrendChart(spendItems, focusDate) {
   for (let i = 5; i >= 0; i--) {
     const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
     const inMonth = spendItems.filter((item) => isSameMonth(item.date, d));
-    const sum = (list) => list.reduce((n, item) => n + item.amount, 0);
-    const recurring = sum(inMonth.filter((item) => item.recurring));
-    const oneOff = sum(inMonth.filter((item) => !item.recurring));
-    months.push({
-      label: d.toLocaleDateString('en-GB', { month: 'short' }),
-      recurring,
-      oneOff,
-      total: recurring + oneOff,
-      selected: focusDate ? isSameMonth(d, focusDate) : false
-    });
+  const sum = (list) => list.reduce((n, item) => n + item.amount, 0);
+  const spent = sum(inMonth.filter((item) => item.type === 'spend'));
+  const bills = sum(inMonth.filter((item) => item.type === 'bill'));
+  const savings = sum(inMonth.filter((item) => item.type === 'savings'));
+  const left = sum(inMonth.filter((item) => item.type === 'left'));
+  months.push({
+    label: d.toLocaleDateString('en-GB', { month: 'short' }),
+    spent,
+    bills,
+    savings,
+    left,
+    total: spent + bills + savings + left,
+    selected: focusDate ? isSameMonth(d, focusDate) : false
+  });
   }
 
   const max = Math.max(...months.map(m => m.total), 100);
@@ -722,22 +1633,28 @@ function drawTrendChart(spendItems, focusDate) {
 
     // One-off first from the baseline, recurring stacked on top of it — a
     // month's bar reads as "how much of this repeats every month".
-    const oneOffHeight = max > 0 ? (m.oneOff / max) * (h - 40) : 0;
-    const recurringHeight = max > 0 ? (m.recurring / max) * (h - 40) : 0;
-    ctx.fillStyle = accent;
-    if (oneOffHeight > 0) ctx.fillRect(x, baseline - oneOffHeight, barWidth, oneOffHeight);
-    ctx.fillStyle = danger;
-    if (recurringHeight > 0) ctx.fillRect(x, baseline - oneOffHeight - recurringHeight, barWidth, recurringHeight);
-
-    // A sliver of a tiny total still has to be visible, or a month with only
-    // a few pounds in it reads as no month at all.
-    if (m.total > 0 && oneOffHeight + recurringHeight < 2) {
+    const spentHeight = max > 0 ? (m.spent / max) * (h - 40) : 0;
+    const billsHeight = max > 0 ? (m.bills / max) * (h - 40) : 0;
+    const savingsHeight = max > 0 ? (m.savings / max) * (h - 40) : 0;
+    const leftHeight = max > 0 ? (m.left / max) * (h - 40) : 0;
+    let cursor = baseline;
+    const drawSeg = (color, segHeight) => {
+      if (segHeight <= 0) return;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, cursor - segHeight, barWidth, segHeight);
+      cursor -= segHeight;
+    };
+    drawSeg(accent, spentHeight);
+    drawSeg(danger, billsHeight);
+    drawSeg('#22c55e', savingsHeight);
+    drawSeg('#94a3b8', leftHeight);
+    if (m.total > 0 && spentHeight + billsHeight + savingsHeight + leftHeight < 2) {
       ctx.fillStyle = accent;
       ctx.fillRect(x, baseline - 2, barWidth, 2);
     }
 
     ctx.fillStyle = m.selected ? textPrimary : muted;
-    ctx.font = `12px ${bodyFont}`;
+    ctx.font = `${axisPx}px ${bodyFont}`;
     ctx.textAlign = 'center';
     // Keep labels inside the canvas even when the window is narrow.
     const clamp = (cx, text) => {
@@ -748,7 +1665,8 @@ function drawTrendChart(spendItems, focusDate) {
     // Zero months show nothing useful — five stacked £0.00 labels used to
     // crowd the baseline (and overlap outright in narrow windows).
     if (m.total > 0) {
-      ctx.fillText(currency(m.total), clamp(x + barWidth / 2, currency(m.total)), y - 10);
+      const totalLabel = currency(Math.round(m.total)).replace(/\.\d{2}\b/, '');
+      ctx.fillText(totalLabel, clamp(x + barWidth / 2, totalLabel), y - 10);
     }
   });
 }
@@ -789,6 +1707,439 @@ const GOAL_TICK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" s
 // Paperclip shown on rows that have a stored receipt.
 const CLIP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>';
 
+// The toast a sync result deserves, in the words of the route it came from.
+// "Took data from your server" on a route whose other end is a folder in
+// someone's drive is wrong by a mile, and there were two copies of this ladder
+// saying different things: the Settings card got it right, the Dashboard arrow
+// did not. One copy, in one place.
+function syncResultMessage(res) {
+  const transport = SYNC_TRANSPORTS[syncSettings().transport];
+  const byFolder = !!(transport && transport.needsFolder);
+  const byFile = !!(transport && transport.needsFile);
+  // A pass that is waiting has not failed. The drive is still uploading, and
+  // "waiting" is the answer it has to give, which is the sentence that tells the
+  // reader what is actually happening rather than an error about a write.
+  if (res && res.did === 'waiting') return 'Waiting for the drive to finish uploading';
+  if (!res.ok) return res.error;
+  if (res.did === 'held') return 'Changes made here stay on this device';
+  if (res.did === 'pulled') return byFolder ? 'Took the copy from the folder' : (byFile ? 'Took the copy from the file' : 'Took data from your server');
+  if (res.did === 'pushed') return byFolder ? 'Put your data in the folder' : (byFile ? 'Put your data in the file' : 'Sent your data');
+  if (res.did === 'created') return byFolder ? 'Folder set up' : (byFile ? 'File set up' : 'Server set up');
+  // Nothing to do, with the drive's own timestamp beside it. Without the time,
+  // "Already up to date" reads as a fault when the person knows another device
+  // has just changed something: it is the same sentence whether the copies
+  // really match or the drive has not delivered the newer one yet. With it, the
+  // old copy is visible, and so is whose turn it is to catch up.
+  if (res.did === 'none' && byFile && res.fileAt) {
+    const when = syncFileClock(res.fileAt);
+    if (when) return 'Already up to date (file changed ' + when + ')';
+  }
+  return 'Already up to date';
+}
+
+// The drive's modified time as an age, not a clock reading. Someone deciding
+// whether the file is stale already knows what time it is; the gap is the number
+// that answers the question, and "2 hrs ago" needs no arithmetic.
+function syncFileClock(ms) {
+  const at = Number(ms);
+  if (!Number.isFinite(at) || at <= 0) return '';
+  const when = new Date(at);
+  if (!Number.isFinite(when.getTime())) return '';
+  const minutes = Math.floor((Date.now() - at) / 60000);
+  // A small negative is a clock that is a little ahead, not a future file.
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return minutes + (minutes === 1 ? ' min ago' : ' mins ago');
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return hours + (hours === 1 ? ' hr ago' : ' hrs ago');
+  return when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+// The dashboard's refresh button: sync if there is somewhere to sync to, then
+// re-read either way.
+//
+// With no sync configured it is still worth a press — it re-reads the database,
+// which is the thing you want after an import — so it works either way and just
+// says which of the two it did.
+async function dashboardSyncNow(btn) {
+  cancelAutoSync();
+  if (btn) btn.classList.add('is-busy');
+  let message = '';
+  try {
+    if (syncConfigured()) {
+      message = syncResultMessage(await syncNow());
+    }
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  if (btn) btn.classList.remove('is-busy');
+  await renderPage();
+  if (message) showToast(message);
+}
+
+// Whether there is somewhere to sync to, whichever question the route asks. It
+// used to check for an address only, so a chosen folder read as "not set up":
+// the Dashboard arrow went quiet, its tooltip said to go and configure sync,
+// and pressing it re-read the page instead of syncing. The Settings card always
+// knew better; this is the same answer.
+function syncConfigured() {
+  const s = syncSettings();
+  return syncRouteReady(SYNC_TRANSPORTS[s.transport], s);
+}
+
+// The Sync card.
+//
+// Every transport is listed, whether or not it is built yet, because the choice
+// of where the file lives is the decision and the list is how it's made. What
+// isn't built says so rather than being hidden: a sync option that silently
+// does nothing is worse than one that admits it isn't there yet.
+//
+// Why the two folder routes are missing when they are. A browser without the
+// File System Access API cannot read a folder or write a chosen file, and the
+// card used to say nothing at all about it: the user saw Network and reasonably
+// concluded the desktop had no setup. Brave ships the API switched off, which
+// is the case that made this necessary, and it can be switched back on.
+function syncBrowserPickerHint() {
+  if (syncFolderHere()) return '';
+  const cap = window.Capacitor;
+  if (cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform()) return '';
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return 'The folder and file pickers need an https:// address or localhost. This page is open another way, so only Network can be set up here.';
+  }
+  const agent = String((navigator && navigator.userAgent) || '');
+  if (/Brave/i.test(agent)) {
+    return 'Brave hides the folder and file pickers. Turn on brave://flags/#file-system-access-api, restart Brave, then choose Syncthing or Cloud here.';
+  }
+  return 'This browser does not offer the folder and file pickers, so only Network can be set up here. Chrome, Edge and Chromium do.';
+}
+
+// The snapshot file itself is the same whatever the transport, so switching is a
+// matter of pointing at a different address — which is the honest answer to
+// "how easy is it to change my mind later".
+function syncSettingsHtml() {
+  const s = syncSettings();
+  // Only the routes this build can actually do. A phone has the folder plugin;
+  // a desktop Chrome or Edge has the File System Access API; anything else is
+  // offered the Network route and not the two that would not work. The
+  // alternative was offering them and then explaining, in the card, why they do
+  // not, which is how this card ended up unreadable in the first place.
+  const keys = Object.keys(SYNC_TRANSPORTS).filter((key) => {
+    const t = SYNC_TRANSPORTS[key];
+    return t.available && (!(t.needsFolder || t.needsFile) || syncFolderHere());
+  });
+  const browserHint = syncBrowserPickerHint();
+  // A setting can name a route this build does not offer — the same storage in a
+  // browser, a phone whose app was replaced by the web build. Drawing the card
+  // for a route the dropdown does not have would be a panel about nothing, so
+  // the first route that is on offer stands in until the dropdown is touched.
+  const key = keys.indexOf(s.transport) >= 0 ? s.transport : keys[0];
+  const active = SYNC_TRANSPORTS[key];
+  const options = keys.map((one) => {
+    const t = SYNC_TRANSPORTS[one];
+    return `<option value="${one}"${one === key ? ' selected' : ''}>${escapeHTML(t.label)}</option>`;
+  }).join('');
+
+  const hasBackup = !!syncBackup();
+  // The button's own state is the status. It used to be a third row saying
+  // "Ready" or "No address set" in words, which is one more line to read and one
+  // more thing to keep in step with reality — a control that is enabled when it
+  // will work and disabled when it will not already says both of those.
+  const ready = syncRouteReady(active, s);
+  const byFolder = !!(active && active.needsFolder);
+  const byFile = !!(active && active.needsFile);
+
+  // One setting and one button, and that is the whole of it.
+  //
+  // This card was four rows — where, address, status, replaced copy — and then a
+  // paragraph underneath explaining that the data goes in one file and how to
+  // run the host. Every one of those was a line on a phone screen spent saying
+  // something the two controls already said. What was asked for was the simplest
+  // version that works: pick where, answer the one question that route asks —
+  // an address, or a folder — and press Sync now.
+  //
+  // The button is no longer the only way a sync happens. A change, a return to
+  // the app and a 15-second poll all run one on their own; the line under the
+  // button says so in one sentence. The button stays because it is also how you
+  // ask "now, and tell me what happened".
+  //
+  // The steps are the exception, and they are folded away rather than deleted.
+  // They used to open themselves on a route that had not been answered yet, on
+  // the argument that they are how that question gets answered. The user asked
+  // for them closed on all four routes instead: a card that has read them once
+  // and come back later is the common case, and homework on every visit is what
+  // the whole simplification was undoing.
+  //
+  // The address field re-renders the card on change, for a smaller version of
+  // the same thing: the button's enabled state is worked out when the card is
+  // drawn, so without it the first thing a new user does — paste the address the
+  // host printed — leaves them looking at a Sync now that will not press. The
+  // folder picker re-renders for the same reason, and does it itself.
+  return `
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Sync</div>
+      </div>
+      <div class="setting-control">
+        <select class="form-input form-input--mini form-input--sync" id="sync-transport"
+                aria-label="Where to sync to"
+                onchange="setSyncSettings({transport: this.value}); renderPage();">${options}</select>
+      </div>
+    </div>
+    ${browserHint ? `<div class="setting-hint" id="sync-browser-hint" style="padding: 0 20px; margin-top: 8px;">${escapeHTML(browserHint)}</div>` : ''}
+    ${byFolder ? `
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label" id="sync-folder-label">Folder</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" id="sync-folder"
+                onclick="chooseSyncFolderFromSettings(this)">${s.folderUri ? escapeHTML(shortFolderName(s.folderName)) : 'Choose folder'}</button>
+      </div>
+    </div>` : byFile ? `
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label" id="sync-file-label">File</div>
+        ${s.fileUri ? `<div class="setting-hint" style="margin-top: 2px;">${escapeHTML(shortFolderName(s.fileName))}</div>` : ''}
+        ${s.fileUri && s.fileReadOnly ? `<div class="setting-hint" style="margin-top: 2px;">This drive opened the file for reading only, so changes made here stay here. Updates from the other devices still arrive. Cloud needs a drive app that can write to an existing file; the setup steps name one that cannot.</div>` : ''}
+      </div>
+      <div class="setting-control" style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;">
+        <button class="btn btn-ghost" id="sync-file"
+                onclick="chooseSyncFileFromSettings(this, false)">Choose file</button>
+        <button class="btn btn-ghost" id="sync-file-new"
+                onclick="chooseSyncFileFromSettings(this, true)">Save new copy</button>
+      </div>
+    </div>` : `
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label">Wi-Fi</div>
+      </div>
+      <div class="setting-control setting-control--wide">
+        <input class="form-input" id="sync-url-lan" type="url" inputmode="url"
+               placeholder="e.g. http://192.168.1.10:8787/sorted-snapshot.json"
+               value="${escapeHTML(s.urlLan)}"
+               style="text-align: left;"
+               ${active && active.available ? '' : 'disabled'}
+               onchange="setSyncAddress('urlLan', this.value); renderPage();">
+      </div>
+    </div>
+    <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 10px; padding: 0;">
+      <div class="setting-text">
+        <div class="setting-label">Tailscale</div>
+      </div>
+      <div class="setting-control setting-control--wide">
+        <input class="form-input" id="sync-url-tailscale" type="url" inputmode="url"
+               placeholder="e.g. http://100.101.102.103:8787/sorted-snapshot.json"
+               value="${escapeHTML(s.urlTailscale)}"
+               style="text-align: left;"
+               ${active && active.available ? '' : 'disabled'}
+               onchange="setSyncAddress('urlTailscale', this.value); renderPage();">
+      </div>
+    </div>
+    <div class="setting-hint" style="padding: 0 20px;">Sorted tries both addresses and uses whichever answers first.</div>`}
+    <button class="btn btn-primary" onclick="syncFromSettings(this)"
+            style="width: 100%; margin-top: 10px;"
+            ${ready ? '' : 'disabled'}>Sync now</button>
+    ${ready ? '<div class="setting-hint" style="padding: 0 20px;">Sorted also syncs on its own when the data changes, when you return to the app and every 15 seconds while it is open.</div>' : ''}
+    <details class="setup-steps">
+      <summary class="setup-steps-head">How to set this up</summary>
+      <ol class="setup-steps-list">
+        ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
+      </ol>
+      ${SYNC_SETUP_NOTES[key] ? `<div class="setup-note">${SYNC_SETUP_NOTES[key]}</div>` : ''}
+    </details>
+    ${hasBackup ? `
+    <div class="setting-row setting-row--inline setting-row--tight">
+      <div class="setting-text">
+        <div class="setting-label">Replaced copy</div>
+      </div>
+      <div class="setting-control">
+        <button class="btn btn-ghost" onclick="restoreSyncBackupFromSettings(this)">Restore</button>
+      </div>
+    </div>` : ''}`;
+}
+
+// A folder's own name can be a paragraph — "My Drive / Documents / Accounts" and
+// so on — and the button it sits in is a third of a phone's width. Cut to
+// something that still identifies it; the picker is one tap away and says the
+// rest.
+//
+// The name goes in the button rather than in the row's label, which is where a
+// value usually goes, because the obvious folder name for this file is "Sorted"
+// — and a row whose left-hand text reads "Sorted" is a row about the app, not
+// about a folder in someone's drive.
+function shortFolderName(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return 'Chosen folder';
+  return clean.length > 22 ? clean.slice(0, 21) + '…' : clean;
+}
+
+// One of the two Network addresses. Kept in its own field rather than a single
+// `url`, because they are two ways to the same host and either can be absent.
+function setSyncAddress(field, value) {
+  const patch = {};
+  patch[field] = String(value || '').trim();
+  setSyncSettings(patch);
+}
+
+// Choosing the folder is the entire setup for the two folder routes: one tap,
+// the system picker, and there is nothing to type afterwards.
+//
+// It does not sync on the way out. A pull replaces what is on the phone, and
+// doing that off the back of a tap labelled "Choose folder" would be a surprise;
+// the button underneath is where that decision belongs.
+async function chooseSyncFolderFromSettings(btn) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) {
+    // Only reachable if the browser build is somehow showing this row, but a
+    // dead button that says nothing is worse than a sentence.
+    showToast('Choosing a folder needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Choosing…'; }
+  let message = null;
+  try {
+    const res = await plugin.pick();
+    // Backing out of the picker is a decision, not a failure.
+    if (res && res.uri) {
+      const previous = syncSettings().folderUri;
+      if (previous && previous !== res.uri) {
+        // Android holds a limited number of these grants per app; letting go of
+        // the last folder is what keeps the next choice possible.
+        try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
+      }
+      setSyncSettings({ folderUri: res.uri, folderName: res.name || '' });
+      message = 'Folder set. Tap Sync now to use it.';
+    }
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+}
+
+// The Cloud route's one setting, as a document rather than a folder.
+//
+// Two buttons, because a first device has no file to open: it creates one with
+// the system's Save-to list. Every other device opens that same file. Both go
+// through the system picker, which is the only thing that can see Proton Drive
+// and the rest; a folder tree cannot, because not every provider publishes one.
+async function chooseSyncFileFromSettings(btn, create) {
+  const plugin = syncFolderPlugin();
+  if (!plugin) {
+    showToast('Choosing a file needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = create ? 'Saving…' : 'Choosing…'; }
+  let message = null;
+  try {
+    const res = create ? await plugin.createFile() : await plugin.pickFile();
+    if (res && res.uri) {
+      const previous = syncSettings().fileUri;
+      if (previous && previous !== res.uri) {
+        try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
+      }
+      // A document the system has just created is empty, and on Proton it also
+      // cannot be read until its first upload finishes. Recording that lets the
+      // first sync write without reading, which is the difference between a
+      // working Cloud route and "Cannot get drive link with upload id".
+      setSyncSettings({
+        fileUri: res.uri,
+        fileName: res.name || '',
+        fileNew: !!create,
+        fileOwned: !!create,
+        // A different document starts with a clean slate. A clock, a write
+        // time, or a read-only verdict from the file this one replaced would
+        // make the first read of the new file look like something that had
+        // already been waiting.
+        filePushedAt: '',
+        filePendingSince: '',
+        fileReadOnly: ''
+      });
+      message = create ? 'File set. Syncing now.' : 'File set. Tap Sync now to use it.';
+    }
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+  // Choosing a file with nothing in it is the one case where the next pass has
+  // to run without being asked: there is no remote to compare, and the whole
+  // point of Save new copy was to put the data there.
+  if (create && syncSettings().fileNew) scheduleAutoSync(1500);
+}
+
+// Copying one of the commands out of the setup steps.
+//
+// Two of them are long enough that typing either from a phone screen is the part
+// people get wrong, so each has a button. The clipboard API needs a secure
+// context and a page that is allowed to use it; where that is missing — and in a
+// WebView it sometimes is — the command is selected instead, which on a desktop
+// is one keystroke from the same thing and on a phone at least shows what to
+// copy. Either way the button says which happened, because a button that says
+// "Copy" and does nothing is how someone ends up pasting their last clipboard.
+async function copySetupCommand(btn) {
+  const code = btn && btn.parentElement ? btn.parentElement.querySelector('code') : null;
+  const command = code ? code.textContent.trim() : '';
+  if (!command) return;
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(command);
+      copied = true;
+    }
+  } catch (err) {
+    copied = false;
+  }
+  if (!copied && code) {
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } catch (err) {
+      // Nothing to fall back to either; the button says so below.
+    }
+  }
+  const was = btn.textContent;
+  btn.textContent = copied ? 'Copied' : 'Select it';
+  setTimeout(() => { btn.textContent = was; }, 2000);
+}
+
+async function syncFromSettings(btn) {
+  cancelAutoSync();
+  if (btn) { btn.disabled = true; btn.textContent = 'Syncing…'; }
+  let message;
+  try {
+    message = syncResultMessage(await syncNow());
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  // Longer than the default, and longer than the other cards': a sync that
+  // cannot reach the host says which of the four things went wrong and names the
+  // address it tried, which is a sentence rather than a word.
+  if (message) showToast(message, 8000);
+}
+
+async function restoreSyncBackupFromSettings(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Restoring…'; }
+  let message;
+  try {
+    const res = await restoreSyncBackup();
+    message = res.ok ? 'Restored the copy that was replaced' : res.error;
+  } catch (err) {
+    message = String((err && err.message) || err);
+  }
+  await renderPage();
+  if (message) showToast(message, 6000);
+}
+
+// The refresh arrow on the dashboard. Spins while a sync is running, so the
+// button that can take a second is visibly the one doing it.
+const REFRESH_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"'
+  + ' stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+  + '<path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 3 21 9 15 9"></polyline></svg>';
+
 // How a bill reads at a glance. Only counted down when the number is worth
 // acting on: a raw "522 days" for a bill due in 2028 told the user nothing
 // and looked like the app was incrementing something on its own.
@@ -807,17 +2158,31 @@ function dueCountdown(dueDate) {
   return `<span style="color: var(--text-secondary)">In ${days} days</span>`;
 }
 
-// The line under a bill's amount: what the value is waiting for. A settled bill
-// says when it was paid; an outstanding one says how long it has left. One
-// line, one meaning, in the same place either way.
+// What a bill is waiting for, in the fewest words that still say it.
+//
+// These ride on the same line as the due date, and the left of a row is about
+// 164px once the amount and the tick have taken theirs. Every word here is one
+// that line has to fit: "Due today" said "due" twice with the date beside it,
+// and "overdue" is "late" — the row is already tinted red when it is.
 function billTiming(item, isPaid) {
   if (isPaid) {
     // A settled bill is dated by its due date; the old Spend copy of a payment
     // had a date of its own. Both are read, because anyone's existing paid rows
     // are the Spend kind and anything paid from 2.8.3 is the other.
-    return `Paid on ${formatDate(item.date || item.dueDate)}`;
+    //
+    // No year, because it shares a line with the due date that already carries
+    // one. A bill paid a year late reads oddly; a bill paid on time does not,
+    // and the line has no room for both.
+    return `Paid ${formatDate(item.date || item.dueDate).replace(/,?\s*\d{4}$/, '')}`;
   }
-  return dueCountdown(item.dueDate);
+  const days = daysUntil(item.dueDate);
+  if (days < 0) {
+    const n = Math.abs(days);
+    return `<span style="color: var(--danger)">${n} day${n === 1 ? '' : 's'} late</span>`;
+  }
+  if (days === 0) return '<span style="color: var(--warning)">Today</span>';
+  if (days <= 7) return `<span style="color: var(--warning)">${days} day${days === 1 ? '' : 's'}</span>`;
+  return `<span style="color: var(--text-secondary)">${days} days</span>`;
 }
 
 // The paperclip appears only when there is a picture. It used to sit on every
@@ -836,8 +2201,12 @@ function receiptChip(item, type) {
 // Spend Page
 async function renderSpend(container) {
   const token = renderToken;
-  
-  const items = await getAll('spend');
+
+  // Everything recorded here, unticked rows included: the Spent page is where a
+  // pending row gets ticked, so it is the one place a pending row must not be
+  // hidden. Settled bill payments are the exception — those live on Bills,
+  // under Paid, and showing them here too would count the same rent twice.
+  const items = (await getAll('spend')).filter((i) => !isSettledBillPayment(i));
   items.sort((a, b) => new Date(b.date) - new Date(a.date));
   
   const inMonth = items.filter(i => isSameMonth(i.date, viewedDate));
@@ -862,7 +2231,7 @@ async function renderSpend(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       ${monthNavHtml('spend', viewedDate)}
       <span class="toolbar-add">
         ${infoTipButton('spend-tip', 'Record your day-to-day or one-off spending here, then tick them off once paid. Bills that repeat every month belong on the Bills tab.')}
@@ -871,12 +2240,22 @@ async function renderSpend(container) {
 
     </div>
     
-    <div class="stat-card" style="margin-bottom: 20px;">
+    <div class="stat-card stat-card--page-total" style="margin-bottom: 20px;">
       <div class="stat-card-header">
-        <span class="stat-card-title">Monthly Total</span>
-        <span class="stat-card-sub">Year: ${currency(yearTotal)}</span>
+        <span class="stat-card-title">Monthly total</span>
       </div>
       <div class="stat-card-value">${currency(monthTotal)}</div>
+      <!-- Under the amount, not beside the title. Both cards put their one line
+           of explanation here — "Year: …" and "Monthly total = …" — and having
+           the two cards of the same app disagree about where that line goes is
+           what makes the top of the screen jump as you move between tabs. Same
+           shape, same place.
+
+           The Bills card puts its count beside the amount instead (see
+           .stat-card-row) and its status up on the header line. The two cards
+           still measure the same, because the headers are levelled as well (see
+           .stat-card--page-total). -->
+      <div class="stat-card-sub">Year: ${currency(yearTotal)}</div>
     </div>
     
     <div class="filter-bar" aria-label="Status">
@@ -896,8 +2275,11 @@ async function renderSpend(container) {
 
 function applySpendFilter(items) {
   const mine = items.filter(matchesPersonFilter);
-  if (spendFilter === 'confirmed') return mine.filter(i => i.confirmed === true);
-  if (spendFilter === 'pending') return mine.filter(i => !i.confirmed);
+  // The same rule the balance uses: a row with no `confirmed` field at all
+  // predates the tick and reads as ticked, so it lands under Confirmed and not
+  // under Pending.
+  if (spendFilter === 'confirmed') return mine.filter(i => i.confirmed !== false);
+  if (spendFilter === 'pending') return mine.filter(i => i.confirmed === false);
   if (spendFilter === 'recurring') return mine.filter(i => !!i.recurring);
   return mine;
 }
@@ -920,7 +2302,7 @@ function renderSpendItems(items, total) {
     return `
       <div class="empty-state">
         <div class="empty-state-text">No spend recorded for this month</div>
-        <button class="btn btn-primary" onclick="openAddModal('spend')">Add First Item</button>
+        <button class="btn btn-primary" onclick="openAddModal('spend')">Add first item</button>
       </div>
     `;
   }
@@ -939,7 +2321,7 @@ function renderSpendItems(items, total) {
             <div class="item-meta">${formatDate(item.date)}</div>
             <div class="item-meta item-meta--sub">
               ${escapeHTML(item.category)}
-              ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
+              ${isRecurring(item) ? `<span class="badge badge-recurring">${repeatLabel(item)}</span>` : ''}
               ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
             </div>
           </div>
@@ -1009,6 +2391,16 @@ function monthNavHtml(which, date) {
 // rolling or deleting the bill, so those months have no paid bill here at all.
 // They are still read from Spend as before, which is the only way a person's
 // existing history stays visible after the model changed underneath it.
+// What the top-right of a Bills card says about the month. "3 overdue" when
+// there are some, "Nothing overdue" when the month's bills are still ahead,
+// and "Nothing due this month" for a month with no bills in it at all — which
+// is a different statement from "nothing is late", and conflating them made an
+// empty month read as a clean one.
+function overdueStatus(overdue, upcoming) {
+  if (overdue.length > 0) return overdue.length + ' overdue';
+  return upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month';
+}
+
 function paidBillsForMonth(dueItems, spendItems, date) {
   const settled = dueItems
     .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date));
@@ -1016,6 +2408,25 @@ function paidBillsForMonth(dueItems, spendItems, date) {
     .filter((i) => i.paid === true && i.dueDate && isSameMonth(i.dueDate, date));
   return [...settled, ...legacy]
     .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
+}
+
+// One row per bill per month. A recurring bill can legitimately hold rows in
+// several months at once — one overdue from last month and one for this one —
+// but never two in the same month, and a month that somehow holds the same bill
+// twice is a month where somebody can pay for something they do not owe.
+function dedupeBills(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    // The filter hands back { item, paid }, so the bill is one level in.
+    const bill = row && row.item ? row.item : row;
+    // One bill per month, not one bill per date. A bill due on the 31st clamps
+    // to the 30th in a shorter month, so the same bill can hold two rows in one
+    // month with two different dates — and both would be drawn.
+    const key = `${bill.title}@${String(bill.dueDate || '').slice(0, 7)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function applyDueFilter(outstanding, paid) {
@@ -1033,7 +2444,12 @@ function applyDueFilter(outstanding, paid) {
       .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
       .map((i) => ({ item: i, paid: minePaid.includes(i) }));
   }
-  // All: everything the month held, unpaid first, both in date order.
+  // All: everything the month held, in date order. It used to be unpaid first
+  // and then the paid ones, which made the list jump: paying a bill moved it
+  // from the top group to the bottom, and the following month it rolled back to
+  // the top, so a recurring bill changed place every month — the one thing a
+  // list of fixed commitments must not do if you scan it by eye. Paid state is
+  // already on the row: it says it once, and in green.
   return [
     ...mine.map((i) => ({ item: i, paid: false })),
     ...minePaid.map((i) => ({ item: i, paid: true }))
@@ -1056,20 +2472,30 @@ const BILL_FILTERS = [
 async function renderDue(container) {
   const token = renderToken;
   
-  const [all, spendItems] = await Promise.all([getAll('due'), getAll('spend')]);
+  // A future month is made real before it is read, so its bills are rows you
+  // can tap, edit and pay — and so Total Due counts them like any other month.
+  const all = await materialiseBillsForMonth(dueViewedDate);
+  const [spendItems] = await Promise.all([getAll('spend')]);
   all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
   
   // The month view exists so a recurring bill's *next* occurrences are
   // visible — a bill is only ever stored with the date it's currently due,
   // so without stepping forward there was no way to see what the following
   // few months look like.
-  const { stored: outstanding, inMonth, overdueElsewhere, projections } = billsForMonth(all, dueViewedDate);
+  const read = billsForMonth(all, dueViewedDate);
+  const { stored: outstanding, inMonth, overdueElsewhere, projections } = read;
   const paid = paidBillsForMonth(all, spendItems, dueViewedDate);
   // Only the stored rows go through the filters; a forecast isn't a bill you
   // can have confirmed or pay, and letting a status chip hide it would make a
   // month look emptier than it is.
-  const rows = applyDueFilter(outstanding, paid)
-    .concat(projections.map((item) => ({ item, paid: false, projected: true })));
+  //
+  // And a forecast is not drawn at all. Materialising above makes every bill in
+  // the month a real row, so a projection here would mean one that could not be
+  // made real — and drawing it as an inert card you cannot tap, edit or pay is
+  // the fault this page kept being reported for. It is dropped, and deduped:
+  // a month that somehow holds the same bill twice shows it once, because a
+  // duplicate is how someone pays for something they do not owe.
+  const rows = dedupeBills(applyDueFilter(outstanding, paid));
   
   // What's actually owed: the real stored rows only. Adding a forecast to this
   // figure would report money that hasn't been billed yet as though it already
@@ -1077,10 +2503,19 @@ async function renderDue(container) {
   const total = outstanding.reduce((sum, i) => sum + i.amount, 0);
   const overdue = outstanding.filter(i => isOverdue(i.dueDate));
   const upcoming = inMonth.length - inMonth.filter(i => isOverdue(i.dueDate)).length;
+  // Every bill landing in the month on screen, settled or not. Total Due above
+  // answers "what do I still owe"; this answers "what did this month cost me",
+  // which is the question a settled bill used to make unanswerable — paying
+  // everything made the page read £0.00 as though the month had been free. The
+  // Dashboard's Total Money card uses the same figure for its Bills segment, so
+  // the two agree.
+  const billsThisMonthTotal = all
+    .filter((i) => isSameMonth(i.dueDate, dueViewedDate))
+    .reduce((sum, i) => sum + i.amount, 0);
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       ${monthNavHtml('due', dueViewedDate)}
       <span class="toolbar-add">
         ${infoTipButton('bill-tip', 'Record your recurring bills here, then tick them off once paid. Anything one-off and irregular belongs on the Spend tab.')}
@@ -1088,15 +2523,22 @@ async function renderDue(container) {
       </span>
     </div>
     
-    <div class="stat-card" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
+    <div class="stat-card stat-card--page-total" style="margin-bottom: 20px; ${overdue.length > 0 ? 'border-color: var(--danger);' : ''}">
+      <!-- The status is the first thing read, so it goes top-right beside the
+           card's own name; the count follows it, beside the amount. Both in the
+           header would cost a line and make this card taller than the Spent one
+           — they are the same card in the same place on their pages, and a
+           difference between them moves everything below it. See .stat-card-row
+           and .stat-card--page-total. -->
       <div class="stat-card-header">
-        <span class="stat-card-title">Total Due</span>
+        <span class="stat-card-title">Total due</span>
+        <span class="stat-card-sub">${overdueStatus(overdue, upcoming)}</span>
+      </div>
+      <div class="stat-card-row">
+        <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
         <span class="stat-card-sub">${outstanding.length} unpaid</span>
       </div>
-      <div class="stat-card-value" style="color: ${overdue.length > 0 ? 'var(--danger)' : 'var(--text-primary)'}">${currency(total)}</div>
-      ${overdue.length > 0
-        ? `<div class="stat-card-sub" style="color: var(--danger);">${overdue.length} overdue</div>`
-        : `<div class="stat-card-sub">${upcoming > 0 ? 'Nothing overdue' : 'Nothing due this month'}</div>`}
+      <div class="stat-card-sub">Monthly total = ${currency(billsThisMonthTotal)}</div>
       ${overdueElsewhere.length > 0
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
     </div>
@@ -1122,7 +2564,7 @@ async function renderDue(container) {
           }</div>
           ${all.length > 0 || paid.length > 0
             ? '<p class="setting-hint" style="margin-bottom: 20px;">Use ◀ ▶ to see other months</p>'
-            : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add First Bill</button>'}
+            : '<button class="btn btn-primary" onclick="openAddModal(\'due\')">Add first bill</button>'}
         </div>
       ` : rows.map(({ item, paid: isPaid, projected }) => {
         const days = daysUntil(item.dueDate);
@@ -1136,10 +2578,10 @@ async function renderDue(container) {
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
-                <div class="item-meta">Due ${formatDate(item.dueDate)}</div>
+                <div class="item-meta">${formatDate(item.dueDate)} <span class="item-timing${isPaid ? ' item-timing--paid' : ''}">· ${billTiming(item, isPaid)}</span></div>
                 <div class="item-meta item-meta--sub">
                   ${escapeHTML(item.category)}
-                  ${isRecurring(item) ? `<span class="badge badge-recurring">${item.frequency === 'annually' ? 'Yearly' : 'Monthly'}</span>` : ''}
+                  ${isRecurring(item) ? `<span class="badge badge-recurring">${repeatLabel(item)}</span>` : ''}
                   ${projected ? '<span class="badge badge-projected">Projected</span>' : ''}
                 </div>
               </div>
@@ -1147,7 +2589,6 @@ async function renderDue(container) {
             <div class="row-end">
               <div class="value-cell">
                 ${currency(item.amount)}
-                <div class="item-sub${isPaid ? ' item-sub--paid' : ''}">${billTiming(item, isPaid)}</div>
               </div>
               <div class="row-actions">
                 ${editable ? receiptChip(item, isPaid && item.date ? 'spend' : 'due') : ''}
@@ -1191,7 +2632,7 @@ async function renderSavings(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar page-toolbar--end page-toolbar--wrap">
+    <div class="page-toolbar page-toolbar--fixed page-toolbar--end page-toolbar--wrap">
       <button class="btn btn-primary" onclick="openAccountSetup()">+ Account</button>
       <button class="btn btn-primary" onclick="openIncomeSetup()">+ Income</button>
       <button class="btn btn-primary" onclick="openAddModal('savings')">+ Goal</button>
@@ -1199,7 +2640,7 @@ async function renderSavings(container) {
     
     <div class="stat-card" style="margin-bottom: 20px;">
       <div class="stat-card-header">
-        <span class="stat-card-title">Total Saved</span>
+        <span class="stat-card-title">Total saved</span>
         <span class="stat-card-sub">${pct}% of target</span>
       </div>
       <div class="stat-card-value" style="color: var(--success)">${currency(totalCurrent)}</div>
@@ -1209,28 +2650,6 @@ async function renderSavings(container) {
       </div>
     </div>
     
-    <div class="section-head">
-      <span class="section-title">Accounts</span>
-      <span class="stat-card-sub">${currency(totalBalance)}</span>
-    </div>
-    <div class="item-list">
-      ${balances.map(renderAccountRow).join('')}
-    </div>
-
-    <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
-      <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
-    </div>
-
-    <div class="section-head">
-      <span class="section-title">Income</span>
-      <span class="stat-card-sub">${currency(incomeTotal)}</span>
-    </div>
-    <div class="item-list">
-      ${incomeItems.length === 0
-        ? '<div class="empty-state"><div class="empty-state-text">No income recorded</div></div>'
-        : incomeItems.map(renderIncomeRow).join('')}
-    </div>
-
     <div class="section-head" id="goals-section">
       <span class="section-title">Goals</span>
     </div>
@@ -1238,7 +2657,7 @@ async function renderSavings(container) {
       ${items.length === 0 ? `
         <div class="empty-state">
           <div class="empty-state-text">No savings goals yet</div>
-          <button class="btn btn-primary" onclick="openAddModal('savings')">Add First Goal</button>
+          <button class="btn btn-primary" onclick="openAddModal('savings')">Add first goal</button>
         </div>
       ` : items.map(item => {
         const goalPct = item.target > 0 ? Math.round((item.current / item.target) * 100) : 0;
@@ -1248,17 +2667,20 @@ async function renderSavings(container) {
         // amount would be unreadable on a green card.
         const done = item.target > 0 && item.current >= item.target;
         return `
-          <div class="item-row${done ? ' item-row--done' : ''}" data-edit-type="savings" data-edit-id="${item.id}">
+          <div class="item-row item-row--lines${done ? ' item-row--done' : ''}" data-edit-type="savings" data-edit-id="${item.id}">
             <div class="item-row-main">
               <div class="item-info">
                 <div class="item-title">${escapeHTML(item.title)}</div>
-                <div class="item-meta">${escapeHTML(item.category)} · ${goalPct}% complete</div>
+                <div class="item-meta">${goalPct}% complete</div>
+                <div class="item-meta item-meta--sub">
+                  ${escapeHTML(item.category)}
+                  <span class="item-timing">of ${currency(item.target)}</span>
+                </div>
               </div>
             </div>
             <div class="row-end">
               <div class="value-cell value-cell--wide">
                 <div class="item-amount"${done ? '' : ' style="color: var(--success)"'}>${currency(item.current)}</div>
-                <div class="stat-card-sub">of ${currency(item.target)}</div>
                 <div class="stat-card-progress" style="margin-top: 8px;">
                   <div class="stat-card-progress-fill progress-savings" style="width: ${Math.min(100, goalPct)}%"></div>
                 </div>
@@ -1272,6 +2694,37 @@ async function renderSavings(container) {
         `;
       }).join('')}
     </div>
+
+    <div class="section-head" id="accounts-section">
+      <span class="section-title">Accounts</span>
+      <span class="stat-card-sub">${currency(totalBalance)}</span>
+    </div>
+    <div class="item-list">
+      ${balances.length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-state-text">No accounts yet</div>
+          <button class="btn btn-primary" onclick="openAccountSetup()">Add first account</button>
+        </div>
+      ` : balances.map(renderAccountRow).join('')}
+    </div>
+
+    ${balances.length > 1 ? `
+    <div class="page-toolbar page-toolbar--end" style="margin-top: 10px;">
+      <button class="btn btn-ghost" onclick="openTransferModal()">Move money</button>
+    </div>` : ''}
+
+    <div class="section-head">
+      <span class="section-title">Income</span>
+      <span class="stat-card-sub">${currency(incomeTotal)}</span>
+    </div>
+    <div class="item-list">
+      ${incomeItems.length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-state-text">No income recorded</div>
+          <button class="btn btn-primary" onclick="openIncomeSetup()">Add first income</button>
+        </div>
+      ` : incomeItems.map(renderIncomeRow).join('')}
+    </div>
   `;
 }
 
@@ -1282,32 +2735,34 @@ async function renderSavings(container) {
 function renderAccountRow(row) {
   const account = accountById(row.id);
   const over = row.balance < 0;
-  const parts = [
-    ['Spend', row.spend],
+  // One line per movement rather than one line of them all run together with
+  // middots. Spent and Bills are the two figures a person looks for first, and
+  // reading them off a single joined-up line was the thing that got reported.
+  const detail = [
+    ['Spent', row.spend],
     ['Bills', row.bills],
     ['Goals', row.savings]
-  ].filter(([, v]) => v > 0);
+  ].filter(([, v]) => v > 0).map(([k, v]) => `${k} ${currency(v)}`);
+  if (row.transferIn || row.transferOut) detail.push(transferSummary(row));
 
   return `
-    <div class="item-row item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
+    <div class="item-row item-row--lines item-row--account" data-account-id="${row.id}" onclick="openAccountSetup('${row.id}')">
       <div class="item-row-main">
         <div class="item-info">
-          <div class="item-title">${escapeHTML(row.name)}</div>
-          <div class="item-meta">
-            ${row.type === CASH_TYPE ? 'Cash' : 'Bank'}
-            ${parts.length
-              ? ` · ${parts.map(([k, v]) => `${k} ${currency(v)}`).join(' · ')}`
-              : ''}
-          </div>
+          <div class="item-title">${escapeHTML(row.name)}${personDot(personById(row.personId))}</div>
+          <div class="item-meta">${escapeHTML(accountTypeLabel(row.type))}</div>
+          ${detail.map((line) => `<div class="item-meta">${line}</div>`).join('')}
         </div>
       </div>
-      <div class="value-cell value-cell--wide">
-        <div class="item-amount" style="color: ${over ? 'var(--danger)' : 'var(--text-primary)'};">
-          ${currency(row.balance)}
+      <div class="row-end">
+        <div class="value-cell value-cell--wide">
+          <div class="item-amount" style="color: ${over ? 'var(--danger)' : 'var(--text-primary)'};">
+            ${currency(row.balance)}
+          </div>
         </div>
-        ${row.transferIn || row.transferOut || row.adjustment
-          ? `<div class="stat-card-sub">${transferSummary(row)}</div>`
-          : ''}
+        <div class="row-actions">
+          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); openAccountActivity('${row.id}')">Activity</button>
+        </div>
       </div>
     </div>
   `;
@@ -1318,7 +2773,6 @@ function transferSummary(row) {
   const bits = [];
   if (row.transferIn) bits.push(`${currency(row.transferIn)} in`);
   if (row.transferOut) bits.push(`${currency(row.transferOut)} out`);
-  if (row.adjustment) bits.push(`${currency(row.adjustment)} adjusted`);
   return bits.join(' · ');
 }
 
@@ -1330,22 +2784,25 @@ function transferSummary(row) {
 // is one place for all three, so all three behave the same way.
 function renderIncomeRow(item) {
   return `
-    <div class="item-row" onclick="openIncomeSetup('${item.id}')">
+    <div class="item-row item-row--lines" onclick="openIncomeSetup('${item.id}')">
       <div class="item-row-main">
         <div class="item-info">
           <div class="item-title">${escapeHTML(item.title)}</div>
-          <div class="item-meta">
-            ${formatDate(item.date)} · ${escapeHTML(incomeCategoryLabel(item.category))}
+          <div class="item-meta">${formatDate(item.date)}</div>
+          <div class="item-meta item-meta--sub">
+            <span class="item-timing">${[
+              incomeCategoryLabel(item.category),
+              item.accountId ? accountName(item.accountId) : ''
+            ].filter(Boolean).join(' · ')}</span>
           </div>
         </div>
       </div>
       <div class="row-end">
         <div class="value-cell value-cell--wide">
           <div class="item-amount" style="color: var(--success);">${currency(item.amount)}</div>
-          <div class="stat-card-sub">${item.accountId ? escapeHTML(accountName(item.accountId)) : ''}</div>
         </div>
         <div class="row-actions">
-          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}', this)">${incomeRepeatLabel(item)}</button>
+          <button class="btn btn-ghost btn-frequency" onclick="event.stopPropagation(); toggleIncomeRecurring('${item.id}')">${incomeRepeatLabel(item)}</button>
           ${personDot(personById(item.personId))}
         </div>
       </div>
@@ -1358,17 +2815,18 @@ async function openIncomeSetup(id) {
   if (id && !item) return;
   const accounts = [...accountsCache.values()];
   const people = [...peopleCache.values()];
+  const currentPerson = getCurrentPersonId();
 
   openModal(item ? 'Edit income' : 'Add income', `
     <div class="form-group">
-      <label class="form-label" for="income-title">What for</label>
+      <label class="form-label" for="income-title">Source of income</label>
       <input type="text" class="form-input" id="income-title" maxlength="100"
              placeholder="e.g., Salary" value="${escapeHTML(item ? item.title : '')}">
     </div>
     <div class="form-group">
       <label class="form-label" for="income-amount">Amount</label>
       <input type="number" class="form-input" id="income-amount" step="0.01" min="0"
-             value="${item ? item.amount : ''}" placeholder="0.00">
+             value="${item ? moneyInput(item.amount) : ''}" placeholder="0.00">
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -1390,21 +2848,36 @@ async function openIncomeSetup(id) {
     </div>
     <div class="form-group">
       <label class="form-label" for="income-account">Into account</label>
-      <select class="form-input" id="income-account">
+      <select class="form-input" id="income-account" onchange="pickPersonForAccount(this)">
         <option value="">Not into an account</option>
-        ${accounts.map((a) => `<option value="${a.id}"${item && item.accountId === a.id ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
+        ${accounts.map((a) => `<option value="${a.id}" data-person="${a.personId || ''}"${item && normaliseId(item.accountId) === normaliseId(a.id) ? ' selected' : ''}>${escapeHTML(a.name)}</option>`).join('')}
       </select>
+      ${accountsCache.size === 0
+        ? `<p class="setting-hint" style="color: var(--danger); margin: 6px 0 0;">An account must be added, go to Savings > + Account</p>`
+        : ''}
     </div>
     <div class="form-group">
       <label class="form-label" for="income-person">Whose</label>
       <select class="form-input" id="income-person">
         <option value="">Anyone</option>
-        ${people.map((p) => `<option value="${p.id}"${item && item.personId === p.id ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+        ${people.map((p) => `<option value="${p.id}"${(item ? item.personId === p.id : p.id === currentPerson) ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
       </select>
     </div>
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveIncome('${id || ''}')">${item ? 'Save' : 'Add income'}</button>
     ${item ? `<button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveIncome('${item.id}', this)">Delete</button>` : ''}
   `);
+}
+
+// An account that belongs to somebody makes the income theirs unless it has been
+// answered already: picking "Joint account" and then having to pick Ada again
+// under "Whose" is one question asked twice. An account with nobody attached
+// leaves the field alone.
+function pickPersonForAccount(select) {
+  const opt = select.selectedOptions && select.selectedOptions[0];
+  const personId = opt ? opt.getAttribute('data-person') : '';
+  if (!personId) return;
+  const target = document.getElementById('income-person');
+  if (target) target.value = personId;
 }
 
 async function saveIncome(id) {
@@ -1419,6 +2892,13 @@ async function saveIncome(id) {
   if (!String(title || '').trim()) return showFormError('Please enter what it was for', 'income-title');
   if (!(amount > 0)) return showFormError('Please enter an amount greater than 0', 'income-amount');
   if (!date) return showFormError('Please enter a date', 'income-date');
+  if (!accountId) {
+    const accounts = await getAll('accounts');
+    if (accounts.length === 0) {
+      return showFormError('An account must be added, go to Savings > + Account', 'income-account');
+    }
+    return showFormError('Pick an account', 'income-account');
+  }
 
   const fields = {
     title: String(title).trim().slice(0, 100),
@@ -1461,16 +2941,60 @@ async function confirmRemoveIncome(id, btn) {
 
 // The balance the row actually shows, so the editor and the list agree.
 function accountCurrentBalance(accountId) {
-  const cached = accountBalanceCache.get(accountId);
+  const cached = accountBalanceCache.get(normaliseId(accountId));
   if (cached) return Math.round(cached.balance * 100) / 100;
   const account = accountById(accountId);
   if (!account) return '';
   return Math.round((account.opening || 0) * 100) / 100;
 }
 
+// What an account has held, over time. Editing the account and reading its
+// activity are different questions, so the row offers both: the row itself
+// edits, and this is one tap away beside it.
+async function openAccountActivity(id) {
+  const account = accountById(id);
+  if (!account) return;
+  const entries = await accountActivity(id);
+  const balance = (accountBalanceCache.get(normaliseId(id)) || {}).balance || 0;
+
+  const rows = entries.length === 0
+    ? '<div class="empty-state"><div class="empty-state-text">Nothing recorded against this account yet</div></div>'
+    : `<div class="item-list">${entries.map((e) => `
+        <div class="item-row item-row--lines">
+          <div class="item-row-main">
+            <div class="item-info">
+              <div class="item-title">${escapeHTML(e.title || e.label)}</div>
+              <div class="item-meta">${e.date ? formatDate(e.date) : ''}</div>
+              <div class="item-meta item-meta--sub">${e.title ? `<span class="item-timing">${escapeHTML(e.label)}</span>` : ''}</div>
+            </div>
+          </div>
+          <div class="row-end">
+            <div class="value-cell value-cell--wide">
+              <div class="item-amount" style="color: var(--${e.tone === 'in' ? 'success' : 'danger'});">
+                ${e.amount < 0 ? '−' : '+'}${currency(Math.abs(e.amount))}
+              </div>
+            </div>
+          </div>
+        </div>`).join('')}</div>`;
+
+  openModal(escapeHTML(account.name), `
+    <div class="stat-card" style="margin-bottom: 16px;">
+      <div class="stat-card-header">
+        <span class="stat-card-title">${escapeHTML(accountTypeLabel(account.type))}</span>
+      </div>
+      <div class="stat-card-value">${currency(balance)}</div>
+    </div>
+    ${rows}`);
+}
+
 function openAccountSetup(id) {
   const account = id ? accountById(id) : null;
   const isCash = account ? account.type === CASH_TYPE : false;
+  const people = [...peopleCache.values()];
+  // A new account starts as whoever is using the app, the way a new spend does
+  // — an account somebody then uses is nearly always theirs, and a dropdown
+  // trip on every account is the sort of thing that ends up left on "Anyone".
+  const currentPerson = getCurrentPersonId();
 
   openModal(account ? `Edit ${escapeHTML(account.name)}` : 'Add an account', `
     <div class="form-group">
@@ -1478,26 +3002,32 @@ function openAccountSetup(id) {
       <input type="text" class="form-input" id="account-name" maxlength="40"
              placeholder="${isCash ? 'Cash' : 'e.g. Current account'}" value="${escapeHTML(account ? account.name : '')}">
     </div>
-    ${account ? '' : `
+    <div class="form-group">
+      <label class="form-label" for="account-person">Whose</label>
+      <select class="form-input" id="account-person">
+        <option value="">Anyone</option>
+        ${people.map((p) => `<option value="${p.id}"${(account ? account.personId === p.id : p.id === currentPerson) ? ' selected' : ''}>${escapeHTML(p.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="account-cardLast4">Last 4 digits on card</label>
+      <input type="text" class="form-input" id="account-cardLast4" maxlength="4"
+             inputmode="numeric" placeholder="e.g. 4242"
+             value="${account ? escapeHTML(account.cardLast4 || '') : ''}">
+      <p class="setting-hint" style="margin: 4px 0 0;">Helps automate receipt reading — a receipt showing these digits is filed against this account.</p>
+    </div>
     <div class="form-group">
       <label class="form-label" for="account-type">Type</label>
       <select class="form-input" id="account-type">
-        <option value="bank">Bank account</option>
-        <option value="cash"${isCash ? ' selected' : ''}>Cash</option>
+        ${ACCOUNT_TYPES.map(([value, label]) => `<option value="${value}"${(account ? account.type : (isCash ? 'cash' : 'bank')) === value ? ' selected' : ''}>${escapeHTML(label)}</option>`).join('')}
       </select>
-    </div>`}
+    </div>
     <div class="form-group">
       <label class="form-label" for="account-opening">Balance now</label>
       <input type="number" class="form-input" id="account-opening" step="0.01"
-             value="${account ? accountCurrentBalance(account.id) : ''}" placeholder="0.00">
+             value="${account ? moneyInput(accountCurrentBalance(account.id)) : ''}" placeholder="0.00">
       ${account ? '<p class="setting-hint">What this account holds today. Entering a different figure corrects the balance.</p>' : ''}
     </div>
-    ${account ? `
-    <div class="form-group">
-      <label class="form-label" for="account-adjustment">Adjustments</label>
-      <input type="number" class="form-input" id="account-adjustment" step="0.01"
-             value="${account.adjustment}" placeholder="0.00">
-    </div>` : ''}
     ${account ? `
     <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="saveAccount('${account.id}')">Save</button>
     <button class="btn btn-danger" style="width: 100%; margin-top: 8px;" onclick="confirmRemoveAccount('${account.id}', this, true)">Remove account</button>`
@@ -1512,7 +3042,6 @@ async function saveAccount(id) {
 
   if (id) {
     const account = accountById(id);
-    const adjustment = document.getElementById('account-adjustment')?.value;
     // "Balance now" is what the account holds today, so it has to mean that.
     // The stored opening balance is the baseline everything recorded since was
     // applied to, so with £100 of spend on the books, typing 100 into a field
@@ -1520,23 +3049,37 @@ async function saveAccount(id) {
     //
     // Rather than relabel the field and keep the surprise, the number is
     // converted on the way in: the figures already applied to this account are
-    // added back, so what you type is what the row then shows.
+    // added back, so what you type is what the row then shows. There is no
+    // separate adjustment any more — it was a second control that nudged the
+    // same number — and any value an older row still carries is folded into the
+    // opening figure here, so the balance is unchanged and the row shows exactly
+    // what was typed.
     const balances = await accountBalances();
-    const row = balances.find((b) => b.id === id);
+    const row = balances.find((b) => normaliseId(b.id) === normaliseId(id));
     const applied = row
       ? (row.spend || 0) + (row.bills || 0) + (row.savings || 0)
         - (row.income || 0) - (row.transferIn || 0) + (row.transferOut || 0)
       : 0;
+    const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
+      .replace(/\D/g, '').slice(0, 4);
+    const type = document.getElementById('account-type')?.value || 'bank';
+    const personId = document.getElementById('account-person')?.value || null;
     await updateItem('accounts', {
       ...account,
       name: String(name).trim().slice(0, 40),
+      type: ACCOUNT_TYPES.some(([value]) => value === type) ? type : 'bank',
+      cardLast4: cardLast4 || null,
+      personId,
       opening: (Number.parseFloat(opening) || 0) + applied,
-      adjustment: Number.parseFloat(adjustment) || 0
+      adjustment: 0
     });
     showToast('Account updated');
   } else {
-    const type = document.getElementById('account-type')?.value === CASH_TYPE ? CASH_TYPE : 'bank';
-    const added = await addAccount(name, type, opening);
+    const type = document.getElementById('account-type')?.value || 'bank';
+    const cardLast4 = String(document.getElementById('account-cardLast4')?.value || '')
+      .replace(/\D/g, '').slice(0, 4);
+    const personId = document.getElementById('account-person')?.value || null;
+    const added = await addAccount(name, type, opening, cardLast4, personId);
     if (!added) return showFormError('An account with that name already exists', 'account-name');
     showToast('Account added');
   }
@@ -1551,13 +3094,17 @@ async function confirmRemoveAccount(id, btn, fromModal) {
   if (!account) return;
   if (btn.dataset.confirming !== '1') {
     const balances = await accountBalances();
-    const row = balances.find((b) => b.id === id);
-    const spent = (row.spend || 0) + (row.bills || 0) + (row.savings || 0);
+    const row = balances.find((b) => normaliseId(b.id) === normaliseId(id));
+    // The confirm step used to quote the lifetime total of this account's
+    // spending, bills and goals. That is money *out* summed over every year, so
+    // it read as a balance and alarmed people — a £2,800 account offering to
+    // "Unassign £5,580". What matters is the consequence for the entries, so the
+    // confirm states that instead of a figure.
+    const hasEntries = !!row && !!(row.spend || row.bills || row.savings
+      || row.income || row.transferIn || row.transferOut);
     btn.dataset.confirming = '1';
-    // Say what happens to the money, not just that the row goes. Entries keep
-    // their history and show "Unassigned" until someone re-picks an account.
-    btn.textContent = spent > 0
-      ? `Unassign ${currency(spent)}? Tap again`
+    btn.textContent = hasEntries
+      ? 'All entries will remain, but will be unlinked to this account. Tap again'
       : 'Tap again to remove';
     setTimeout(() => {
       btn.dataset.confirming = '';
@@ -1578,7 +3125,7 @@ function openTransferModal() {
     return;
   }
   const options = (exclude) => accounts
-    .filter((a) => a.id !== exclude)
+    .filter((a) => normaliseId(a.id) !== normaliseId(exclude))
     .map((a) => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('');
 
   openModal('Move money', `
@@ -1637,20 +3184,215 @@ function infoTipButton(id, text) {
   </span>`;
 }
 
+function closeInfoTips(except) {
+  document.querySelectorAll('.info-tip-body.is-open').forEach((el) => {
+    if (except && el === except) return;
+    el.classList.remove('is-open');
+    el.previousElementSibling?.setAttribute('aria-expanded', 'false');
+  });
+}
+
 function toggleInfoTip(id, btn) {
   const body = document.getElementById(id);
   if (!body) return;
   const open = body.classList.toggle('is-open');
   btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   // One at a time. Two open at once on a phone means they overlap the thing
-  // they are explaining.
-  if (open) {
-    document.querySelectorAll('.info-tip-body.is-open').forEach((el) => {
-      if (el.id !== id) {
-        el.classList.remove('is-open');
-        el.previousElementSibling?.setAttribute('aria-expanded', 'false');
+  // they are explaining — but excluding the one just opened, which by then
+  // carries the class this looks for and would otherwise be closed on its way
+  // in, leaving the dot reporting a panel that is not there.
+  if (open) closeInfoTips(body);
+}
+
+// A tip used to need its own dot pressed again to go away, which reads as a
+// toggle that has stuck. Tapping anywhere else closes it — the panel is a
+// caption, not a mode. An outside tap is anything that is neither the dot nor
+// the panel itself, so a scroll or a selection inside the text still works.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.info-tip-body') && !e.target.closest('.info-tip-btn')) closeInfoTips();
+});
+
+/* -----------------------------------------------------------------------------
+   Patterns
+   Everything here is arithmetic on what is already in the database. No network,
+   no key, no model, nothing about you leaving the device — which is the whole
+   reason these exist instead of a search API.
+
+   The metric this card used to show was which weekday you spend on. It was
+   called pointless, and it is: knowing that Saturday is heavy is not a fact you
+   can do anything about, and it is mostly decided by whichever day you happened
+   to buy one large thing. What somebody actually asks of their own statements
+   is which categories are costing more than they used to — "Utilities up £12" is
+   an observation with an answer attached to it.
+
+   So the weekday averages, the eight-week window and the "this week against
+   your usual one" comparison are all gone, rather than sitting alongside the
+   new number as two half-answers to different questions.
+   -------------------------------------------------------------------------- */
+
+// Every category, this month against last month, over the same number of days.
+//
+// Spent and Bills are added together on purpose. A higher electricity bill is
+// not "spending" or "bills", it is money going out, and keeping them apart
+// would report the same category twice — once up in one card, once down in the
+// other — for a single change in one bill.
+//
+// The same number of days, rather than this month against the whole of last
+// month: compared on the 4th, that reads as a catastrophe every single time and
+// the card would be permanently alarmed. Last month is clamped to its own
+// length as well, so the 31st compared with a "31st" February is not counted as
+// a shortfall either.
+function categoryShift(spendItems, dueItems) {
+  const today = new Date();
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  const day = today.getDate();
+
+  const thisStart = new Date(y, m, 1);
+  const thisEnd = new Date(y, m, day + 1);            // exclusive, through today
+
+  const lastY = m === 0 ? y - 1 : y;
+  const lastM = m === 0 ? 11 : m - 1;
+  const lastDay = Math.min(day, new Date(lastY, lastM + 1, 0).getDate());
+  const lastStart = new Date(lastY, lastM, 1);
+  const lastEnd = new Date(lastY, lastM, lastDay + 1);
+
+  const tally = (items, from, to) => {
+    const map = new Map();
+    for (const item of items || []) {
+      if (!item) continue;
+      const raw = item.date || item.dueDate;
+      if (!raw) continue;
+      const d = new Date(String(raw) + 'T00:00:00');
+      if (Number.isNaN(d.getTime()) || d < from || d >= to) continue;
+      const cat = item.category || 'General';
+      map.set(cat, (map.get(cat) || 0) + (Number(item.amount) || 0));
+    }
+    return map;
+  };
+
+  const all = [...(spendItems || []), ...(dueItems || [])];
+  const now = tally(all, thisStart, thisEnd);
+  const was = tally(all, lastStart, lastEnd);
+
+  const sum = (map) => [...map.values()].reduce((a, b) => a + b, 0);
+
+  const rows = [...new Set([...now.keys(), ...was.keys()])]
+    .map((cat) => ({
+      cat,
+      now: now.get(cat) || 0,
+      before: was.get(cat) || 0,
+      delta: (now.get(cat) || 0) - (was.get(cat) || 0)
+    }))
+    // Biggest mover first: the card answers "what changed", so a category that
+    // did not change is the least useful thing on it.
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  return {
+    rows,
+    days: day,
+    thisMonth: sum(now),
+    lastMonth: sum(was),
+    // A month with nothing in it is not a month where everything fell — it is
+    // a month nobody has entered anything for yet, and announcing "down 100%"
+    // about that would be a lie told by arithmetic.
+    enough: sum(now) > 0
+  };
+}
+
+// "up £12 (+18%)". A category with nothing behind it last month cannot have a
+// percentage, so it says what it is instead of inventing one.
+function categoryMovement(row) {
+  if (row.delta === 0) return 'no change';
+  const dir = row.delta > 0 ? 'up' : 'down';
+  const money = currency(Math.abs(row.delta));
+  // A bracket, like every other row on the card, because a lone "· new" read as
+  // a fragment of a sentence rather than the same kind of note. The word stays:
+  // with nothing behind it last month there is no percentage to calculate — the
+  // ratio is undefined, not small — and inventing a denominator would put a
+  // number on the card that no part of the data supports.
+  if (row.before === 0) return `${dir} ${money} (new)`;
+  const pct = Math.round((Math.abs(row.delta) / row.before) * 100);
+  return `${dir} ${money} (${row.delta > 0 ? '+' : '-'}${pct}%)`;
+}
+
+function renderPatternsCard(shift) {
+  if (!shift.enough || shift.rows.length === 0) {
+    // The heading with it, so the card is never a bare sentence.
+    return `<h2 class="report-title">Patterns</h2>
+      <div class="setting-hint" style="padding: 8px 0;">Nothing recorded this month yet.</div>`;
+  }
+  const rows = shift.rows.map((r) => `
+    <div class="pattern-row">
+      <span class="pattern-name">${escapeHTML(r.cat)}</span>
+      <span class="pattern-amount ${r.delta > 0 ? 'pattern-amount--up'
+        : r.delta < 0 ? 'pattern-amount--down' : 'pattern-amount--flat'}">${categoryMovement(r)}</span>
+    </div>`).join('');
+
+  // The caption sits on the heading's line, as every other Reports card's
+  // figure does. Under the heading it read as a second title of its own, and
+  // the card was the only one on the page with a line between its heading and
+  // its rows.
+  return `
+    <div class="report-head">
+      <h2 class="report-title">Patterns</h2>
+      <span class="pattern-sub">days 1-${shift.days} of this month and last</span>
+    </div>
+    ${rows}`;
+}
+
+// Asks GitHub what the newest published release is and compares it with the
+// running build.
+//
+// The app has no server, so this is a plain unauthenticated request to one
+// public URL. It sends the request and nothing else: no build id, no device
+// detail, no data of yours. Nothing is downloaded or installed without asking —
+// Android requires a human to confirm any install regardless, and a finance app
+// quietly replacing itself is not something to do to someone by surprise.
+async function checkForUpdate(btn) {
+  const note = document.getElementById('update-note');
+  const say = (text) => { if (note) note.textContent = text; };
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = 'Check'; } };
+
+  const RELEASES_API = 'https://api.github.com/repos/jaquesbody/sorted/releases/latest';
+  try {
+    const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
+    if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+    const data = await res.json();
+    const latest = String(data.tag_name || '').replace(/^v/, '');
+    const here = String(APP_VERSION || '');
+
+    // Compare as numbers, not strings: "2.9.0" is older than "2.10.0" and a
+    // string compare says otherwise, which is the sort of thing that quietly
+    // reports "up to date" forever.
+    const parts = (v) => String(v).split('.').map((n) => parseInt(n, 10) || 0);
+    const [a, b] = [parts(latest), parts(here)];
+    let cmp = 0;
+    for (let i = 0; i < 3; i++) {
+      const x = a[i] || 0, y = b[i] || 0;
+      if (x !== y) { cmp = x > y ? 1 : -1; break; }
+    }
+
+    if (!latest) {
+      say('Could not read the release name from GitHub.');
+    } else if (cmp > 0) {
+      say(`v${latest} is available — you have v${here}.`);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Get it';
+        btn.onclick = () => { window.open(data.html_url, '_blank', 'noopener'); };
+        return;
       }
-    });
+    } else if (cmp === 0) {
+      say(`Up to date. This is v${here}.`);
+    } else {
+      say(`You have v${here}, which is newer than the published v${latest}.`);
+    }
+  } catch (err) {
+    say(`Could not check: ${String((err && err.message) || err)}`);
+  } finally {
+    restore();
   }
 }
 
@@ -1671,15 +3413,32 @@ async function renderReports(container) {
 
   // Range chips scope spending and bills; savings goals have no dates,
   // so their total stays lifetime.
-  const inRange = (dateStr) => reportRange === 'all' ? true
-    : reportRange === 'month' ? isThisMonth(dateStr)
-    : isThisYear(dateStr);
-  const rangedSpend = spendItems.filter(i => inRange(i.date));
-  // What is owed, so a bill already settled is out of it. A paid bill used to
-  // be deleted on payment; it now stays in this store marked paid, which
-  // means without this filter every past month stepped back to would report
-  // rent as still due.
-  const rangedDue = dueItems.filter(i => i.paid !== true && inRange(i.dueDate));
+  // Every range stops at today. "All time" used to mean every date in the store,
+  // which after the Bills page started materialising future occurrences meant
+  // next month's rent was reported as money already owed. A range that says
+  // "All time" means everything so far.
+  const todayIso = localISO(new Date());
+  const inRange = (dateStr) => {
+    if (String(dateStr || '') > todayIso) return false;
+    if (reportRange === 'month') return isThisMonth(dateStr);
+    if (reportRange === 'year') return isThisYear(dateStr);
+    return true;
+  };
+  // Spending is what was spent, and never a bill that has been paid for: a
+  // bill settled before 2.8.3 is a spend row, and counting it here put the
+  // same rent in Spending *and* in Bills.
+  const rangedSpend = spendingHistory(spendItems).filter(i => inRange(i.date));
+  // Every bill that has arrived, settled or not — including the payments older
+  // bills left in Spend, which is what "not showing paid bills" was: the
+  // history of paying a bill is not written in the Bills store for anyone who
+  // was paying bills before 2.8.3. The date cap above keeps next month's rent
+  // out; the paid/unpaid state does not enter into it.
+  const rangedDue = billHistory(dueItems, spendItems).filter(i => inRange(i.dueDate));
+
+  // Computed from everything stored rather than the range chips: this is its own
+  // month-by-month comparison, and scoping it to a filter that already means
+  // "this month" would compare this month with this month.
+  const shift = categoryShift(spendItems, dueItems);
 
   const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
   const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
@@ -1690,49 +3449,64 @@ async function renderReports(container) {
 
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar">
+    <div class="page-toolbar page-toolbar--fixed">
       <div class="filter-bar">
-        ${chip('all', 'All time')}
         ${chip('month', 'This month')}
         ${chip('year', 'This year')}
+        ${chip('all', 'All time')}
       </div>
     </div>
     
     <div class="reports-grid">
       <div class="report-card">
-        <h2 class="report-title">Spending by Category</h2>
-        ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
-        ${reportTotalRow('Total Spent', totalSpend, 'accent')}
-      </div>
-      
-      <div class="report-card">
-        <h2 class="report-title">Bills by Category</h2>
-        ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue, 'danger')}
-        ${reportTotalRow('Total Due', totalDue, 'danger')}
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Who Spent What</h2>
-        ${renderPersonBreakdown(rangedSpend, rangedDue)}
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Where Your Money Is</h2>
-        ${renderBalanceBreakdown(balances)}
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Forecast</h2>
+        <div class="report-head">
+          <h2 class="report-title">Forecast</h2>
+          <span class="report-head-note">${escapeHTML(runOutText(forecast.runsOut))}</span>
+        </div>
         ${renderForecastCard(forecast)}
       </div>
 
       <div class="report-card">
-        <h2 class="report-title report-title--link" role="button" tabindex="0"
-            onclick="goToGoals()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToGoals();}"
-            title="Go to your goals">Savings by Goal</h2>
-        ${renderSavingsBreakdown(savingsItems)}
-        ${reportTotalRow('Total Saved', totalSavings, 'success')}
+        ${reportHead('<h2 class="report-title">Spending by category</h2>', totalSpend, 'accent')}
+        ${renderReportBreakdown(groupByCategory(rangedSpend, 'amount'), totalSpend, 'accent')}
       </div>
+      
+      <div class="report-card">
+        ${reportHead('<h2 class="report-title">Bills by category</h2>', totalDue, 'danger')}
+        ${renderReportBreakdown(groupByCategory(rangedDue, 'amount'), totalDue, 'danger')}
+      </div>
+
+      <div class="report-card">
+        <h2 class="report-title">Who spent what</h2>
+        ${renderPersonBreakdown(rangedSpend, rangedDue)}
+      </div>
+
+      <div class="report-card">
+        ${reportHead('<h2 class="report-title">Where your money is</h2>',
+          balances.reduce((n, b) => n + b.balance, 0), null)}
+        ${renderBalanceBreakdown(balances)}
+      </div>
+
+      <div class="report-card">
+        ${renderPatternsCard(shift)}
+      </div>
+
+      <div class="report-card">
+        ${reportHead(`<h2 class="report-title report-title--link" role="button" tabindex="0"
+            onclick="goToGoals()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();goToGoals();}"
+            title="Go to your goals">Savings by goal</h2>`, totalSavings, 'success')}
+        ${renderSavingsBreakdown(savingsItems)}
+      </div>
+    </div>
+
+    <div class="save-report" style="margin-top: 20px; margin-bottom: 6px;">
+      <button class="btn btn-primary" style="width: 100%;"
+              onclick="openSaveReportModal()">Save report</button>
+      <!-- The period is a choice made three chips up the page and not a choice
+           made in this dialog, so the dialog cannot show it. The sentence says
+           so once, here, rather than leaving someone to wonder which period the
+           file they are about to write will contain. -->
+      <p class="setting-hint" style="margin-top: 8px;">This will create a report for the time period chosen (This month, This year or All time)</p>
     </div>
   `;
 
@@ -1743,13 +3517,19 @@ async function renderReports(container) {
 // repeated all three in one place, which meant reading one number required
 // scrolling past two other cards to find it — and the total is the thing the
 // breakdown below it adds up to, so it belongs at the foot of that breakdown.
-function reportTotalRow(label, amount, tone) {
+// A card's title and its total, on one line.
+//
+// The total used to be a row of its own below the breakdown, which cost every
+// one of these cards a whole line to say something the heading already implies:
+// "Spending by Category ... £123.00". On a phone that line is a fifth of the
+// card. The label went with it — "Total Spent" under a heading that already
+// says Spending said the same thing twice.
+function reportHead(title, amount, tone) {
   return `
-    <div class="report-total">
-      <span class="report-total-label">${escapeHTML(label)}</span>
-      <span class="report-total-value${tone ? ' tone-' + tone : ''}">${currency(amount)}</span>
-    </div>
-  `;
+    <div class="report-head">
+      ${title}
+      <span class="report-head-total${tone ? ' tone-' + tone : ''}">${currency(amount)}</span>
+    </div>`;
 }
 
 // Savings goals measured against their own target, not against each other —
@@ -1818,41 +3598,32 @@ function renderBalanceBreakdown(balances) {
   if (!balances.length) {
     return '<div style="color: var(--text-secondary); padding: 20px 0;">No accounts yet</div>';
   }
-  const total = balances.reduce((n, b) => n + b.balance, 0);
   return `
     ${balances.map((b) => {
       // Only the things that actually moved. A row reading "Bills £0.00,
       // Goals £0.00, In £0.00" says nothing — four zeros beside the number
       // that's already there is just noise competing with it.
       const parts = [
-        ['Spend', b.spend, 'accent'],
+        ['Spent', b.spend, 'accent'],
         ['Bills', b.bills, 'danger'],
         ['Goals', b.savings, 'success'],
         ['Income', b.income, 'muted'],
         ['Moved in', b.transferIn, 'muted']
       ].filter(([, v]) => v > 0);
+      // One line. It was two — name and amount, then what moved it underneath —
+      // which on a phone turns a card saying "you have one account" into four
+      // rows. The movement breakdown is not lost, it is the Dashboard's job now:
+      // the card there breaks total money into spent, bills, savings and what's
+      // left, which is the same figures in a form you can read at a glance.
       return `
         <div class="account-total">
           <div class="account-total-top">
             <span class="account-total-name">${escapeHTML(b.name)}</span>
             <span class="account-total-amount${b.balance < 0 ? ' is-negative' : ''}">${currency(b.balance)}</span>
           </div>
-          <div class="account-split">
-            ${parts.length
-              ? parts.map(([label, value, tone]) => balanceSegment(label, value, tone)).join('')
-              : '<span class="account-seg">Nothing recorded yet</span>'}
-          </div>
-        </div>
-      `;
+        </div>`;
     }).join('')}
-    ${reportTotalRow('Total', total, null)}
   `;
-}
-
-function balanceSegment(label, value, tone) {
-  return `<span class="account-seg">
-    <i class="account-seg-swatch tone-${tone}"></i>${label} ${currency(value)}
-  </span>`;
 }
 
 /* Forecast
@@ -1924,6 +3695,7 @@ function averageNonRecurringSpend(spendItems) {
   // Extrapolating instead — £10 over two days scaled to a month — is worse: two
   // days is not a sample, and a single big purchase on day one would predict a
   // ruinous month. An unfinished month simply does not vote.
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const cutoff = new Date(now.getFullYear(), now.getMonth() - FORECAST_SPEND_MONTHS, 1);
   const inWindow = spendItems.filter((i) => {
     // Bill payments are excluded, and this is the fix for the duplication.
@@ -1933,11 +3705,42 @@ function averageNonRecurringSpend(spendItems) {
     // New payments never land here at all.
     if (i.paid === true) return false;
     const d = new Date(String(i.date || '') + 'T00:00:00');
-    return !Number.isNaN(d.getTime()) && d >= cutoff && d < new Date(now.getFullYear(), now.getMonth(), 1);
+    return !Number.isNaN(d.getTime()) && d >= cutoff && d < monthStart;
   });
-  if (inWindow.length === 0) return 0;
-  const months = new Set(inWindow.map((i) => i.date.slice(0, 7))).size;
-  return inWindow.reduce((n, i) => n + i.amount, 0) / months;
+  const completedMonths = new Set(inWindow.map((i) => i.date.slice(0, 7))).size;
+  const completedTotal = inWindow.reduce((n, i) => n + i.amount, 0);
+
+  // The month in progress counts too, and this is the answer to "the average
+  // never changes when I spend something".
+  //
+  // It used to be excluded outright, which was defensible arithmetic and looked
+  // like a bug: record £300 of spending today and not one figure on the forecast
+  // moved, because today is in a month that was not being counted at all.
+  //
+  // Counting it as a *whole* month was the previous attempt and was worse — six
+  // months at £100 each plus £10 logged two days into the seventh gave £85,
+  // because two days was being treated as a month. So the month in progress
+  // contributes what was actually spent against the share of it that has
+  // happened. Ten days into a 31-day month with £100 spent counts as £100 over
+  // a third of a month, which moves the average when the spending moves without
+  // a single day being able to swing a whole month on its own.
+  // Spelled out rather than reusing buildForecast's local helper: that one is
+  // declared inside a different function, and reaching for it here would be a
+  // ReferenceError — which on one-template-per-page blanks the whole page.
+  const daysInThisMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const elapsed = Math.max(1, now.getDate());
+  const thisMonthTotal = spendItems.reduce((n, i) => {
+    if (i.paid === true) return n;
+    const d = new Date(String(i.date || '') + 'T00:00:00');
+    if (Number.isNaN(d.getTime()) || d < monthStart || d > now) return n;
+    return n + (Number(i.amount) || 0);
+  }, 0);
+  const elapsedMonths = elapsed / daysInThisMonth;
+
+  const total = completedTotal + thisMonthTotal;
+  const months = completedMonths + elapsedMonths;
+  if (months <= 0) return 0;
+  return total / months;
 }
 
 function getForecastSpendOverride() {
@@ -2007,6 +3810,23 @@ function forecastDayList(rangeMonths, startOffset) {
   return { days, start, end };
 }
 
+// The earliest day this device holds anything at all, as midnight local, or
+// null if it holds nothing. Anything earlier is not "no spending", it is "this
+// app wasn't in use", and the forecast must not draw a line through it.
+function earliestRecordedDate(...lists) {
+  let earliest = null;
+  for (const list of lists) {
+    for (const item of list || []) {
+      const raw = String(item.date || item.dueDate || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) continue;
+      if (!earliest || raw < earliest) earliest = raw;
+    }
+  }
+  if (!earliest) return null;
+  const d = new Date(earliest + 'T00:00:00');
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 const FORECAST_RANGES = [
   { value: 1, label: '1 month' },
   { value: 3, label: '3 months' },
@@ -2060,7 +3880,18 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   ]);
   const balances = await accountBalances();
   const today = todayMidnight();
-  const { days, start } = forecastDayList(rangeMonths, startOffset);
+  // Named span, not window: shadowing the global inside a function this long is
+  // asking for a bug three edits from now.
+  const span = forecastDayList(rangeMonths, startOffset);
+  // Nothing before this device's first entry is knowable. Stepping back six
+  // months on a young database used to draw a line anyway — the walk-back adds
+  // back bills and income it can see and subtracts spend it can't, which happens
+  // to produce a smooth plausible curve that is entirely fiction. The chart now
+  // starts where the data does, so an empty stretch is visibly empty rather
+  // than confidently wrong.
+  const firstKnown = earliestRecordedDate(spendItems, dueItems, incomeItems);
+  const days = span.days.filter((d) => !firstKnown || d >= firstKnown);
+  const start = days.length ? days[0] : span.start;
   const spendEstimate = forecastSpendEstimate(spendItems);
   const add = (map, iso, amount) => {
     if (!iso) return;
@@ -2136,7 +3967,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     }
     for (const key of months) {
       const [yy, mm] = key.split('-').map(Number);
-      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1));
+      const occurrence = occurrenceInMonth(item.date, frequency, new Date(yy, mm, 1), item.repeatUntil, dueDayValue(item));
       if (occurrence && occurrence > localISO(today)) add(plannedIncome, occurrence, item.amount);
     }
   }
@@ -2154,7 +3985,7 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   // that account's balance; one with no account never was, and was counting as
   // spendable from money that is sitting in the jar. Both come off here, once.
   const setAside = savingsItems.reduce((n, goal) => {
-    const backed = goal.accountId && balances.some((b) => b.id === goal.accountId);
+    const backed = goal.accountId && balances.some((b) => normaliseId(b.id) === normaliseId(goal.accountId));
     return backed ? n : n + (goal.current || 0);
   }, 0);
   const currentBalance = balances.reduce((n, b) => n + b.balance, 0) - setAside;
@@ -2243,6 +4074,31 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
   const low = ahead.length ? ahead.reduce((a, b) => (b.balance < a.balance ? b : a)) : null;
   const short = low && low.balance < 0 ? low : null;
 
+  // When the money gets tight: the first projected day on which Total money
+  // falls to the level of Total est costs — the day the green line on the
+  // chart crosses the red one. That is a date you can point at, which is what
+  // was asked for, and it is not the day the money runs out: the balance
+  // reaches nought after this, and a figure that agrees with the graph is
+  // worth more than one that agrees with an accounting definition.
+  //
+  // Computed over the whole twelve months whatever window is on screen, since
+  // the window is a way of looking rather than a fact, and a figure that
+  // changes when you lengthen the graph is a different question answered each
+  // time. A month is thirty days, which is what "X months (X days)" asks for.
+  const fixedSeries = rangeMonths >= 12 ? series : (await buildForecast(12, 0)).series;
+  const runsOut = (() => {
+    const fixedAhead = fixedSeries.filter((p) => !p.actual);
+    if (!fixedAhead.length) return null;
+    const cross = fixedAhead.find((p) => p.balance <= p.costs);
+    if (cross) {
+      const dayCount = Math.max(0, Math.round((cross.d - today) / 86400000));
+      return { runsOut: true, months: Math.floor(dayCount / 30), days: dayCount % 30 };
+    }
+    // Still clear of the cost line after a year: the money does not get tight
+    // inside this forecast, which is worth saying plainly.
+    return { runsOut: false, months: Infinity, days: 0 };
+  })();
+
   return {
     series,
     days,
@@ -2253,12 +4109,13 @@ async function buildForecast(rangeMonths = forecastRange, startOffset = forecast
     average: averageNonRecurringSpend(spendItems),
     overridden: getForecastSpendOverride() !== null,
     low,
-    short
+    short,
+    runsOut
   };
 }
 
 function renderForecastCard(data) {
-  const { series, rangeMonths, startOffset } = data;
+  const { series, rangeMonths, startOffset, runsOut } = data;
 
   const rangeChips = FORECAST_RANGES.map((r) => `
     <option value="${r.value}"${Number(rangeMonths) === r.value ? ' selected' : ''}>${r.label}</option>
@@ -2267,7 +4124,7 @@ function renderForecastCard(data) {
   const legend = [
     ['Total money', 'success', 'is-bold'],
     ['Total est costs', 'danger', 'is-bold'],
-    ['Spend', 'accent', ''],
+    ['Spent', 'accent', ''],
     ['Bills', 'danger', '']
   ].map(([label, tone, mod]) => `
     <span class="split-key"><i class="split-swatch tone-${tone} ${mod}"></i>${label}</span>
@@ -2311,6 +4168,21 @@ function renderForecastCard(data) {
       </div>
     </div>
   `;
+}
+
+// The figure beside the Forecast heading: how long until money gets tight. One
+// short line, because it sits beside a title and not in a paragraph. The
+// sentence it replaced said the same thing in thirty-odd words on a line of
+// its own, and the value refused to change when the graph did.
+function runOutText(runsOut) {
+  if (!runsOut) return '';
+  if (!runsOut.runsOut) return 'More than 12 months of money remaining';
+  const months = Number(runsOut.months) || 0;
+  const days = Number(runsOut.days) || 0;
+  const parts = [];
+  if (months > 0) parts.push(`${months} month${months === 1 ? '' : 's'}`);
+  if (days > 0 || months === 0) parts.push(`${days} day${days === 1 ? '' : 's'}`);
+  return `${parts.length > 1 ? parts.join(' and ') : parts[0]} of money remaining`;
 }
 
 function round2(n) {
@@ -2371,6 +4243,9 @@ function drawForecastChart(data) {
   const muted = css.getPropertyValue('--text-secondary').trim() || '#8b8b96';
   const grid = css.getPropertyValue('--border').trim() || '#2b2b33';
   const bodyFont = getComputedStyle(document.body).fontFamily || 'sans-serif';
+  // Axis and point labels come from the type scale rather than a literal: 10px
+  // sat below the --fs-2xs floor the scale sets.
+  const labelPx = remPx(css, '--fs-2xs', 11);
 
   ctx.fillStyle = surface;
   ctx.fillRect(0, 0, w, h);
@@ -2420,7 +4295,7 @@ function drawForecastChart(data) {
 
   // Faint grey lines every step, each with its figure. This is what makes a
   // value readable off the chart rather than guessed at.
-  ctx.font = `10px ${bodyFont}`;
+  ctx.font = `${labelPx}px ${bodyFont}`;
   ctx.textBaseline = 'middle';
   for (let v = min; v <= max + 0.5; v += step) {
     const py = Math.round(y(v)) + 0.5;
@@ -2453,7 +4328,7 @@ function drawForecastChart(data) {
     ctx.restore();
     ctx.fillStyle = muted;
     ctx.textAlign = 'left';
-    ctx.font = `10px ${bodyFont}`;
+    ctx.font = `${labelPx}px ${bodyFont}`;
     ctx.fillText('today', Math.min(tx + 4, w - padR - 26), padT + 7);
   }
 
@@ -2467,10 +4342,13 @@ function drawForecastChart(data) {
   // bold one is skipped, since the thin one is on top of it anyway.
   const costsHidden = sameSeries('costs', 'spend') && sameSeries('costs', 'bills');
 
+  // Keep every series on the chart. "Spent" is drawn dashed so the only
+  // line that comes out of the red/blue overlap is the one asked for:
+  // the blue dots never have to sit on a solid red stroke.
   const lines = [
     { key: 'balance', colour: success, width: 2.5 },
     costsHidden ? null : { key: 'costs', colour: danger, width: 2.5 },
-    { key: 'spend', colour: accent, width: 1 },
+    { key: 'spend', colour: accent, width: 1, dash: [3, 4] },
     { key: 'bills', colour: danger, width: 1 }
   ].filter(Boolean);
 
@@ -2479,6 +4357,7 @@ function drawForecastChart(data) {
   for (const line of lines) {
     ctx.strokeStyle = line.colour;
     ctx.lineWidth = line.width;
+    ctx.setLineDash(Array.isArray(line.dash) ? line.dash : []);
     ctx.beginPath();
     series.forEach((p, i) => {
       const px = x(i);
@@ -2487,6 +4366,7 @@ function drawForecastChart(data) {
       else ctx.lineTo(px, py);
     });
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Date labels, thinned to whatever the width allows. A year of daily points
@@ -2495,7 +4375,7 @@ function drawForecastChart(data) {
   const every = Math.max(1, Math.ceil(series.length / targetLabels));
   ctx.textAlign = 'center';
   ctx.textBaseline = 'alphabetic';
-  ctx.font = `10px ${bodyFont}`;
+  ctx.font = `${labelPx}px ${bodyFont}`;
   for (let i = 0; i < series.length; i += every) {
     const label = series[i].label;
     const half = ctx.measureText(label).width / 2;
@@ -2549,7 +4429,7 @@ function renderPersonBreakdown(spendItems, dueItems) {
 
   return `
     <div class="split-legend">
-      <span class="split-key"><i class="split-swatch tone-accent"></i>Spend</span>
+      <span class="split-key"><i class="split-swatch tone-accent"></i>Spent</span>
       <span class="split-key"><i class="split-swatch tone-danger"></i>Bills</span>
     </div>
     ${rows.map((r) => {
@@ -2581,9 +4461,34 @@ function renderSettings(container) {
   container.innerHTML = `
     <div class="reports-grid">
       <div class="report-card">
+        ${peopleSettingsHtml()}
+      </div>
+
+      <div class="report-card">
+        ${notifySettingsHtml()}
+      </div>
+
+      <div class="report-card">
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text">
-            <div class="setting-label setting-label--title">Appearance</div>
+            <div class="setting-label">Currency</div>
+          </div>
+          <div class="setting-control setting-control--split">
+            <span class="currency-code">${escapeHTML(getCurrencyCode())}</span>
+            <select class="form-input form-input--mini" id="currency-select"
+                    aria-label="Currency"
+                    onchange="setCurrencyCode(this.value); renderPage();">
+              ${CURRENCIES.map(([code, name]) =>
+                `<option value="${code}"${code === getCurrencyCode() ? 'selected' : ''}>${escapeHTML(name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="report-card">
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text">
+            <div class="setting-label">Appearance</div>
           </div>
           <div class="setting-control">
             ${themeSegment()}
@@ -2592,43 +4497,51 @@ function renderSettings(container) {
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">People</h2>
-        ${peopleSettingsHtml()}
+        ${syncSettingsHtml()}
       </div>
 
       <div class="report-card">
-        ${passcodeSettings()}
+        <h2 class="report-title">Data management</h2>
+        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export data</button>
+        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%; margin-bottom: 10px;">Import your back up file (.json)</button>
+        <!-- Last, because it is the button that does one thing with no menu in
+             front of it: the .json backup, written straight out. It used to be
+             one of three choices inside Export, where it sat behind the same
+             popup as two formats that are not backups at all. -->
+        <button class="btn btn-ghost" onclick="exportData('json')" style="width: 100%;">Back up your data</button>
       </div>
 
       <div class="report-card">
-        <h2 class="report-title">Data Management</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 15px;">Export or import your financial data</p>
-        <button class="btn btn-primary" onclick="handleExport()" style="width: 100%; margin-bottom: 10px;">Export Data</button>
-        <button class="btn btn-ghost" onclick="handleImport()" style="width: 100%;">Import Data</button>
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text">
+            <div class="setting-label">Updates</div>
+          </div>
+          <div class="setting-control">
+            <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
+          </div>
+        </div>
+        <!-- Top row first: "Updates" on the left with the button that acts on it
+             on the right, then the version directly underneath it, then whatever
+             Check says directly underneath that. The three stack as one column
+             under the heading, so the answer lands where the eye already is
+             rather than in the far corner of the card.
+
+             Still below the row rather than above it: above it, the note
+             appearing would shove the Check button out from under the next tap. -->
+        <p style="color: var(--text-secondary);">
+          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong> ·
+          <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
+             style="color: var(--accent);">Releases</a>
+        </p>
+        <div class="setting-hint setting-hint--result" id="update-note"></div>
       </div>
 
-      <div class="report-card">
-        <h2 class="report-title">Bill Reminders</h2>
-        ${notifySettingsHtml()}
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">Start Over</h2>
+      <div class="report-card report-card--danger">
+        <h2 class="report-title">Danger zone</h2>
         <p style="color: var(--text-secondary); margin-bottom: 15px;">
-          Delete everything and start from empty. There's no undo and no backup
-          of its own — export first if you might want any of it.
+          Delete everything, there's no undo. Export and back up your data first.
         </p>
         <button class="btn btn-danger" onclick="confirmRemoveAllData(this)" style="width: 100%;">Delete all data</button>
-      </div>
-
-      <div class="report-card">
-        <h2 class="report-title">About</h2>
-        <p style="color: var(--text-secondary);">
-          <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong><br>
-          A modern finance tracker<br>
-          All data stored locally<br>
-          No cloud, no login required
-        </p>
       </div>
     </div>
   `;
@@ -2660,84 +4573,138 @@ async function confirmRemoveAllData(btn) {
   // The PINs live in localStorage, not the database, and the people they
   // belonged to are gone — leaving them would lock the app against nobody.
   clearAllPersonPins();
-  // Nothing is put back. There is no seed to re-arm: empty is what empty means,
-  // so "delete all data" and a first launch both land in the same place.
+  // Nothing is put back. There is no seed to re-arm and no default account to
+  // re-create: empty is what empty means, so "delete all data" and a first
+  // launch both land in the same place — an app waiting for its first account.
   closeModal();
   navigate('dashboard');
   showToast(`${result.total} items deleted`);
   await renderPage();
+  // Nothing to remind anyone about any more, and nothing saved, so the goal
+  // top-up dates go too — they describe data that no longer exists.
+  localStorage.removeItem(NOTIFY_GOAL_LAST_KEY);
+  await refreshReminders();
 }
 
 // Bill reminders, and the honest limits of them. There is no backend, so
 // nothing can fire at a set time in the background: the app checks when you put
 // it away and when you pick it up. Said here rather than left for the user to
 // discover, because "it didn't remind me" otherwise reads as a broken feature.
+// One row per reminder, each a single line: title left, control right. The
+// picker only appears while its row is on, so a row that's off is a row with
+// nothing to decide, and the card is three lines tall instead of six.
 function notifySettingsHtml() {
+  // The card is named before anything can return early from it, so the message
+  // about a browser without notifications lands under a heading that says what
+  // the heading would have been rather than under nothing.
+  const head = '<h2 class="report-title">Notifications</h2>';
   if (!notifySupported()) {
-    return '<p class="setting-hint">This browser has no notifications.</p>';
+    return head + '<p class="setting-hint">This browser has no notifications.</p>';
   }
+  // Deliberately no "permission denied" early return here. There was one, and it
+  // replaced the whole card with a paragraph — so the moment asking for
+  // permission came back denied, the three switches vanished rather than
+  // flipping. Re-entering the app rebuilt them from localStorage and they
+  // appeared to work, which is a maddening thing to be handed. A control must
+  // not vanish because a permission is off; the state is said in the line
+  // underneath instead, and the switches stay where they are.
 
-  const on = isNotifyEnabled();
-  const permission = Notification.permission;
-  const leadRow = `
-    <div class="setting-row setting-row--left">
-      <div class="setting-text">
-        <div class="setting-label">Remind me</div>
-      </div>
-      <div class="setting-control">
-        <select class="form-input" id="notify-lead" style="width: auto;" onchange="setNotifyLeadDays(Number(this.value)); renderPage();">
-          ${NOTIFY_LEADS.map((l) => `<option value="${l.value}" ${l.value === getNotifyLeadDays() ? 'selected' : ''}>${l.label}</option>`).join('')}
-        </select>
-      </div>
-    </div>`;
+  const bills = isNotifyEnabled();
+  const spend = isSpendNudgeEnabled();
+  const goals = isGoalNudgeEnabled();
 
-  if (permission === 'denied') {
-    return `
-      <p class="setting-hint">
-        Blocked for this site. Reminders have to be re-allowed in the browser's
-        own settings for this page before Sorted can use them.
-      </p>
-      ${leadRow}
-    `;
-  }
+  // A nudge needs the same permission as bills, so while it's still unasked the
+  // pickers stay hidden rather than offering a time that can't be honoured.
+  const needsPermission = !notifyIsNative() && Notification.permission !== 'granted';
+
+  const sw = (on, label, action) => `
+    <button class="switch" role="switch" aria-checked="${on}" aria-label="${label}"
+            onclick="${action}"></button>`;
+  // The picker is always rendered, and only greyed out while its row is off.
+  //
+  // It used to appear and disappear with the switch, which meant the switch
+  // itself moved: a row was [label][picker][switch] while on and [label][switch]
+  // while off, so turning Bills off slid the switch left out from under a finger
+  // still resting on it. Three rows whose controls all shift is a strong
+  // candidate for "the toggles are crossed" — and it is why the control had to
+  // go somewhere even with the row off. A disabled dropdown keeps the layout
+  // fixed, and shows the setting you'd get if you switched the row on.
+  const picker = (id, options, handler, aria, enabled) => `
+    <select class="form-input form-input--mini" id="${id}" aria-label="${aria}"
+            ${enabled ? '' : 'disabled'} onchange="${handler}">${options}</select>`;
+
+  const leadOptions = NOTIFY_LEADS.map((l) =>
+    `<option value="${l.value}"${l.value === getNotifyLeadDays() ? 'selected' : ''}>${l.label}</option>`).join('');
+  const timeOptions = NOTIFY_TIMES.map((t) =>
+    `<option value="${t.value}"${t.value === getNotifyTime() ? 'selected' : ''}>${t.label}</option>`).join('');
+  const cadenceOptions = NOTIFY_GOAL_CADENCES.map((c) =>
+    `<option value="${c.value}"${c.value === goalNudgeCadence().value ? 'selected' : ''}>${c.label}</option>`).join('');
 
   return `
-    <div class="setting-row">
+    ${head}
+    <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
       <div class="setting-text">
-        <div class="setting-label">Remind me about bills</div>
-        <div class="setting-hint">${on
-          ? 'When a bill is coming due or already overdue'
-          : 'A system notification, on a phone only while Sorted is closed'}</div>
+        <div class="setting-label">Bills due</div>
       </div>
       <div class="setting-control">
-        <button class="switch" role="switch" aria-checked="${on}" aria-label="Remind me about bills"
-                onclick="toggleNotifications(this)"></button>
+        ${picker('notify-lead', leadOptions, 'changeNotifyLead(Number(this.value))', 'Remind me', bills && !needsPermission)}
+        ${sw(bills, 'Remind me about bills due', 'toggleBillsReminders(this)')}
       </div>
     </div>
-    ${on ? leadRow : ''}
-    ${on ? `<p class="setting-hint" style="margin-top: 12px;">
-      There's no server, so nothing can arrive at a set time on its own. Sorted
-      checks when you close it and when you open it again — install it to your
-      home screen and notifications will reach you.
-    </p>` : ''}
+
+    <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
+      <div class="setting-text">
+        <div class="setting-label">Spending (daily)</div>
+      </div>
+      <div class="setting-control">
+        ${picker('notify-spend-time', timeOptions, 'changeNotifyTime(this.value)', 'Remind me at', spend && !needsPermission)}
+        ${sw(spend, 'Remind me to record spending', "toggleNudge('spend', this)")}
+      </div>
+    </div>
+
+    <div class="setting-row setting-row--inline setting-row--tight setting-row--nowrap">
+      <div class="setting-text">
+        <div class="setting-label">Savings goal</div>
+      </div>
+      <div class="setting-control">
+        ${picker('notify-goal-cadence', cadenceOptions, 'changeGoalCadence(this.value)',
+                 'Remind me every', goals && !needsPermission)}
+        ${sw(goals, 'Remind me when a goal goes untouched', "toggleNudge('goal', this)")}
+      </div>
+    </div>
+
   `;
 }
 
-async function toggleNotifications(switchEl) {
-  if (isNotifyEnabled()) {
-    disableNotifications();
-    renderPage();
-    return;
+// `toggleBillsReminders` and `changeNotifyTime` used to be defined here as well
+// as in notify.js. app.js loads last, so its declarations silently replaced the
+// ones in notify.js — including the fix for the switch that would not repaint,
+// because this copy repainted *after* two bridge calls instead of before them.
+// Bills reminders therefore looked stuck on; toggling a different row forced a
+// repaint that finally showed the truth, which is exactly how it was reported.
+//
+// Only one definition of a name may exist across these files. There is a test
+// for that, because nothing else in the build catches it.
+
+async function changeNotifyLead(days) {
+  setNotifyLeadDays(days);
+  await scheduleAllReminders();
+}
+
+async function changeGoalCadence(value) {
+  setGoalNudgeCadence(value);
+  await scheduleAllReminders();
+}
+
+// Turning everything off. Called from "Delete all data" as well, because a
+// wiped database with three alarms pending would start reminding someone about
+// bills they no longer have.
+async function refreshReminders() {
+  try {
+    await scheduleAllReminders();
+  } catch (err) {
+    console.error('Could not reschedule reminders:', err);
   }
-  const result = await enableNotifications();
-  if (result === 'on') {
-    showToast('Bill reminders on');
-  } else if (result === 'denied') {
-    showToast('Notifications blocked for this site');
-  } else {
-    showToast('This browser has no notifications');
-  }
-  renderPage();
 }
 
 // Two marks rather than two words. "Set PIN" and "Remove" are wide enough that
@@ -2760,33 +4727,105 @@ const BIN_SVG = `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"
 function peopleSettingsHtml() {
   const people = [...peopleCache.values()];
   const current = getCurrentPersonId();
+  // No passcode, no keypad: the icons go grey rather than staying bright. A
+  // bright control that does nothing is worse than a greyed one that says why.
+  const passcodeOn = isPasscodeSet();
   const rows = people.map((p) => `
-    <div class="setting-row setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
         <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
       </div>
       <div class="setting-control">
-        <button class="btn btn-icon-sq" aria-label="${hasPersonPin(p.id) ? 'Change' : 'Set'} ${escapeHTML(p.name)}'s PIN"
+        <button class="btn btn-icon-sq${passcodeOn ? '' : ' btn-icon-sq--off'}"
+                aria-label="${hasPersonPin(p.id) ? 'Change' : 'Set'} ${escapeHTML(p.name)}'s PIN"
                 title="${hasPersonPin(p.id) ? 'Change PIN' : 'Set PIN'}"
-                onclick="openPersonPinModal('${p.id}')">${KEYPAD_SVG}</button>
+                ${passcodeOn ? `onclick="openPersonPinModal('${p.id}')"` : 'aria-disabled="true"'}>${KEYPAD_SVG}</button>
         <button class="btn btn-icon-sq" aria-label="Remove ${escapeHTML(p.name)}"
-                title="Remove" onclick="removePersonFromSettings('${p.id}', this)">${BIN_SVG}</button>
+                title="Remove" onclick="removePersonFromSettings('${p.id}')">${BIN_SVG}</button>
       </div>
     </div>`).join('');
 
+  // A title and a line saying why anyone would use it. The card had neither, so
+  // it opened straight into a list of names with only "Add someone" to explain
+  // what the list was for — which is a list of people and not obviously a
+  // setting.
+  //
+  // The passcode is at the bottom rather than in a card of its own, because it
+  // belongs to this feature: it is the switch for these very icons, and a card
+  // across the page from them could not say so.
   return `
+    <h2 class="report-title">People</h2>
+    <p style="color: var(--text-secondary); margin-bottom: 12px;">Track who is spending, paying bills and saving. Set a pin per person - this will lock the app and automatically assign them to items.</p>
     ${rows}
-    <div class="setting-row setting-row--add setting-row--inline setting-row--tight">
+    <div class="setting-row setting-row--add setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label setting-label--title">Add someone</div>
+        <div class="setting-label">Add someone</div>
       </div>
       <div class="setting-control">
         <input type="text" class="form-input" id="new-person-name" placeholder="Name" maxlength="40" style="width: 118px;">
         <button class="btn btn-primary" onclick="addPersonFromSettings()">Add</button>
       </div>
     </div>
-    ${people.length === 0 ? '<p class="setting-hint" style="margin-top: 12px;">Until you add anyone, entries are marked as Anyone\'s.</p>' : ''}
+    ${passcodeBlockHtml()}
   `;
+}
+
+/* The passcode, which is now a switch for the PINs above.
+   --------------------------------------------------------------------------
+   There is no app-wide passcode any more. Two keys that both locked the app and
+   meant different things could not be told apart by anyone using them, so there
+   is one switch and one kind of key. With it off there is no lock and the icons
+   are greyed out; with it on, each person's PIN unlocks the app to them.
+
+   "Lock after" and "Lock now" belong here too, because they are the lock's
+   timing and there is nowhere else they could go.
+   ------------------------------------------------------------------------ */
+function passcodeBlockHtml() {
+  const on = isPasscodeSet();
+  return `
+    <div class="setting-row setting-row--inline setting-row--tight passcode-row">
+      <div class="setting-text">
+        <div class="setting-label">Passcode</div>
+      </div>
+      <div class="setting-control">
+        <button class="switch" role="switch" aria-checked="${on}"
+                aria-label="${on ? 'Turn the passcode off' : 'Turn the passcode on'}"
+                onclick="togglePasscodeFromSettings(this)"></button>
+      </div>
+    </div>
+    ${isLockEnabled() ? `
+      <div class="setting-block">
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text"><div class="setting-label">Lock after</div></div>
+          <div class="setting-control">
+            <select class="form-input" id="lock-timeout" style="width: auto;"
+                    onchange="setLockTimeoutMinutes(Number(this.value))">
+              ${LOCK_TIMEOUTS.map((t) => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="setting-row setting-row--inline setting-row--tight">
+          <div class="setting-text"><div class="setting-label">Lock now</div></div>
+          <div class="setting-control">
+            <button class="btn btn-ghost" onclick="lockApp()">Lock</button>
+          </div>
+        </div>
+      </div>` : ''}
+  `;
+}
+
+// Turning it on needs somebody to have a PIN first, and saying so is the whole
+// job: the switch would otherwise flip and then nothing would happen, because
+// the lock only arms once a person holds a key.
+async function togglePasscodeFromSettings() {
+  const on = !isPasscodeSet();
+  if (!setPasscodeEnabled(on)) {
+    showToast('Set someone’s PIN first');
+    await renderPage();
+    return;
+  }
+  await renderPage();
+  showToast(on ? 'Passcode on — Sorted will ask for a PIN' : 'Passcode off');
 }
 
 // A person's PIN: the app passcode still opens the app, and this switches it to
@@ -2831,7 +4870,7 @@ async function savePersonPin(personId) {
   if (problem === 'taken') {
     const taker = await isPersonPinTaken(first, personId);
     return showFormError(
-      taker === PIN_TAKEN_BY_APP ? 'That’s the app passcode' : `That’s ${personById(taker)?.name || 'someone else'}’s PIN`,
+      `That’s ${personById(taker)?.name || 'someone else'}’s PIN`,
       'person-pin-new');
   }
   if (problem) return showFormError('That PIN could not be saved', 'person-pin-new');
@@ -2878,19 +4917,27 @@ async function addPersonFromSettings() {
 
 // Two-step confirm, like every other destructive action in the app (no native
 // dialogs). The first tap rewrites itself to say what will happen.
-async function removePersonFromSettings(id, btn) {
+// Destroying a person used to be a two-tap confirm that shoved a sentence into
+// the space the icon occupied, stretching the row and looking broken. It asks in
+// a dialog with a red button, the same shape as every other destructive
+// question in the app.
+async function removePersonFromSettings(id) {
   const person = personById(id);
   if (!person) return;
-  if (btn.dataset.confirming !== '1') {
-    btn.dataset.confirming = '1';
-    btn.textContent = 'Their entries stay — remove?';
-    setTimeout(() => {
-      btn.dataset.confirming = '';
-      btn.textContent = 'Remove';
-    }, 5000);
-    return;
-  }
+  openModal(`Remove ${escapeHTML(person.name)}?`, `
+    <p class="form-label">This removes their ability to be a filter or tag (spending, bills, savings, accounts, income and reports).</p>
+    <div class="form-row" style="gap: 10px; margin-top: 14px;">
+      <button class="btn btn-ghost" style="flex: 1;" onclick="closeModal()">Keep</button>
+      <button class="btn btn-danger" style="flex: 1;" onclick="confirmRemovePersonFromSettings('${id}')">Remove</button>
+    </div>
+  `);
+}
+
+async function confirmRemovePersonFromSettings(id) {
+  const person = personById(id);
+  if (!person) return;
   await removePerson(id);
+  closeModal();
   showToast(`${person.name} removed`);
   await renderPage();
 }
@@ -2924,291 +4971,18 @@ function themeSegment() {
   </div>`;
 }
 
-function passcodeSettings() {
-  // "Lock after" and "Lock now" belong to the app lock, not to the app
-  // passcode specifically — with someone's PIN set the app locks either way,
-  // and hiding these would leave the idle timeout unreachable while the app is
-  // in fact locking.
-  const lockBlock = isLockEnabled() ? `
-    <div class="setting-block">
-      <div class="setting-row setting-row--left">
-        <div class="setting-text">
-          <div class="setting-label">Lock after</div>
-        </div>
-        <div class="setting-control">
-          <select class="form-input" id="lock-timeout" style="width: auto;" onchange="setLockTimeoutMinutes(Number(this.value))">
-            ${LOCK_TIMEOUTS.map(t => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
-          </select>
-        </div>
-      </div>
-      <div class="setting-row setting-row--left">
-        <div class="setting-text">
-          <div class="setting-label">Lock now</div>
-        </div>
-        <div class="setting-control">
-          <button class="btn btn-ghost" onclick="lockApp()">Lock</button>
-        </div>
-      </div>
-    </div>
-  ` : '';
-
-  // The switch sits beside the card's own heading. Repeating it as a second
-  // labelled row underneath meant the same fact stated twice, and the
-  // explanation was long enough to push everything below it down a screen.
-  const row = (label, hint) => `
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label setting-label--title">Passcode</div>
-        ${hint ? `<div class="setting-hint">${hint}</div>` : ''}
-      </div>
-      <div class="setting-control">
-        ${isPasscodeSet()
-          ? `<button class="switch" role="switch" aria-checked="true" aria-label="Remove passcode"
-                   onclick="confirmRemovePasscode(this)"></button>`
-          : `<button class="switch" role="switch" aria-checked="false" aria-label="Set a passcode"
-                   onclick="openPasscodeSetup()"></button>`}
-      </div>
-    </div>`;
-
-  return row() + lockBlock;
-}
-
-// Passcode setup is a modal rather than a field on the page: the toggle is the
-// only entry point, and a form that appears under a switch you just tapped
-// reads as a glitch.
-function openPasscodeSetup() {
-  openModal('Set a passcode', `
-    <p class="form-label">4 to 8 digits. You'll need it every time the app locks.</p>
-    <div class="form-group">
-      <label class="form-label" for="passcode-new">New passcode</label>
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="form-input"
-             id="passcode-new" autocomplete="new-password" placeholder="••••">
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="passcode-confirm">Confirm passcode</label>
-      <input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" class="form-input"
-             id="passcode-confirm" autocomplete="new-password" placeholder="••••">
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="passcode-timeout">Lock after</label>
-      <select class="form-input" id="passcode-timeout">
-        ${LOCK_TIMEOUTS.map(t => `<option value="${t.value}" ${t.value === getLockTimeoutMinutes() ? 'selected' : ''}>${t.label}</option>`).join('')}
-      </select>
-    </div>
-    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="savePasscodeSetup()">Save passcode</button>
-  `);
-}
-
-async function savePasscodeSetup() {
-  const first = normalisePasscode(document.getElementById('passcode-new').value);
-  const second = normalisePasscode(document.getElementById('passcode-confirm').value);
-
-  if (first.length < 4) return showFormError('Use at least 4 digits', 'passcode-new');
-  if (first !== second) return showFormError('Those two don’t match', 'passcode-confirm');
-
-  // Every PIN shares one length, because the lock screen's keypad submits on
-  // its own and has to know the length up front. Changing it now would strand
-  // every PIN already set, so it has to be refused rather than silently
-  // breaking them — remove the PINs first, then set the new length.
-  if (anyPersonPins() && isPasscodeSet() && first.length !== getPasscodeLength()) {
-    return showFormError(
-      `People's PINs are ${getPasscodeLength()} digits. Remove them first to change that.`, 'passcode-new');
-  }
-
-  await setPasscode(first);
-  setLockTimeoutMinutes(Number(document.getElementById('passcode-timeout').value));
-  closeModal();
-  showToast('Passcode on — Sorted will ask for it next time');
-  renderPage();
-}
-
-// Turning the passcode off needs a deliberate second tap, same as Delete in
-// the item form: one mis-tap shouldn't drop someone's lock screen.
-function confirmRemovePasscode(switchEl) {
-  if (switchEl.dataset.confirming !== '1') {
-    switchEl.dataset.confirming = '1';
-    switchEl.setAttribute('aria-label', 'Tap again to remove the passcode');
-    switchEl.title = 'Tap again to remove';
-    const row = switchEl.closest('.setting-text');
-    if (row) {
-      const hint = row.querySelector('.setting-hint');
-      if (hint) hint.textContent = 'Tap again to remove';
-    }
-    setTimeout(() => {
-      switchEl.dataset.confirming = '';
-      switchEl.setAttribute('aria-label', 'Remove passcode');
-      switchEl.removeAttribute('title');
-      renderPage();
-    }, 4000);
-    return;
-  }
-  clearPasscode();
-  // Removing the app passcode does not unlock the app if people still have
-  // PINs, and the toast above would otherwise imply that it did.
-  showToast(anyPersonPins() ? 'Passcode removed — people’s PINs still lock it' : 'Passcode removed');
-  renderPage();
-}
-
-// Modal Forms
-/* How often a recurring item repeats
-   --------------------------------------------------------------------------
-   Stored as `frequency` on the item: 'monthly' or 'annually', or absent for a
-   one-off. The older boolean `recurring` is still read and written, because
-   every store on a device already holds rows that predate this and nothing
-   should be rewritten to suit it — `recurring: true` with no frequency means
-   monthly, which is exactly how those items behaved before.
-
-   What the frequency buys is the future. A bill is only ever stored with the
-   date it's *currently* due, so stepping forward through the months used to
-   show nothing at all after the current one. A recurring item now projects its
-   own next occurrences into the months on screen, up to a year ahead.
-   ------------------------------------------------------------------------ */
-
-const RECURRING_HORIZON_MONTHS = 12;
-
-const FREQUENCY_CHOICES = [
-  { value: 'no', label: 'No' },
-  { value: 'monthly', label: 'Yes, monthly' },
-  { value: 'annually', label: 'Yes, annually' }
-];
-
-// Monthly is the fallback for anything that was already flagged recurring.
-function frequencyOf(item) {
-  if (item.frequency === 'monthly' || item.frequency === 'annually') return item.frequency;
-  return item.recurring === true ? 'monthly' : null;
-}
-
-function isRecurring(item) {
-  return frequencyOf(item) !== null;
-}
-
-// The ISO date this item would land on in the month on screen, or null if it
-// doesn't land there. Day-of-month is preserved and clamped to the target
-// month's length, so the 31st still means "the 31st" except where there isn't
-// one, exactly as the stored roll-forward already does.
-function occurrenceInMonth(startDate, frequency, viewDate) {
-  if (!startDate || !frequency) return null;
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startDate);
-  if (!m) return null;
-  const startYear = Number(m[1]);
-  const startMonth = Number(m[2]);
-  const startDay = Number(m[3]);
-
-  const gap = (viewDate.getFullYear() - startYear) * 12 + (viewDate.getMonth() + 1 - startMonth);
-  if (gap < 0) return null;                                   // the month is behind the item
-  if (gap === 0) return startDate;                            // the item's own month
-  if (frequency === 'annually' && gap % 12 !== 0) return null;
-  if (gap > RECURRING_HORIZON_MONTHS) return null;            // nothing projected a year out
-
-  const year = viewDate.getFullYear();
-  const month = viewDate.getMonth() + 1;
-  const lastDay = new Date(year, month, 0).getDate();
-  return localISO(new Date(year, month - 1, Math.min(startDay, lastDay)));
-}
-
-// The projected rows for a month: one per recurring item that lands here and
-// isn't already stored here. The "isn't already stored" part is what stops a
-// bill showing twice — paying a recurring bill rolls its stored date forward
-// into the very month we're projecting, so without that check the paid bill
-// and its own projection would both appear.
-function projectionsForMonth(items, viewDate, dateKey) {
-  const rows = [];
-  for (const item of items) {
-    // A settled bill has no future occurrences. Paying one leaves a fresh row
-    // for the next date, and that row is what projects from then on — so
-    // projecting the settled bill as well put the same occurrence in the month
-    // twice, once real and once as a forecast.
-    if (item.paid === true) continue;
-    const frequency = frequencyOf(item);
-    if (!frequency) continue;
-    const stored = item[dateKey];
-    const occurrence = occurrenceInMonth(stored, frequency, viewDate);
-    if (!occurrence || occurrence === stored) continue;
-    rows.push({
-      ...item,
-      [dateKey]: occurrence,
-      id: null,
-      projected: true
-    });
-  }
-  return rows;
-}
-
-/* Income
-   --------------------------------------------------------------------------
-   The only thing that arrives rather than leaves. It exists so the forecast has
-   a real "in" side — until this, the cashflow chart's income column was
-   transfers between your own accounts, which is the same money counted twice.
-
-   Salary, sale and other are categories rather than different types of entry:
-   the form and the forecast treat all three identically, and the category is
-   there so "how much of this was a one-off sale" is answerable later without
-   another field.
-   -------------------------------------------------------------------------- */
-
-const INCOME_CATEGORIES = [
-  ['salary', 'Salary'],
-  ['sale', 'Sale'],
-  ['other', 'Other']
-];
-
-function incomeCategoryLabel(value) {
-  const found = INCOME_CATEGORIES.find(([v]) => v === value);
-  return found ? found[1] : 'Other';
-}
-
-async function addIncome(entry) {
-  return addItem('income', entry);
-}
-
-async function removeIncome(id) {
-  await deleteItem('income', id);
-}
-
-// The repeat toggle offers the opposite of what its label currently says, so
-// tapping it changes the label. Three things made that read as broken rather
-// than as a confirmation: the button grew from 89px to 142px and slid sideways
-// under the thumb; a full re-render four seconds later replaced every row on
-// the page; and the "you have tapped this once" flag lived on the button
-// element, so anything else that re-rendered silently threw the offer away.
-// The state is here instead, the button reserves the width of its longest
-// label, and the timer only touches this one button.
-let incomeRepeatPending = null;
-let incomeRepeatTimer = null;
-
-function incomeRepeatLabel(item) {
-  const recurring = !!item.frequency;
-  if (incomeRepeatPending === item.id) return recurring ? 'Stop repeating' : 'Repeat monthly';
-  return recurring ? 'Monthly' : 'One-off';
-}
-
-async function toggleIncomeRecurring(id, btn) {
-  const item = await getItem('income', id);
-  if (!item) return;
-  clearTimeout(incomeRepeatTimer);
-  if (incomeRepeatPending === id) {
-    incomeRepeatPending = null;
-    await updateItem('income', { ...item, frequency: item.frequency ? null : 'monthly' });
-    renderPage();
-    return;
-  }
-  incomeRepeatPending = id;
-  btn.textContent = incomeRepeatLabel(item);
-  incomeRepeatTimer = setTimeout(() => {
-    if (incomeRepeatPending !== id) return;
-    incomeRepeatPending = null;
-    const row = btn.closest('.item-row');
-    const again = row && row.querySelector('.btn-frequency');
-    // Only if it's still on screen: the row may have been re-rendered or the
-    // page changed, and writing to a detached node achieves nothing.
-    if (again && document.body.contains(again)) again.textContent = incomeRepeatLabel(item);
-  }, 4000);
-}
-
 // The categories offered, in the order they're meant to be scanned. Bills get
 // the same list as spend: a bill is spending that hasn't happened yet, and two
 // lists meant the same word could break down differently in Reports.
-const CATEGORIES = ['Utilities', 'Motor', 'Entertainment', 'Shopping', 'General', 'Travel', 'One-Off'];
+//
+// Groceries, Eating out, Health and Home were added because a receipt can
+// actually tell them apart, which the original six could not express: a
+// supermarket, a restaurant and a pharmacy were all "Shopping" or "General".
+// Values are free text on the item, so adding here changes nothing about
+// anything already filed — `categoryOptionsHtml` keeps a stored value that is
+// off this list offered, so an old "Food" stays editable rather than being
+// quietly rewritten to the first option.
+const CATEGORIES = ['Groceries', 'Eating out', 'Health', 'Home', 'Utilities', 'Motor', 'Entertainment', 'Shopping', 'Travel', 'One-Off', 'General'];
 
 // Savings goals are a separate list: they're savings for a purpose, not a
 // purchase, so "Utilities" or "Motor" never fit one. Reports breaks savings
@@ -3220,10 +4994,38 @@ const SAVINGS_CATEGORIES = ['Holiday', 'Car', 'Christmas', 'One-Off', 'Other'];
 // "Mortgage" would show the select falling back to its first option, and
 // pressing Save would quietly rewrite the category — the dropdown would change
 // real data just because the list changed.
+//
+// A blank first row, so "no category yet" is a state the form can be in. The
+// select used to open on its first real option, which meant saving without
+// touching it filed the entry under that one — and it is also what lets a
+// receipt fill the category in: something has to be empty for a suggestion to
+// be a suggestion rather than an overwrite.
 function categoryOptionsHtml(extra, list = CATEGORIES) {
   const current = extra && String(extra);
   const options = current && !list.includes(current) ? [current, ...list] : list;
-  return options.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+  const blank = current ? '' : '<option value="">Not set</option>';
+  return blank + options.map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`).join('');
+}
+
+// A figure for an <input type="number">. Setting one from a Number drops the
+// zero: `input.value = 10.2` puts "10.2" in the box, so £10.20 read as 10.2 and
+// an amount you had typed yourself came back without its second decimal. The
+// input keeps "10.20" when it is given a string, so that is what it is given.
+// Accounts that carry the last four digits of a card, read fresh. Kept as a
+// function rather than read from the cache because the editor is the thing that
+// sets the number and it has to be current by the time a receipt is read.
+async function getAccountsWithCardLast4() {
+  const accounts = await getAll('accounts');
+  return accounts.filter((a) => a.cardLast4);
+}
+
+function moneyInput(n) {
+  // A blank stays blank. Number('') is 0 and Number(null) is 0, so without this
+  // an empty field would come back as "0.00" and an untouched balance would
+  // read as a deliberate nought.
+  if (n === '' || n === null || n === undefined) return '';
+  const v = Number(n);
+  return Number.isFinite(v) ? v.toFixed(2) : '';
 }
 
 function buildForm(type, editId = null, existingCategory = null) {
@@ -3246,6 +5048,23 @@ function buildForm(type, editId = null, existingCategory = null) {
   // removed after the entry is saved.
   const receiptHtml = (type === 'spend' || type === 'due') ? `
       <div class="receipt-panel" id="receipt-panel"></div>` : '';
+
+  // The title box offers what this user has already called things. A household
+  // writes "Electricity bill" eleven times a year, and typing it every time is
+  // the slowest step in recording it. The suggestions come from their own rows
+  // on this device — no network, and nothing searched on a server that does not
+  // exist.
+  //
+  // The panel underneath is built by initTitleSuggestions once the modal is up,
+  // because the list is read from the stores and this function is not async.
+  const titleInput = (label, placeholder) => `
+      <div class="form-group">
+        <label class="form-label" for="form-title">${label}</label>
+        <input type="text" class="form-input" id="form-title" placeholder="${placeholder}"
+               autocomplete="off" spellcheck="false" role="combobox"
+               aria-expanded="false" aria-controls="title-suggestions" aria-autocomplete="list">
+        <div class="title-suggestions" id="title-suggestions" hidden></div>
+      </div>`;
   // Who this entry belongs to. Pre-filled with whoever is currently using the
   // app, so the common case is no taps at all and the odd case (adding a
   // bill in someone else's name) is one dropdown away.
@@ -3268,6 +5087,9 @@ function buildForm(type, editId = null, existingCategory = null) {
           <option value="">Not from an account</option>
           ${[...accountsCache.values()].map((a) => `<option value="${a.id}">${escapeHTML(a.name)}</option>`).join('')}
         </select>
+        ${(type === 'spend' || type === 'due') && accountsCache.size === 0
+          ? `<p class="setting-hint" style="color: var(--danger); margin: 6px 0 0;">An account must be added, go to Savings > + Account</p>`
+          : ''}
       </div>`;
   const deleteBtn = editId == null ? '' : `
       <button class="btn btn-danger" style="width: 100%; margin-top: 10px;" onclick="deleteItemFromModal('${type}', ${idArg}, this)">Delete</button>`;
@@ -3275,8 +5097,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     spend: `
       ${receiptHtml}
       <div class="form-group">
-        <label class="form-label">Title</label>
-        <input type="text" class="form-input" id="form-title" placeholder="e.g., Electricity bill">
+        ${titleInput('Title', 'e.g., Electricity bill')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -3288,19 +5109,11 @@ function buildForm(type, editId = null, existingCategory = null) {
           <input type="date" class="form-input" id="form-date" value="${localISO()}">
         </div>
       </div>
-      <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Category</label>
-          <select class="form-input" id="form-category">
-            ${categoryOptionsHtml(existingCategory)}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Repeats</label>
-          <select class="form-input" id="form-recurring">
-            ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}">${f.label}</option>`).join('')}
-          </select>
-        </div>
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <select class="form-input" id="form-category">
+          ${categoryOptionsHtml(existingCategory)}
+        </select>
       </div>
       ${personHtml}
       ${accountHtml}
@@ -3309,8 +5122,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     due: `
       ${receiptHtml}
       <div class="form-group">
-        <label class="form-label">Title</label>
-        <input type="text" class="form-input" id="form-title" placeholder="e.g., Mortgage payment">
+        ${titleInput('Title', 'e.g., Mortgage payment')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -3318,7 +5130,7 @@ function buildForm(type, editId = null, existingCategory = null) {
           <input type="number" class="form-input" id="form-amount" step="0.01" min="0">
         </div>
         <div class="form-group">
-          <label class="form-label">Due Date</label>
+          <label class="form-label">Due date</label>
           <input type="date" class="form-input" id="form-dueDate">
         </div>
       </div>
@@ -3330,10 +5142,18 @@ function buildForm(type, editId = null, existingCategory = null) {
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Repeats</label>
-          <select class="form-input" id="form-recurring">
+          <label class="form-label" for="form-recurring">Repeats</label>
+          <select class="form-input" id="form-recurring" onchange="onRepeatChoiceChange()">
             ${FREQUENCY_CHOICES.map((f) => `<option value="${f.value}">${f.label}</option>`).join('')}
           </select>
+          <div id="form-recurring-until" hidden>
+            <label class="form-label" for="form-repeatFrequency">Repeats</label>
+            <select class="form-input" id="form-repeatFrequency">
+              ${REPEAT_PERIODS.map((p) => `<option value="${p.value}">${p.label}</option>`).join('')}
+            </select>
+            <label class="form-label" for="form-repeatUntil" style="margin-top: 10px;">Last date it repeats</label>
+            <input type="date" class="form-input" id="form-repeatUntil">
+          </div>
         </div>
       </div>
       ${personHtml}
@@ -3342,8 +5162,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     `,
     savings: `
       <div class="form-group">
-        <label class="form-label">Goal Name</label>
-        <input type="text" class="form-input" id="form-title" placeholder="e.g., Holiday fund">
+        ${titleInput('Goal name', 'e.g., Holiday fund')}
       </div>
       <div class="form-row">
         <div class="form-group">
@@ -3370,11 +5189,13 @@ function buildForm(type, editId = null, existingCategory = null) {
   return forms[type];
 }
 
-function openAddModal(type) {
+async function openAddModal(type) {
   if (type !== 'spend' && type !== 'due') currentReceipt = null;
   receiptRemoved = false;
   ocrStatusText = '';
+  const suggestions = await titleSuggestions(type);
   openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type));
+  initTitleSuggestions(suggestions);
   // Default to whoever is using the app, rather than making the common case
   // a dropdown trip every time.
   const personEl = document.getElementById('form-person');
@@ -3382,6 +5203,99 @@ function openAddModal(type) {
     personEl.value = getCurrentPersonId();
   }
   if (type === 'spend' || type === 'due') renderReceiptPanel();
+}
+
+// The calendar that "Yes, until this date" opens. Anything else hides it: a
+// control that was there for one choice and stayed for the others is a control
+// nobody trusts.
+// Titles this user has already entered, most used first and most recent first
+// as the tie-break — the box should offer what they type most, not everything
+// alphabetical. Only the type being edited: a bill's history is not a useful
+// answer to "what did I spend on?", and two lists would be two things to learn.
+async function titleSuggestions(type, limit = 50) {
+  if (type !== 'spend' && type !== 'due') return '';
+  const rows = await getAll(type);
+  const seen = new Map();
+  for (const row of rows) {
+    const text = String(row.title || '').trim();
+    if (!text) continue;
+    const entry = seen.get(text) || { n: 0, last: '' };
+    entry.n += 1;
+    const when = row.date || row.dueDate || row.updatedAt || row.createdAt || '';
+    if (when > entry.last) entry.last = when;
+    seen.set(text, entry);
+  }
+  return [...seen.entries()]
+    .sort((a, b) => b[1].n - a[1].n || (b[1].last < a[1].last ? -1 : 1))
+    .slice(0, limit)
+    .map(([text]) => text);
+}
+
+// The panel under the title box. It appears in flow rather than floating over
+// the form, because the modal scrolls (`overflow-y: auto`, 80vh) and an
+// absolutely-positioned list is clipped by the very container it has to appear
+// over. It opens on focus with what is most used and narrows as the user types,
+// so the answer is there to be taken without anyone having to guess the box is
+// a search box.
+//
+// This is done by hand rather than with a datalist: the native popup's
+// behaviour differs between WebView versions, and a suggestion nobody can see
+// is not a suggestion.
+function initTitleSuggestions(titles) {
+  const input = document.getElementById('form-title');
+  const panel = document.getElementById('title-suggestions');
+  if (!input || !panel || !titles.length) return;
+
+  const all = titles;
+  const render = (filter) => {
+    const want = String(filter || '').trim().toLowerCase();
+    const matches = want
+      ? all.filter((t) => t.toLowerCase().includes(want)).slice(0, 8)
+      : all.slice(0, 8);
+    if (!matches.length) { hide(); return; }
+    panel.innerHTML = matches.map((t) => (
+      `<button type="button" class="title-suggestion" role="option"
+               aria-selected="false" data-title="${escapeHTML(t)}">${escapeHTML(t)}</button>`
+    )).join('');
+    panel.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+  };
+  const hide = () => {
+    panel.hidden = true;
+    panel.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+  };
+
+  input.addEventListener('focus', () => render(input.value));
+  input.addEventListener('input', () => render(input.value));
+  panel.addEventListener('click', (e) => {
+    const row = e.target.closest('.title-suggestion');
+    if (!row) return;
+    input.value = row.dataset.title;
+    // No synthetic input event: it would re-run the filter and put the panel
+    // straight back up for the value that was just chosen.
+    hide();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !panel.hidden) { e.stopPropagation(); hide(); }
+  });
+  // A tap anywhere else is a decision to be typing, not choosing.
+  document.addEventListener('pointerdown', (e) => {
+    if (!panel.hidden && !panel.contains(e.target) && e.target !== input) hide();
+  });
+  // Blur waits a beat: the tap that follows it has to reach the button before
+  // the panel goes away, or the first suggestion can never be picked.
+  input.addEventListener('blur', () => setTimeout(hide, 150));
+  // Unclaimed handler, so the panel is available to the tests and to anything
+  // else that opens the same form.
+  input.__titleSuggest = { render, hide };
+}
+
+function onRepeatChoiceChange() {
+  const wrap = document.getElementById('form-recurring-until');
+  const sel = document.getElementById('form-recurring');
+  if (!sel || !wrap) return;
+  wrap.hidden = sel.value !== 'until';
 }
 
 async function openEditModal(type, id) {
@@ -3392,8 +5306,11 @@ async function openEditModal(type, id) {
   currentReceipt = item.receipt || null;
   receiptRemoved = false;
   ocrStatusText = '';
-  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type, id, item.category));
+  const suggestions = await titleSuggestions(type);
+  openModal(`Edit ${type.charAt(0).toUpperCase() + type.slice(1)}`,
+    buildForm(type, id, item.category));
   prefillForm(item);
+  initTitleSuggestions(suggestions);
   if (type === 'spend' || type === 'due') renderReceiptPanel();
 }
 
@@ -3403,19 +5320,29 @@ function prefillForm(item) {
     if (el && val !== undefined && val !== null) el.value = val;
   };
   setVal('form-title', item.title);
-  setVal('form-amount', item.amount);
+  setVal('form-amount', moneyInput(item.amount));
   setVal('form-date', item.date);
   setVal('form-dueDate', item.dueDate);
   setVal('form-category', item.category);
-  setVal('form-current', item.current);
-  setVal('form-target', item.target);
+  setVal('form-current', moneyInput(item.current));
+  setVal('form-target', moneyInput(item.target));
   // Blank is a real answer here: it means "work it out". Null is what an
   // untouched goal stores, and prefill skips nulls, so the field stays empty
   // and the placeholder keeps explaining itself.
   const recurring = document.getElementById('form-recurring');
   // A row that was saved with the old yes/no flag has no frequency, but it
   // still repeats — monthly is what "yes" meant.
-  if (recurring) recurring.value = frequencyOf(item) || 'no';
+  if (recurring) {
+    recurring.value = item.repeatUntil ? 'until' : (frequencyOf(item) || 'no');
+    onRepeatChoiceChange();
+  }
+  // The end date brings its period back with it: an annual bill told to stop in
+  // March is annual until March, and showing "Every month" instead would have
+  // anyone who saved it turn one bill into twelve.
+  const repeatUntil = document.getElementById('form-repeatUntil');
+  if (repeatUntil && item.repeatUntil) repeatUntil.value = item.repeatUntil;
+  const repeatFrequency = document.getElementById('form-repeatFrequency');
+  if (repeatFrequency) repeatFrequency.value = frequencyOf(item) || 'monthly';
   setVal('form-person', item.personId || '');
   setVal('form-account', item.accountId || '');
 }
@@ -3554,12 +5481,47 @@ function setOcrStatus(text) {
   if (el) el.textContent = ocrStatusText;
 }
 
+// Why the read failed, in words that let the next report be specific. The one
+// line used to cover every cause and named none of them, so a deadline that
+// had been reached and a photo that could not be opened both came out as the
+// same sentence about the file — which read as a verdict on the receipt.
+function ocrFailureText(err) {
+  const message = err && err.message ? String(err.message) : '';
+  if (err && err.code === 'ocr-stall') {
+    // Where it stopped is the whole answer: "Preparing the photo" and
+    // "recognizing text 60%" are different faults, and the previous wording
+    // made them one sentence about the file.
+    const at = err.lastStatus ? ` at “${err.lastStatus}”` : '';
+    return `Reading stopped${at} — pick the receipt again.`;
+  }
+  if (/could not read that image/i.test(message)) return 'That photo could not be opened — try a JPEG.';
+  if (/could not render that PDF/i.test(message)) return 'That PDF could not be opened — enter the details manually.';
+  // Anything else now says what it was. The single sentence used to cover every
+  // cause and name none of them, which is why a missing file, a script that
+  // would not load and a dead worker all read as a verdict on the receipt — and
+  // a renaming build looked exactly like an unreadable photo.
+  if (message) return `Reading failed — ${message}`;
+  return 'Could not read that file — enter the details manually.';
+}
+
+// How sure of itself the engine has to be before a sideways photo is left
+// as it is. Measured: a receipt the right way up reads 92-93, the same
+// receipt turned reads 42-44. 65 sits between them.
+//
+// It decides only whether to spend a second read, never which answer to
+// keep: the clearer of the two wins either way, which is what lets it be a
+// conservative number. A receipt in poor light reads low the right way up
+// and still wins the comparison.
+const OCR_TURN_TRUST = 65;
+
 async function ocrPrefill(file) {
   const titleEl = document.getElementById('form-title');
   const amountEl = document.getElementById('form-amount');
   // Spend has form-date (pre-filled with today), bills have form-dueDate
   // (starts empty) — whichever the open form owns gets the receipt date.
   const dateEl = document.getElementById('form-date') || document.getElementById('form-dueDate');
+  const categoryEl = document.getElementById('form-category');
+  const accountEl = document.getElementById('form-account');
 
   try {
     // Store the image first: even if OCR fails or guesses wrong, the photo is
@@ -3571,21 +5533,59 @@ async function ocrPrefill(file) {
     setOcrStatus('Reading receipt…');
     renderReceiptPanel();
 
-    const text = await runOCRWithTimeout(prepared.source, (msg) => setOcrStatus(msg));
+    // A photo taken with the phone held sideways arrives as a landscape frame
+    // and reads as nothing, so it is turned upright first. Which way to turn it
+    // is not in the file, and turning it the wrong way is exactly as useless as
+    // not turning it — so one read buys one direction and the second is only
+    // spent when the engine was unsure of the first. Measured on the same
+    // receipt: right way up 92-93, wrong way up 42-44.
+    //
+    // The threshold only decides whether to *spend* a second read, never which
+    // answer to keep — the better of the two wins either way. That matters,
+    // because a real receipt in poor light can score 30 the right way up, and a
+    // threshold that discarded those would be worse than one that costs an extra
+    // pass.
+    const fromCamera = typeof isPDF !== 'function' || !isPDF(prepared.source);
+    const frame = fromCamera
+      ? await uprightReceiptFrame(prepared.source, 'cw')
+      : { file: prepared.source, turned: false };
+    let text = await runOCRWithTimeout(frame.file, (msg) => setOcrStatus(msg));
+    let kept = lastReadConfidence;
+    if (frame.turned && kept < OCR_TURN_TRUST) {
+      setOcrStatus('That photo is sideways — reading it the other way round…');
+      const other = await uprightReceiptFrame(prepared.source, 'ccw');
+      const otherText = await runOCRWithTimeout(other.file, (msg) => setOcrStatus(msg));
+      if (lastReadConfidence > kept) {
+        // The other way round it is: a clearer read of the same frame.
+        text = otherText;
+        kept = lastReadConfidence;
+      }
+    }
     const title = guessTitleFromText(text);
     const amount = guessAmountFromText(text);
     const date = guessDateFromText(text);
+    const category = guessCategoryFromText(text, title);
+    // The last four digits on the receipt belong to a card, and a card belongs
+    // to an account — so this is the one field a receipt can answer outright.
+    const cardLast4 = guessCardLast4(text);
     if (titleEl && !titleEl.value && title) titleEl.value = title;
-    if (amountEl && !amountEl.value && amount > 0) amountEl.value = amount;
+    if (amountEl && !amountEl.value && amount > 0) amountEl.value = moneyInput(amount);
     // The date fields ship with defaults (today / empty), so unlike title and
     // amount this one is always overwritten when the receipt shows a date.
     if (dateEl && date) dateEl.value = date;
+    // Only ever into an empty category. It is a <select>, so a suggestion that
+    // is wrong costs one tap — the same deal as the title and the amount.
+    if (categoryEl && !categoryEl.value && category) categoryEl.value = category;
+    if (accountEl && !accountEl.value && cardLast4) {
+      const match = (await getAccountsWithCardLast4()).find((a) => a.cardLast4 === cardLast4);
+      if (match) accountEl.value = match.id;
+    }
     setOcrStatus(date
       ? 'Done — check title, amount and date, then save.'
       : 'Done — check title and amount, then save.');
   } catch (err) {
     console.error('OCR failed:', err);
-    setOcrStatus('Could not read that file — enter the details manually.');
+    setOcrStatus(ocrFailureText(err));
   }
 }
 
@@ -3633,7 +5633,6 @@ async function saveItem(type, editId = null) {
   const amount = parseFloat(document.getElementById('form-amount')?.value || document.getElementById('form-current')?.value || 0);
   const target = parseFloat(document.getElementById('form-target')?.value || 0);
   const category = document.getElementById('form-category').value;
-  const repeatChoice = document.getElementById('form-recurring')?.value || 'no';
   const personId = document.getElementById('form-person')?.value || null;
   const accountId = document.getElementById('form-account')?.value || null;
 
@@ -3642,14 +5641,51 @@ async function saveItem(type, editId = null) {
     return;
   }
 
+  // 'Not set' is a real answer, but it is the one category that quietly breaks
+  // every breakdown downstream — a receipt read leaves the field empty now that
+  // the reader suggests one, so the state is common rather than a corner case.
+  // Spend and bills only: a savings goal's category is a label, not a bucket.
+  if ((type === 'spend' || type === 'due') && !category) {
+    showFormError('Pick a category', 'form-category');
+    return;
+  }
+
+  // Spend and bills only move money out of an account, so one has to be
+  // named — "Not from an account" is not an option for them. The message
+  // explains where to create one rather than leaving a blank field to save.
+  if (type === 'spend' || type === 'due') {
+    const allAccounts = await getAll('accounts');
+    if (!accountId) {
+      if (allAccounts.length === 0) {
+        showFormError('An account must be added, go to Savings > + Account', 'form-account');
+      } else {
+        showFormError('Pick an account', 'form-account');
+      }
+      return;
+    }
+  }
+
   const fields = { title, category, personId, accountId };
-  if (type !== 'savings') {
+  // Spend has no Repeats control: what was spent is a one-off by definition,
+  // and a bill is where repetition belongs. Rows saved before that are left
+  // exactly as they are — the field is only written when the form actually
+  // offers the choice, so editing one can't quietly strip its frequency.
+  const repeatField = document.getElementById('form-recurring');
+  if (type !== 'savings' && repeatField) {
+    const choice = repeatField.value;
+    const period = document.getElementById('form-repeatFrequency');
     // `recurring` is kept alongside the frequency so everything that already
     // reads the boolean (the pay-a-bill roll-forward, the recurring filters,
     // the Reports breakdowns) keeps working without a second pass over stored
     // data.
-    fields.frequency = repeatChoice === 'no' ? null : repeatChoice;
-    fields.recurring = repeatChoice !== 'no';
+    fields.frequency = frequencyFromChoice(choice, period ? period.value : null);
+    fields.recurring = choice !== 'no';
+    const repeatUntil = document.getElementById('form-repeatUntil');
+    // The end date is only kept for the choice that owns it. Picking "No" or a
+    // plain period is how someone takes an end date off, and leaving the old
+    // one behind would have the bill keep stopping after they said it doesn't.
+    fields.repeatUntil = (choice === 'until' && repeatUntil && repeatUntil.value)
+      ? repeatUntil.value : null;
   }
   // Written only when the panel actually changed: an edit that leaves it alone
   // leaves the stored image alone (the merge below keeps it), and a removed
@@ -3685,18 +5721,67 @@ async function saveItem(type, editId = null) {
       // version) survive an edit.
       const merged = { ...existing, ...fields, id: editId };
       await updateItem(type, merged);
+      // A recurring bill is one bill held in many months. Changing what the form
+      // chooses about it — its category, or whose it is — on one row and leaving
+      // the rest meant the breakdowns below reported the same bill under two
+      // headings, and each month stepped forward quietly moved money between
+      // them.
+      if (type === 'due') {
+        // A bill is one bill held in many months, and the form chooses two
+        // things about it: what it is and whose it is. Leaving the rest of the
+        // chain on the old answer split one bill across two people or two
+        // headings — "Who Spent What" then showed Sarah paying electricity in
+        // June and nobody in July, which is what "changing a category does not
+        // update future or past items" was costing the reports.
+        const personBefore = existing.personId || null;
+        const personAfter = fields.personId || null;
+        if ((fields.category !== undefined && fields.category !== existing.category)
+            || personBefore !== personAfter) {
+          const title = String(existing.title || '').trim();
+          if (title) {
+            const chain = await getAll('due');
+            for (const row of chain) {
+              if (row.id === editId || String(row.title || '').trim() !== title) continue;
+              const patch = {};
+              if (row.category !== fields.category) patch.category = fields.category;
+              if ((row.personId || null) !== personAfter) patch.personId = personAfter;
+              if (Object.keys(patch).length) await updateItem('due', { ...row, ...patch });
+            }
+          }
+        }
+      }
+      // A goal that rose is money that left an account, and it needs a date:
+      // the goal itself keeps one undated running total, so without this the
+      // Total Money card cannot walk a balance back through the month it asks
+      // about. Only a rise counts — a target edited down is not a withdrawal.
+      if (type === 'savings' && Number(fields.current) > Number(existing.current || 0)) {
+        await recordGoalContribution(editId, Number(fields.current) - Number(existing.current || 0));
+      }
     }
   } else {
     if (type === 'spend') Object.assign(fields, { confirmed: false, paid: false });
 
-    await addItem(type, fields);
+    const newId = await addItem(type, fields);
+    // A goal created with money already in it is a top-up from the day it
+    // existed, and is recorded like any other — so a balance from before that
+    // month adds the whole figure back.
+    if (type === 'savings' && Number(fields.current) > 0) {
+      await recordGoalContribution(newId, Number(fields.current));
+    }
   }
+
+  // A goal that went up is a top-up, which is what the savings nudge counts
+  // days since. Only the figure moving counts — editing a target isn't money.
+  if (type === 'savings') noteGoalSaves([{ id: editId, current: Number.isFinite(amount) ? amount : 0 }]);
 
   currentReceipt = null;
   receiptRemoved = false;
   ocrStatusText = '';
   closeModal();
   renderPage();
+  // The reminders are derived from the database, so anything that writes to it
+  // has to rebuild them. Off the critical path: the page is already up.
+  refreshReminders();
 }
 
 // What counts as "the same bill" when deciding whether a delete should take the
@@ -3722,7 +5807,13 @@ async function confirmDeleteRecurringBill(id) {
   const future = rows.filter((r) => r.paid !== true).length;
   // Built outside the template: a nested backtick inside an interpolation is a
   // syntax error, and this file has found that out twice already.
-  const paidNote = paid === 0 ? 'nothing paid' : paid + ' paid included';
+  //
+  // The paid months are kept, so the note says how many are kept rather than
+  // how many are going. It used to say "1 paid included" inside a sentence about
+  // what gets removed, which read as a count of the casualties.
+  const paidNote = paid === 0
+    ? 'Nothing has been paid yet, so nothing is kept.'
+    : `Keeps the ${paid} ${paid === 1 ? 'month' : 'months'} already paid, so the history is intact.`;
 
   // The old version wrote its question into the Delete button itself, so the
   // button changed width mid-tap and the question was gone by the time you
@@ -3750,7 +5841,7 @@ async function confirmDeleteRecurringBill(id) {
       <span class="choice-text">
         <span class="choice-label">This bill and all recurring versions</span>
         <span class="setting-hint">
-          Removes this and every month of it, ${paidNote}. Nothing is left to project.
+          ${paidNote}
         </span>
       </span>
     </label>
@@ -3783,8 +5874,16 @@ async function deleteRecurringBill(id, wholeSeries) {
   const rows = (await getAll('due')).filter((r) => sameSeries(r, bill));
 
   if (wholeSeries) {
-    for (const row of rows) await deleteItem('due', row.id);
-    showToast(`Removed ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`);
+    // A paid month is a thing that happened, and it is the only record of it:
+    // the money left an account and the row is what says so. Deleting the
+    // series therefore takes the unpaid occurrences and leaves the settled
+    // ones, so the history of having paid this bill survives its own ending.
+    const live = rows.filter((r) => r.paid !== true);
+    for (const row of live) await deleteItem('due', row.id);
+    const kept = rows.length - live.length;
+    showToast(kept > 0
+      ? `Removed ${live.length} and kept ${kept} paid`
+      : `Removed ${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`);
   } else {
     await deleteItem('due', id);
     // Deleting the upcoming occurrence would otherwise end the series silently.
@@ -3793,7 +5892,8 @@ async function deleteRecurringBill(id, wholeSeries) {
     if (bill.paid !== true && frequencyOf(bill) && !alreadyScheduled) {
       await addItem('due', {
         ...bill, paid: false,
-        dueDate: nextDueDate(bill.dueDate, bill.frequency)
+        dueDate: nextDueDate(bill.dueDate, bill.frequency, dueDayValue(bill)),
+        dueDay: dueDayValue(bill)
       });
     }
     showToast('Removed this month only');
@@ -3824,6 +5924,7 @@ async function deleteItemFromModal(type, id, btn) {
   currentReceipt = null;
   closeModal();
   renderPage();
+  refreshReminders();
 }
 
 async function toggleConfirm(type, id) {
@@ -3832,25 +5933,53 @@ async function toggleConfirm(type, id) {
   item.confirmed = !item.confirmed;
   await updateItem(type, item);
   renderPage();
+  refreshReminders();
 }
 
 // Putting a bill back to unpaid. Two shapes have to be handled: a settled row
-// from 2.8.3 onwards, and a payment copy left in Spend by the old model, where
-// undoing means deleting the copy and letting the bill come back.
-async function unpayBill(id) {
-  const bill = await getItem('due', id);
-  if (bill && bill.paid === true) {
-    await updateItem('due', { ...bill, paid: false });
-    showToast('Back to unpaid');
+// from 2.8.3 onwards, where undoing means clearing `paid`, and a payment copy
+// left in Spend by the old model, where undoing means deleting the copy so the
+// bill it paid for comes back as owing.
+//
+// The store has to come from the caller. Both stores use autoIncrement, so a
+// spend row's id and a due row's id can be the same number — looking a
+// pre-2.8.3 payment up in `due` finds whichever unrelated bill happens to share
+// that key and marks *it* unpaid, or finds nothing and the tap does nothing at
+// all. The row already carries the right store; it was being thrown away.
+async function unpayBill(id, store = 'due') {
+  const bill = await getItem(store, id);
+  if (store === 'spend') {
+    // The copy is the payment. Deleting it is what puts the bill back into
+    // what's owing; flipping `paid` instead would leave it as ordinary
+    // spending, which is a different thing entirely.
+    await deleteItem('spend', id);
     await renderPage();
+    refreshReminders();
     return;
   }
-  const twin = (await getAll('spend')).find((s) => s.paid === true && s.dueDate === bill?.dueDate);
+  if (bill && bill.paid === true) {
+    // A settled row from 2.8.3 onwards.
+    await updateItem('due', { ...bill, paid: false });
+    await renderPage();
+    refreshReminders();
+    return;
+  }
+  // A pre-2.8.3 payment: the copy in Spend, and the bill it paid for. Matched
+  // on the title and the amount as well as the date, because two bills can be
+  // due the same day and two bills with the same title are ordinary in a
+  // household with two of a thing. Deleting the wrong one's payment would
+  // silently move money between accounts, which is the one failure mode this
+  // file's own comments refuse to tolerate.
+  const twin = (await getAll('spend')).find((s) => s.paid === true
+    && s.dueDate === bill?.dueDate
+    && String(s.title || '').trim() === String(bill?.title || '').trim()
+    && Number(s.amount) === Number(bill?.amount));
   if (twin) {
     await deleteItem('spend', twin.id);
-    showToast('Back to unpaid');
+
   }
   await renderPage();
+  refreshReminders();
 }
 
 async function markPaid(id) {
@@ -3862,54 +5991,643 @@ async function markPaid(id) {
   // A recurring bill rolls to the same day next month, so it leaves the list
   // that was just tapped. Say where it went — otherwise a payment looks like
   // it deleted the bill.
-  if (item.recurring) {
-    showToast(`Paid — next due ${formatDate(nextDueDate(item.dueDate))}`);
-  } else {
-    showToast('Marked as paid');
-  }
   renderPage();
+  refreshReminders();
 }
 
 // Cap plugins are registered lazily on first use — registerPlugin() warns
 // if called twice for the same name.
-let capExport = null;
+let capSave = null;
 
-async function exportData() {
-  const data = await getAllData();
-  const json = JSON.stringify(data, null, 2);
-  const name = `sorted-backup-${localISO()}.json`;
+// Three formats, because one file could not do all three jobs and the app was
+// shipping only the one that does none of them well. A raw JSON dump restores
+// perfectly and is unreadable to anybody holding it, which is the wrong shape
+// for "Export Data" on a phone: what came back was a file that opened as a wall
+// of braces, so it read as not working.
+//
+//   .json  the real backup — this is the only one Import accepts, and the only
+//          one that can put a phone back after a reset
+//   .csv   one row per movement, opens in Excel, Numbers and Google Sheets
+//   .txt   readable anywhere, no app required
+const EXPORT_KINDS = {
+  json: { ext: 'json', mime: 'application/json', suffix: 'backup-' },
+  csv: { ext: 'csv', mime: 'text/csv', suffix: '' },
+  txt: { ext: 'txt', mime: 'text/plain', suffix: '' },
+  pdf: { ext: 'pdf', mime: 'application/pdf', suffix: '' }
+};
 
-  // Capacitor/Android: the WebView can't process blob: downloads (the click
-  // silently does nothing), so write the backup into the app cache and hand
-  // it to the system share sheet via the FileProvider instead.
-  if (window.Capacitor && window.Capacitor.isNativePlatform()) {
-    try {
-      if (!capExport) {
-        capExport = {
-          fs: window.Capacitor.registerPlugin('Filesystem'),
-          share: window.Capacitor.registerPlugin('Share'),
-        };
-      }
-      const { uri } = await capExport.fs.writeFile({ path: name, data: json, directory: 'CACHE' });
-      await capExport.share.share({ title: 'Sorted backup', files: [uri] });
-      showToast('Backup ready to share');
-    } catch (err) {
-      const msg = String((err && err.message) || err);
-      if (/cancel/i.test(msg)) return; // backing out of the share sheet isn't an error
-      console.error('Export failed:', err);
-      showToast(`Export failed: ${msg}`);
+// The stores worth listing as rows, and what each is called once it is a line.
+// Accounts, transfers and people are structure rather than movements: they
+// belong in the backup and mean nothing in a spreadsheet.
+const EXPORT_ROWS = [
+  { store: 'spend', kind: 'Spent' },
+  { store: 'due', kind: 'Bill' },
+  { store: 'income', kind: 'Income' }
+];
+
+// A CSV cell: quoted when it carries a comma or a quote, and neutralised when
+// it starts with something a spreadsheet would execute.
+//
+// Excel, Numbers and Google Sheets all read a leading =, +, - or @ as a formula
+// and evaluate it on open, so a cell holding `=cmd|'/c calc'!A1` runs calc. The
+// untrusted text here is first-party: a receipt's title is OCR'd, and the app's
+// own worked example of a mangled logo is `=EEootaliz iss` — which then lands
+// in the title field and into this file. An imported backup can put any string
+// in a title or a category, and sanitizeItem does not restrict it.
+//
+// A leading apostrophe is the standard neutraliser: the spreadsheet shows the
+// text as typed and evaluates nothing. Only the first character is touched, so
+// an amount of -12.99 is left alone — it does not start the cell.
+function csvCell(v) {
+  let text = String(v == null ? '' : v);
+  if (/^[=+\-@\t\r]/.test(text)) text = "'" + text;
+  return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+}
+
+// The amount column. A figure is never a formula, and a leading apostrophe would
+// make a spreadsheet read the whole column as text — which is a worse outcome
+// than the one this is guarding against. So the neutraliser is skipped and only
+// the quoting rule applies: a refund of -12.99 must arrive as a number.
+function csvNumber(v) {
+  const text = String(v == null ? '' : v);
+  return /[",\n\r]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+}
+
+function exportMovementRows(data) {
+  const out = [];
+  for (const spec of EXPORT_ROWS) {
+    for (const item of (Array.isArray(data[spec.store]) ? data[spec.store] : [])) {
+      if (!item) continue;
+      const person = item.personId ? personById(item.personId) : null;
+      out.push({
+        kind: spec.kind,
+        date: String(item.date || item.dueDate || ''),
+        title: String(item.title || ''),
+        category: String(item.category || ''),
+        amount: Number(item.amount) || 0,
+        paid: spec.store === 'due' ? (item.paid === true ? 'yes' : 'no') : '',
+        person: person ? String(person.name) : ''
+      });
     }
-    return;
+  }
+  // Oldest first, so a spreadsheet sorted by nothing at all still reads as a
+  // statement rather than as the order IndexedDB happened to return.
+  return out.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+function exportCsv(data) {
+  // Quoted where a value could contain the separator. Getting this wrong is how
+  // a spreadsheet silently turns one column into three, so it is quoted even
+  // when it does not strictly need to be.
+  const cell = csvCell;
+  const head = ['Date', 'Type', 'Description', 'Category', 'Amount', 'Paid', 'Person'];
+  const lines = exportMovementRows(data).map((r) =>
+    [r.date, r.kind, r.title, r.category, r.amount.toFixed(2), r.paid, r.person]
+    .map((v, i) => (i === 4 ? csvNumber(v) : cell(v))).join(','));
+  // BOM: without it Excel on Windows reads the first column as mojibake and
+  // every date as text.
+  return '\ufeff' + head.join(',') + '\n' + lines.join('\n') + (lines.length ? '\n' : '');
+}
+
+function exportText(data) {
+  const rows = exportMovementRows(data);
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+  const out = ['Sorted', 'Exported ' + localISO(), ''];
+
+  let month = '';
+  let totals = {};
+  const flush = () => {
+    if (!month) return;
+    const parts = Object.keys(totals)
+      .filter((k) => totals[k] !== 0)
+      .map((k) => k + ' ' + currency(totals[k]));
+    out.push('  ' + parts.join('   '));
+    out.push('');
+  };
+
+  for (const r of rows) {
+    const key = r.date
+      ? MONTHS[Number(r.date.slice(5, 7)) - 1] + ' ' + r.date.slice(0, 4)
+      : 'Undated';
+    if (key !== month) { flush(); month = key; totals = {}; out.push(key); }
+    const when = r.date ? r.date.slice(8, 10) + ' ' + MONTHS[Number(r.date.slice(5, 7)) - 1].slice(0, 3) : '--';
+    const who = r.person ? ' (' + r.person + ')' : '';
+    const paid = r.paid === 'no' ? ' [due]' : '';
+    out.push('  ' + when + '  ' + r.kind.padEnd(7) + ' '
+      + (r.title + who + paid).padEnd(34) + currency(r.amount));
+    totals[r.kind] = (totals[r.kind] || 0) + r.amount;
+  }
+  flush();
+  if (rows.length === 0) out.push('Nothing recorded yet.');
+  return out.join('\n') + '\n';
+}
+
+/* Save Report
+   ===========
+   The Reports page is seven cards and a period chip, and until now the only way
+   to keep any of it was a screenshot — which cannot be summed, sorted or read
+   by a spreadsheet.
+
+   All three formats come out of one structure, built below rather than scraped
+   from the DOM, for two reasons. A rendered card is HTML and two of the three
+   formats are not. And a page that has been scrolled out of view, or a chart
+   that has not been drawn yet, must not be able to change what a saved report
+   says: the figures are read from the stores the page itself reads them from.
+
+   Rows are label / detail / amount / text / pct. `text` is a right-hand cell
+   that is not a number — Patterns shows "up £12 (+18%)", which is a sentence
+   rather than a figure — and `pct` is the share a bar would be drawn from, set
+   only on the four cards that draw bars on screen. */
+
+const REPORT_PERIODS = { all: 'All time', month: 'This month', year: 'This year' };
+
+const REPORT_KINDS = {
+  csv: { ext: 'csv', mime: 'text/csv' },
+  txt: { ext: 'txt', mime: 'text/plain' },
+  pdf: { ext: 'pdf', mime: 'application/pdf' }
+};
+
+function reportSection(title, opts) {
+  const o = opts || {};
+  return {
+    title,
+    note: o.note || '',
+    total: o.total === undefined ? null : o.total,
+    rows: o.rows || [],
+    chart: o.chart || null
+  };
+}
+
+async function buildReport() {
+  const [spendItems, dueItems, savingsItems] = await Promise.all([
+    getAll('spend'), getAll('due'), getAll('savings')
+  ]);
+  const balances = await accountBalances();
+  // The forecast already on screen, so a report cannot disagree with the chart
+  // it is a report of — it carries whatever range and step-back are selected.
+  const forecast = lastForecast || await buildForecast();
+
+  // Every range stops at today. "All time" used to mean every date in the store,
+  // which after the Bills page started materialising future occurrences meant
+  // next month's rent was reported as money already owed. A range that says
+  // "All time" means everything so far.
+  const todayIso = localISO(new Date());
+  const inRange = (dateStr) => {
+    if (String(dateStr || '') > todayIso) return false;
+    if (reportRange === 'month') return isThisMonth(dateStr);
+    if (reportRange === 'year') return isThisYear(dateStr);
+    return true;
+  };
+
+  const rangedSpend = spendingHistory(spendItems).filter(i => inRange(i.date));
+  const rangedDue = billHistory(dueItems, spendItems).filter(i => inRange(i.dueDate));
+  const shift = categoryShift(spendItems, dueItems);
+
+  const totalSpend = rangedSpend.reduce((sum, i) => sum + i.amount, 0);
+  const totalDue = rangedDue.reduce((sum, i) => sum + i.amount, 0);
+  const totalSavings = savingsItems.reduce((sum, i) => sum + i.current, 0);
+
+  const series = forecast.series || [];
+  const last = series.length ? series[series.length - 1] : null;
+  const fmtDay = (d) => (d && d.toLocaleDateString)
+    ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+    : String(d || '');
+
+  const forecastRows = [];
+  const span = forecast.days || [];
+  if (span.length) {
+    forecastRows.push({
+      label: 'Window',
+      detail: `${fmtDay(span[0])} \u2013 ${fmtDay(span[span.length - 1])}`
+    });
+  }
+  if (last) {
+    forecastRows.push({ label: 'Total money', detail: last.label, amount: last.balance });
+    forecastRows.push({ label: 'Total est costs', detail: last.label, amount: last.costs });
+    forecastRows.push({ label: 'Spent', detail: last.label, amount: last.spend });
+    forecastRows.push({ label: 'Bills', detail: last.label, amount: last.bills });
+  }
+  forecastRows.push({
+    label: 'Monthly spending',
+    detail: forecast.overridden ? 'set by you' : `${FORECAST_SPEND_MONTHS} month average`,
+    amount: forecast.spendEstimate
+  });
+  if (forecast.low) {
+    forecastRows.push({ label: 'Lowest balance in window', detail: forecast.low.label, amount: forecast.low.balance });
+  }
+  if (forecast.short) {
+    forecastRows.push({ label: 'Shortfall', detail: forecast.short.label, amount: forecast.short.balance });
   }
 
-  // Web: browser download.
-  const blob = new Blob([json], { type: 'application/json' });
+  const catRows = (totals, grand) => Object.entries(totals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, amt]) => ({ label: name, amount: amt, pct: grand > 0 ? amt / grand : 0 }));
+
+  // Who Spent What, worked out the same way the card does: two stores, one
+  // bucket each, sorted by what the two add to. Reading it off the screen would
+  // mean re-deriving it from a stacked bar.
+  const personBuckets = new Map();
+  const bucketOf = (id) => {
+    if (!personBuckets.has(id)) personBuckets.set(id, { spend: 0, due: 0 });
+    return personBuckets.get(id);
+  };
+  rangedSpend.forEach(i => { bucketOf(i.personId || '').spend += i.amount; });
+  rangedDue.forEach(i => { bucketOf(i.personId || '').due += i.amount; });
+  const people = [...personBuckets.entries()]
+    .map(([id, t]) => ({ id, ...t, total: t.spend + t.due }))
+    .filter(t => t.total > 0)
+    .sort((a, b) => b.total - a.total);
+  const peopleTotal = people.reduce((n, r) => n + r.total, 0);
+  const personRows = people.map((r) => {
+    const p = personById(r.id);
+    return {
+      label: p ? p.name : 'Anyone',
+      detail: `Spent ${currency(r.spend)} \u00b7 Bills ${currency(r.due)}`,
+      amount: r.total,
+      pct: peopleTotal > 0 ? r.total / peopleTotal : 0
+    };
+  });
+
+  const patternRows = (shift.enough ? shift.rows : []).map(r => ({
+    label: r.cat,
+    detail: categoryMovement(r),
+    amount: r.delta,
+    text: categoryMovement(r)
+  }));
+
+  const goalRows = savingsItems.map(g => ({
+    label: g.title,
+    detail: `${currency(g.current)} of ${currency(g.target)}`,
+    amount: g.current,
+    pct: g.target > 0 ? Math.min(1, g.current / g.target) : 0
+  }));
+
+  return {
+    period: REPORT_PERIODS[reportRange] || REPORT_PERIODS.all,
+    generated: localISO(),
+    sections: [
+      reportSection('Forecast', { rows: forecastRows, chart: series }),
+      reportSection('Spending by category', {
+        total: totalSpend, rows: catRows(groupByCategory(rangedSpend, 'amount'), totalSpend)
+      }),
+      reportSection('Bills by category', {
+        total: totalDue, rows: catRows(groupByCategory(rangedDue, 'amount'), totalDue)
+      }),
+      reportSection('Who spent what', { total: peopleTotal, rows: personRows }),
+      reportSection('Where your money is', {
+        total: balances.reduce((n, b) => n + b.balance, 0),
+        rows: balances.map(b => ({ label: b.name, amount: b.balance }))
+      }),
+      reportSection('Patterns', {
+        note: shift.enough
+          ? `days 1-${shift.days} of this month and last \u00b7 `
+            + `${currency(shift.thisMonth)} this month, ${currency(shift.lastMonth)} last`
+          : 'Nothing recorded this month yet.',
+        rows: patternRows
+      }),
+      reportSection('Savings by goal', { total: totalSavings, rows: goalRows })
+    ]
+  };
+}
+
+// The left-hand cell: the label, qualified by its detail where there is one.
+// Patterns overrides `text` instead, so its movement sentence is not printed
+// twice — once in brackets and once at the right.
+function reportLeft(row) {
+  return row.detail && !row.text ? `${row.label} (${row.detail})` : row.label;
+}
+
+function reportRight(row) {
+  return row.text != null ? row.text
+    : (row.amount == null ? '' : currency(row.amount));
+}
+
+function reportCsv(rep) {
+  const cell = csvCell;
+  // Card, Item and Detail are text; Amount is the last column and must stay numeric.
+  const line = (a, b, c, d) => [cell(a), cell(b), cell(c), csvNumber(d)].join(',');
+  const out = [line('Card', 'Item', 'Detail', 'Amount')];
+  for (const sec of rep.sections) {
+    out.push(line(sec.title, '', '', sec.total == null ? '' : Number(sec.total).toFixed(2)));
+    for (const r of sec.rows) {
+      out.push(line(sec.title, r.label, r.detail || '',
+        r.amount == null ? '' : Number(r.amount).toFixed(2)));
+    }
+  }
+  // BOM, for the same reason exportCsv carries one: Excel on Windows otherwise
+  // reads the first column as mojibake.
+  return '\ufeff' + out.join('\n') + '\n';
+}
+
+function reportText(rep) {
+  const out = ['Sorted report', `${rep.period}  \u00b7  exported ${rep.generated}`, ''];
+  const L = 38;
+  const A = 16;
+  for (const sec of rep.sections) {
+    out.push(sec.title);
+    if (sec.note) out.push('  ' + sec.note);
+    for (const r of sec.rows) {
+      const right = reportRight(r);
+      out.push('  ' + reportLeft(r).padEnd(L, ' ') + (right ? right.padStart(A) : ''));
+    }
+    if (sec.total != null) {
+      out.push('  ' + 'Total'.padEnd(L, ' ') + currency(sec.total).padStart(A));
+    }
+    out.push('');
+  }
+  return out.join('\n').replace(/\n+$/, '\n');
+}
+
+// The card totals sit above their rows in the PDF as in the app — a heading
+// with its figure on the same line — because a total under a breakdown reads as
+// a separate thing to check rather than as the number the heading was quoting.
+function reportPdf(rep) {
+  const doc = PdfDoc();
+  const ink = [0.13, 0.13, 0.16];
+  const sub = [0.44, 0.44, 0.5];
+  const hair = [0.83, 0.83, 0.87];
+  const rule = [0.6, 0.6, 0.66];
+  const barMax = doc.w - doc.ml - doc.mr;
+
+  pdfText(doc, 'Sorted report', { size: 21, bold: true, color: ink, lead: 26 });
+  pdfText(doc, rep.period, { size: 12, color: [0.24, 0.55, 0.99], lead: 18 });
+  pdfText(doc, 'Exported ' + rep.generated, { size: 9, color: sub, lead: 15 });
+  pdfSpace(doc, 5);
+  pdfRule(doc, { color: rule, width: 1 });
+  pdfSpace(doc, 16);
+
+  const rowLead = 15;
+
+  for (const sec of rep.sections) {
+    // A heading is never the last thing on a page: pdfNeed opens a new one only
+    // when something would actually be drawn, so the check covers the heading,
+    // its note, the rule and the first row beneath — not just the heading.
+    pdfNeed(doc, 70);
+    pdfText(doc, sec.title, { size: 13, bold: true, color: ink, lead: 18 });
+
+    if (sec.total != null) {
+      // Drawn on the heading's own line, which means putting the cursor back
+      // where the heading started and then forward again by the same amount.
+      const y0 = doc.y - 18;
+      doc.y = y0;
+      pdfText(doc, currency(sec.total),
+        { size: 13, bold: true, right: doc.w - doc.mr, color: ink, lead: 18 });
+      doc.y = y0 + 18;
+    }
+    if (sec.note) pdfText(doc, sec.note, { size: 8.5, color: sub, lead: 13 });
+    pdfRule(doc, { color: hair, width: 0.6 });
+    pdfSpace(doc, 8);
+
+    if (sec.chart) pdfChart(doc, sec.chart, { height: 150 });
+
+    let drawn = 0;
+    for (const r of sec.rows) {
+      const right = reportRight(r);
+      const amtW = right ? pdfWidthOf(right, 9.5, false) : 0;
+      const barH = r.pct != null ? 4 : 0;
+      const gapH = r.pct != null ? 3 : 0;
+      pdfNeed(doc, rowLead + barH + gapH);
+      const y0 = doc.y;
+      pdfText(doc, reportLeft(r), {
+        size: 9.5, color: ink, lead: rowLead,
+        maxWidth: barMax - amtW - 14
+      });
+      doc.y = y0;
+      if (right) pdfText(doc, right, { size: 9.5, color: ink, right: doc.w - doc.mr, lead: rowLead });
+      doc.y = y0 + rowLead;
+      if (barH) {
+        pdfBar(doc, doc.ml, doc.y, Math.max(1.5, barMax * Math.min(1, r.pct)), barH,
+          sec.title === 'Bills by category' ? [0.94, 0.27, 0.27]
+            : sec.title === 'Savings by goal' ? [0.13, 0.77, 0.37]
+              : [0.24, 0.55, 0.99]);
+        doc.y += barH + gapH;
+      }
+      drawn++;
+    }
+
+    if (drawn === 0 && !sec.note) {
+      pdfText(doc, 'No data yet', { size: 9.5, color: sub, lead: 15 });
+    }
+    pdfSpace(doc, 18);
+  }
+  return doc;
+}
+
+// The same rows as the CSV and text exports, typeset. One month per block with
+// its own totals, because that is how the text export already reads and a PDF
+// that disagreed with it about grouping would look like a different dataset.
+function dataPdf(data) {
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
+    'August', 'September', 'October', 'November', 'December'];
+  const rows = exportMovementRows(data);
+  const doc = PdfDoc();
+  const ink = [0.13, 0.13, 0.16];
+  const sub = [0.44, 0.44, 0.5];
+  const hair = [0.83, 0.83, 0.87];
+  const rule = [0.6, 0.6, 0.66];
+
+  pdfText(doc, 'Sorted', { size: 21, bold: true, color: ink, lead: 26 });
+  pdfText(doc, 'Exported ' + localISO(), { size: 9, color: sub, lead: 15 });
+  pdfSpace(doc, 5);
+  pdfRule(doc, { color: rule, width: 1 });
+  pdfSpace(doc, 16);
+
+  // Column edges, held fixed so the dates and the figures line up down the
+  // page instead of depending on the longest title in each month.
+  const xKind = doc.ml + 40;
+  const xTitle = doc.ml + 92;
+  const xAmount = doc.w - doc.mr;
+  const titleMax = xAmount - 74 - xTitle;
+
+  let month = '';
+  const totals = {};
+  const flush = () => {
+    const parts = Object.keys(totals)
+      .filter((k) => totals[k] !== 0)
+      .map((k) => `${k} ${currency(totals[k])}`);
+    if (!parts.length) return;
+    pdfRule(doc, { color: hair, width: 0.6 });
+    pdfSpace(doc, 3);
+    pdfText(doc, parts.join('   '), { size: 8.5, bold: true, color: sub, lead: 14 });
+    pdfSpace(doc, 14);
+  };
+
+  for (const r of rows) {
+    const key = r.date
+      ? `${MONTHS[Number(r.date.slice(5, 7)) - 1]} ${r.date.slice(0, 4)}`
+      : 'Undated';
+    if (key !== month) {
+      flush();
+      month = key;
+      for (const k of Object.keys(totals)) delete totals[k];
+      pdfNeed(doc, 46);
+      pdfText(doc, key, { size: 12, bold: true, color: ink, lead: 18 });
+      pdfSpace(doc, 6);
+    }
+    const when = r.date
+      ? `${r.date.slice(8, 10)} ${MONTHS[Number(r.date.slice(5, 7)) - 1].slice(0, 3)}`
+      : '--';
+    const who = r.person ? ` (${r.person})` : '';
+    const paid = r.paid === 'no' ? ' [due]' : '';
+    pdfNeed(doc, 14);
+    const y0 = doc.y;
+    pdfText(doc, when, { size: 9, color: sub, x: doc.ml, lead: 14 });
+    doc.y = y0;
+    pdfText(doc, r.kind, { size: 9, color: ink, x: xKind, lead: 14 });
+    doc.y = y0;
+    pdfText(doc, r.title + who + paid, { size: 9, color: ink, x: xTitle, lead: 14, maxWidth: titleMax });
+    doc.y = y0;
+    pdfText(doc, currency(r.amount), { size: 9, color: ink, right: xAmount, lead: 14 });
+    doc.y = y0 + 14;
+    totals[r.kind] = (totals[r.kind] || 0) + r.amount;
+  }
+  flush();
+  if (rows.length === 0) pdfText(doc, 'Nothing recorded yet.', { size: 9.5, color: sub, lead: 15 });
+  return doc;
+}
+
+async function buildExport(kind) {
+  const data = await getAllData();
+  if (kind === 'csv') return { text: exportCsv(data), mime: EXPORT_KINDS.csv.mime };
+  if (kind === 'txt') return { text: exportText(data), mime: EXPORT_KINDS.txt.mime };
+  if (kind === 'pdf') {
+    return {
+      text: pdfBase64(pdfBytes(dataPdf(data))),
+      mime: EXPORT_KINDS.pdf.mime,
+      base64: true
+    };
+  }
+  return { text: JSON.stringify(data, null, 2), mime: EXPORT_KINDS.json.mime };
+}
+
+// One file, saved where the person chooses to put it.
+//
+// The Android path exists because a WebView cannot act on a blob: URL — the
+// click it needs to follow is silently ignored — so the bytes have to leave
+// through native code. They go through Android's own save screen
+// (ACTION_CREATE_DOCUMENT): no permission, no share sheet full of apps, and the
+// file lands under a name and in a folder they have picked themselves.
+//
+// `base64` marks the payload as already-encoded bytes. A PDF is not text, and
+// handing it over as text would corrupt every byte above 0x7F the moment it was
+// coerced into a string, so the plugin decodes it on the way to disk. The
+// browser path does the same decode by hand, because a Blob built from a
+// string is UTF-8 and a PDF is not.
+//
+// Resolves false when the save screen was dismissed — that is a choice, not a
+// failure, and the caller must not go claiming a file exists because of it.
+async function deliverExport(name, text, mime, base64) {
+  if (window.Capacitor && window.Capacitor.isNativePlatform()) {
+    if (!capSave) capSave = window.Capacitor.registerPlugin('SaveFile');
+    // Encoding travels with the payload because it is what tells the plugin
+    // text from bytes. The previous Filesystem route read a *missing* value as
+    // "this is base64" and decoded it, which is why a plain CSV or backup died
+    // on the way to disk with "the 'writeFile' input parameters aren't valid".
+    const res = await capSave.save({
+      name: name,
+      mime: mime,
+      data: text,
+      encoding: base64 ? 'base64' : 'utf8'
+    });
+    return !(res && res.cancelled);
+  }
+  const bytes = base64 ? base64ToBytes(text) : text;
+  const blob = new Blob([bytes], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+  return true;
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function exportData(kind = 'json') {
+  const spec = EXPORT_KINDS[kind] || EXPORT_KINDS.json;
+  const name = `sorted-${spec.suffix}${localISO()}.${spec.ext}`;
+  try {
+    const { text, mime, base64 } = await buildExport(kind);
+    const saved = await deliverExport(name, text, mime, base64);
+    if (!saved) return; // they backed out of the save screen — nothing to report
+    showToast('Saved ' + name);
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    if (/cancel/i.test(msg)) return; // backing out of the share sheet isn't an error
+    console.error('Export failed:', err);
+    showToast(`Export failed: ${msg}`);
+  }
+}
+
+// The menu itself. Offered rather than buried behind a setting because the three
+// formats answer three different questions and nobody should have to guess
+// which one they were going to get.
+function openExportModal() {
+  // No explanation line here, and no .json button: the backup is its own
+  // control on the card now, and the one thing worth saying about these three
+  // formats is said on the Save Report caption rather than repeated.
+  openModal('Export data', `
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('csv')">Spreadsheet (.csv)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('txt')">Plain text (.txt)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runExport('pdf')">PDF (.pdf)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="closeModal()">Cancel</button>`);
+}
+
+// Save Report's own menu. Separate from the Export menu because they are
+// different questions with different answers: Export is everything stored, Save
+// Report is this page for the period selected above it.
+function openSaveReportModal() {
+  openModal('Save report', `
+    <button class="btn btn-primary" style="width: 100%; margin-top: 10px;"
+            onclick="runSaveReport('csv')">Spreadsheet (.csv)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runSaveReport('txt')">Plain text (.txt)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="runSaveReport('pdf')">PDF (.pdf)</button>
+    <button class="btn btn-ghost" style="width: 100%; margin-top: 10px;"
+            onclick="closeModal()">Cancel</button>`);
+}
+
+async function runSaveReport(kind) {
+  closeModal();
+  const spec = REPORT_KINDS[kind] || REPORT_KINDS.csv;
+  const period = REPORT_PERIODS[reportRange] || REPORT_PERIODS.all;
+  // The period is in the name because a file called "report.pdf" is only useful
+  // once, and the third one alongside it is otherwise impossible to tell apart.
+  const name = `sorted-report-${period.toLowerCase().replace(/\s+/g, '-')}-`
+    + `${localISO()}.${spec.ext}`;
+  try {
+    const rep = await buildReport();
+    let text;
+    let base64 = false;
+    if (kind === 'txt') text = reportText(rep);
+    else if (kind === 'pdf') { text = pdfBase64(pdfBytes(reportPdf(rep))); base64 = true; }
+    else text = reportCsv(rep);
+    const saved = await deliverExport(name, text, spec.mime, base64);
+    if (!saved) return; // they backed out of the save screen — nothing to report
+    showToast('Saved ' + name);
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    if (/cancel/i.test(msg)) return;
+    console.error('Save report failed:', err);
+    showToast(`Save failed: ${msg}`);
+  }
+}
+
+async function runExport(kind) {
+  closeModal();
+  await exportData(kind);
 }
 
 async function importData() {
@@ -3992,6 +6710,11 @@ async function commitImport(mode, btn) {
   if (!data) return;
 
   try {
+    // A replace wipes the stores one at a time, so a failure halfway leaves the
+    // database as a mixture of the file's and the old data — and the user reads
+    // "Import failed" with half their history gone. Keep a copy first; the
+    // Restore button in the Sync card is how it comes back.
+    if (mode === 'replace') stashReplacedCopy(await buildReplacedCopy());
     const { imported, skipped, dropped } = await importDataToDB(data, mode);
     if (mode === 'replace') {
       showToast(`Replaced with ${imported} item${imported === 1 ? '' : 's'}${dropped ? ` (${dropped} unusable skipped)` : ''}`);
@@ -4005,13 +6728,17 @@ async function commitImport(mode, btn) {
   }
 }
 
-function showToast(message) {
+// A caller can ask for longer than the default. A permission problem that
+// disappears after three and a half seconds is one you can't act on, so the
+// messages that name a fix stay up long enough to read.
+function showToast(message, ms) {
   const el = document.getElementById('toast');
   if (!el) return;
   el.textContent = message;
   el.classList.add('show');
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => el.classList.remove('show'), 3500);
+  const duration = Number(ms) > 0 ? Number(ms) : 3500;
+  showToast.timer = setTimeout(() => el.classList.remove('show'), duration);
 }
 
 // Row actions — one delegated listener instead of inline handlers, so no
@@ -4024,7 +6751,7 @@ document.getElementById('content').addEventListener('click', (e) => {
     const id = action.dataset.id;
     if (action.dataset.action === 'toggle') toggleConfirm(action.dataset.type, id);
     else if (action.dataset.action === 'paid') markPaid(id);
-    else if (action.dataset.action === 'unpaid') unpayBill(id);
+    else if (action.dataset.action === 'unpaid') unpayBill(id, action.dataset.type || 'due');
     else if (action.dataset.action === 'receipt') viewItemReceipt(action.dataset.type, id);
     else if (action.dataset.action === 'edit-receipt') openEditModal(action.dataset.type, id);
     return;
@@ -4062,10 +6789,14 @@ async function viewItemReceipt(type, id) {
 // Initialize
 applyTheme();
 initLock();
-// Cash has to exist before anything renders, including on an install that was
-// seeded before accounts were a thing.
-ensureDefaults();
+// The first launch says, once, what the app does with the data you put in it.
+maybeShowPrivacyNotice();
 // Only starts anything if notifications were already switched on, so the
 // common case costs one function call and no listeners.
 initNotifications();
 renderPage();
+// Automatic sync from the first load, not from the first visit to Settings. The
+// delay lets the initial render finish before a pull replaces the data and asks
+// for a second one; with nothing configured both calls return immediately.
+startAutoSyncPoll();
+scheduleAutoSync(1200);
