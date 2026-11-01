@@ -728,9 +728,19 @@ async function runSuite(driverBase) {
   const stableOrder = await run(`
     window.__orderSaved = { spend: await getAll('spend'), due: await getAll('due') };
     for (const t of ['spend', 'due']) for (const it of await getAll(t)) await deleteItem(t, it.id);
+    // Seed a month far enough ahead that none of its bills is overdue yet, and
+    // one with 31 days so the day-31 bill is a real date rather than a roll
+    // into the next month. A hard-coded October made this test answer
+    // differently as soon as the calendar passed it.
+    const base = new Date();
+    base.setDate(1);
+    base.setMonth(base.getMonth() + 2);
+    while (new Date(base.getFullYear(), base.getMonth() + 1, 0).getDate() < 31) {
+      base.setMonth(base.getMonth() + 1);
+    }
     const seed = async (title, amount, freq, day) => {
       await addItem('due', { title, amount, frequency: freq, category: 'Utilities',
-        dueDate: '2026-10-' + day });
+        dueDate: localISO(new Date(base.getFullYear(), base.getMonth(), day)) });
     };
     await seed('Rent', 900, 'monthly', '05');
     await seed('Electric', 85, 'monthly', '12');
@@ -738,7 +748,7 @@ async function runSuite(driverBase) {
     await seed('Water', 45, 'monthly', '31');
     await seed('Insurance', 412, 'annually', '25');
     const visit = async (offset) => {
-      dueViewedDate = new Date(2026, 9 + offset, 1);
+      dueViewedDate = new Date(base.getFullYear(), base.getMonth() + offset, 1);
       currentPage = 'due';
       await renderPage();
       await new Promise((r) => setTimeout(r, 700));
@@ -2192,9 +2202,12 @@ async function runSuite(driverBase) {
   console.log('\n# category bars: Entertainment is not squeezed');
   const bars = await run(`
     // "Entertainment" was the longest name in the sample data, which is gone.
+    // Dated no later than today: Reports stops at today, so a bill seeded on
+    // the 3rd of the month did not exist in the report on the 1st or 2nd.
     const now = new Date();
+    const day = Math.min(3, now.getDate());
     await addItem('spend', { title: 'Longest name', amount: 11,
-      date: localISO(new Date(now.getFullYear(), now.getMonth(), 3)),
+      date: localISO(new Date(now.getFullYear(), now.getMonth(), day)),
       category: 'Entertainment' });
     currentPage='reports'; renderPage();
     await new Promise(r => setTimeout(r, 400));
@@ -2210,31 +2223,46 @@ async function runSuite(driverBase) {
 
   console.log('\n# bills due: month toggle');
   const due = await run(`
-    currentPage='due'; renderPage();
+    // A bill that exists only in the next month, so the forward step has
+    // something that cannot be there now. It is removed again before the block
+    // ends, so the fixture is left as it was found.
+    const now = new Date();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const marker = await addItem('due', { title: 'Next month marker', amount: 123.45,
+      category: 'Utilities', dueDate: localISO(nextMonth) });
+    dueViewedDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    currentPage='due'; await renderPage();
     await new Promise(r => setTimeout(r, 400));
     const label = document.querySelector('.month-label').textContent;
+    const beforeTitles = [...document.querySelectorAll('.item-row .item-title')]
+      .map((e) => e.textContent.trim());
     const before = document.querySelectorAll('.item-row').length;
     const total = document.querySelector('.stat-card-value').textContent;
     stepMonth('due', 1);
     await new Promise(r => setTimeout(r, 400));
     const nextLabel = document.querySelector('.month-label').textContent;
+    const afterTitles = [...document.querySelectorAll('.item-row .item-title')]
+      .map((e) => e.textContent.trim());
     const after = document.querySelectorAll('.item-row').length;
     const nextTotal = document.querySelector('.stat-card-value').textContent;
+    await deleteItem('due', marker);
     // Spending has its own month cursor.
     stepMonth('spend', 1);
     await new Promise(r => setTimeout(r, 300));
     stepMonth('spend', -1);
-    return { label, before, total, nextLabel, after, nextTotal };
+    return { label, before, total, nextLabel, after, nextTotal, beforeTitles, afterTitles };
   `);
   check('month label present', /^[A-Za-z]+ \d{4}$/.test(due.label), due);
   check('stepping forward changes the label', due.label !== due.nextLabel, due);
   // The row *count* is not the thing that proves the list is month-scoped: an
   // overdue bill legitimately rides along in later months, so two months can
-  // hold the same number of rows while holding different bills. What has to
-  // change is which bills they are, and the month's own total is the cheapest
-  // honest signal of that.
+  // hold the same number of rows while holding different bills. A one-off bill
+  // written into the next month is proof: it can only be there if the page
+  // really moved, and its amount moves the total with it.
   check('stepping forward shows a different month of bills',
-    due.total !== due.nextTotal, due);
+    !due.beforeTitles.includes('Next month marker')
+      && due.afterTitles.includes('Next month marker')
+      && due.total !== due.nextTotal, due);
   await run(`stepMonth('due', -1);`);
   await sleep(400);
 
@@ -3137,6 +3165,11 @@ async function runSuite(driverBase) {
         end.querySelector('.row-actions').getBoundingClientRect().right
         - value.getBoundingClientRect().right) <= 1,
       metaLines,
+      // The date labels the checks below expect, formed here because only the
+      // page has formatDate and localISO. Hard-coding "2 Oct 2026" made these
+      // two checks pass in October and fail the moment the month turned.
+      date2: formatDate(iso(m,2)),
+      date4: formatDate(iso(m,4)),
       spendHasRowEnd: document.querySelectorAll('.item-row .row-end').length
     };
   `);
@@ -3148,14 +3181,14 @@ async function runSuite(driverBase) {
   check('the icons sit below the amount', icons.actionsBelowValue === true, icons);
   check('and share its right edge', icons.actionsRightAligned === true, icons);
   check('every Spend row carries them in a .row-end', icons.spendHasRowEnd >= 2, icons);
-  check('the date is one line', icons.metaLines[0].text === '2 Oct 2026'
+  check('the date is one line', icons.metaLines[0].text === icons.date2
     && !icons.metaLines[0].hasLozenge, icons);
   check('the category is the next line',
     icons.metaLines[1].text === 'General', icons);
   check('and a repeating entry puts its lozenge there',
     icons.recLines[1].text === 'Health Monthly' && icons.recLines[1].hasLozenge, icons);
   check('the lozenge is not on the date line',
-    !icons.recLines[0].hasLozenge && icons.recLines[0].text === '4 Oct 2026', icons);
+    !icons.recLines[0].hasLozenge && icons.recLines[0].text === icons.date4, icons);
 
   console.log('\n# this round: the bill says when');
   const billWhen = await run(`
@@ -3339,10 +3372,15 @@ async function runSuite(driverBase) {
     const bals = await accountBalances();
     const f = await buildForecast(3);
     const pts = f.series;
+    // The first point is the end of its day, so when the window begins today
+    // (the 1st) it already carries one day of the goals' plans and of the
+    // spending estimate. Adding the day's own terms back reads the balance the
+    // window started from, which is the figure these checks are about.
+    const atStart = (p) => p.balance + p.savings + p.bills + p.spend - p.income;
     return {
       accountBalance: Math.round(bals[0].balance),
       opening: Math.round(f.opening),
-      start: Math.round(pts[0].balance),
+      start: Math.round(atStart(pts[0])),
       end: Math.round(pts[pts.length - 1].balance),
       days: pts.length
     };
@@ -4315,13 +4353,19 @@ async function runSuite(driverBase) {
     await addItem('accounts', { name: 'Cash', type: 'cash', opening: 90 });
     await loadAccounts();
     const accs = await getAll('accounts');
+    const now = new Date();
+    // Dated in the month on screen, and never in the future: Reports stops at
+    // today, so five days at the start of a hard-coded October left these
+    // cards empty once the calendar moved on.
+    const dayOf = (i) => Math.min(i, now.getDate());
     const cats = ['Groceries', 'Eating out', 'Home', 'Travel'];
     for (let i = 1; i <= 5; i++) {
+      const day = dayOf(i);
       await addItem('spend', { title: 'Item ' + i, amount: 40 + i * 9,
-        date: localISO(new Date(2026, 9, i)), category: cats[i % cats.length],
+        date: localISO(new Date(now.getFullYear(), now.getMonth(), day)), category: cats[i % cats.length],
         accountId: accs[i % 2].id });
       await addItem('due', { title: 'Bill ' + i, amount: 30 + i,
-        dueDate: localISO(new Date(2026, 9, i)), frequency: 'monthly', category: 'Utilities' });
+        dueDate: localISO(new Date(now.getFullYear(), now.getMonth(), day)), frequency: 'monthly', category: 'Utilities' });
     }
     currentPage = 'reports';
     await renderPage();
@@ -4379,17 +4423,44 @@ async function runSuite(driverBase) {
       .find((c) => re.test(c.textContent));
     const reminders = card(/Bills due/);
     const rows = reminders ? [...reminders.querySelectorAll('.setting-row')] : [];
-    return {
-      width: window.innerWidth,
-      remindersRows: rows.length,
+    // Measure the Reminders card before the re-render below. Rendering again
+    // replaces these nodes, and a detached node measures zero, which reads as
+    // "not one line" rather than "no longer on the page".
+    const remindersShape = {
+      rows: rows.length,
       oneLineEach: rows.every((r) => lineBoxes(r.querySelector('.setting-label')) === 1),
       inCard: rows.every((r) => {
         const b = reminders.getBoundingClientRect(), a = r.getBoundingClientRect();
         return a.left >= b.left - 1 && a.right <= b.right + 1;
       }),
       hints: reminders ? reminders.querySelectorAll('.setting-hint').length : -1,
+    };
+    // The Syncthing row is three things on one line at the narrowest width:
+    // the label, Open, and Sync. Measured by their centres, not by whether the
+    // text happens to fit, because a wrapped button still fits the card.
+    setSyncSettings({ transport: 'syncthing', folderUri: 'content://x', folderName: 'Download/Synced', fileUri: '' });
+    await renderPage();
+    await new Promise((r) => setTimeout(r, 300));
+    const folderRow = document.getElementById('sync-folder').closest('.setting-row');
+    const folderLabel = document.getElementById('sync-folder-label');
+    const folderButtons = [...folderRow.querySelectorAll('button')];
+    const centre = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; };
+    const folderCard = card(/set this up/i);
+    return {
+      width: window.innerWidth,
+      remindersRows: remindersShape.rows,
+      oneLineEach: remindersShape.oneLineEach,
+      inCard: remindersShape.inCard,
+      hints: remindersShape.hints,
       sync: !!card(/Sync/),
       stepsHead: (card(/Sync/) || {}).textContent || '',
+      folderButtons: folderButtons.map((b) => b.textContent.trim()),
+      folderOneLine: folderButtons.length === 2
+        && folderLabel.getClientRects().length === 1
+        && Math.abs(centre(folderLabel) - centre(folderButtons[0])) < 8
+        && Math.abs(centre(folderButtons[0]) - centre(folderButtons[1])) < 2,
+      folderFits: folderRow.getBoundingClientRect().right <= folderCard.getBoundingClientRect().right + 1
+        && folderRow.getBoundingClientRect().left >= folderCard.getBoundingClientRect().left - 1,
     };
   `);
   check('the viewport really is the narrow one', narrow.width === 360, narrow);
@@ -4398,6 +4469,10 @@ async function runSuite(driverBase) {
   check('and nothing spills out of the card', narrow.inCard === true, narrow);
   check('no settings row carries a hint underneath it', narrow.hints === 0, narrow);
   check('the steps are folded under a heading in plain words, not a shouted one', /How to set this up/.test(narrow.stepsHead) && !/SETUP/.test(narrow.stepsHead), narrow);
+  check('the Syncthing row puts Folder location, Open and Sync on one line at 360px',
+    narrow.folderButtons.join(',') === 'Open,Sync'
+    && narrow.folderOneLine === true
+    && narrow.folderFits === true, narrow);
 
   console.log('\n# 360px: the balance card heading fits a five-figure total');
   const narrowReports = await run(`
@@ -5376,19 +5451,23 @@ async function runSuite(driverBase) {
       //    balance; a goal with no account never was, and used to count as
       //    spendable from money sitting in the jar.
       const setAside = await run(`
+        // Same neutralisation as the jar block: the first point is the end of
+        // its day, so on the 1st it already holds a day of the plan and of the
+        // spending estimate. Read from the start of the window instead.
+        const atStart = (p) => p.balance + p.savings + p.bills + p.spend - p.income;
         const base = await buildForecast(6, 0);
-        const start = base.series[0].balance;
-        const jar = await addItem('savings', { title: 'Holiday', target: 1000, current: 200, monthly: 50 });
+        const start = atStart(base.series[0]);
+        await addItem('savings', { title: 'Holiday', target: 1000, current: 200, monthly: 50 });
         await new Promise((r) => setTimeout(r, 250));
         const withJar = await buildForecast(6, 0);
-        const afterJar = withJar.series[0].balance;
-        const backed = await addItem('savings', {
+        const afterJar = atStart(withJar.series[0]);
+        await addItem('savings', {
           title: 'House', target: 9000, current: 100, monthly: 100, accountId: window.__fcAccount
         });
         await new Promise((r) => setTimeout(r, 250));
         const withBoth = await buildForecast(6, 0);
         return {
-          start, afterJar, afterBoth: withBoth.series[0].balance,
+          start, afterJar, afterBoth: atStart(withBoth.series[0]),
           opening: withBoth.opening,
           accountId: window.__fcAccount
         };
@@ -5489,7 +5568,7 @@ async function runSuite(driverBase) {
       // global, so the stub survives across run() blocks.
       // A plain string, so it can live out here; everything else in this section
       // is page work and has to go through run().
-      const SYNC_URL = 'http://sync.test/sorted-snapshot.json';
+      const SYNC_URL = 'http://sync.test/sorted-sync.json';
 
       await run(`
         // A clean slate, and the stub itself. Both live in this one block because
@@ -5610,7 +5689,7 @@ async function runSuite(driverBase) {
       const tree = await run(`
         const out = {};
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
-        const url = 'http://sync.test/sorted-snapshot.json';
+        const url = 'http://sync.test/sorted-sync.json';
         window.__syncCalls.length = 0;
         window.__syncFile = null;
 
@@ -5706,7 +5785,7 @@ async function runSuite(driverBase) {
           updatedAt: new Date(Date.now() + 3600000).toISOString(),
           data: { spend: [{ title: 'Theirs', amount: 5, date: '2026-09-02', category: 'Groceries' }] }
         });
-        setSyncSettings({ url: 'http://sync.test/sorted-snapshot.json', transport: 'lan' });
+        setSyncSettings({ url: 'http://sync.test/sorted-sync.json', transport: 'lan' });
         const pulled = await syncNow();
         const afterPull = (await getAll('spend')).map((r) => r.title);
         t('thePullHappened', pulled.did, 'pulled');
@@ -5765,17 +5844,17 @@ async function runSuite(driverBase) {
         localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'nonsense', url: '  http://x/y  ' }));
         t('anUnknownTransportFallsBackToNetwork', syncSettings().transport, 'network');
         t('theUrlIsTrimmed', syncSettings().urlLan, 'http://x/y');
-        setSyncSettings({ url: 'http://sync.test/sorted-snapshot.json' });
+        setSyncSettings({ url: 'http://sync.test/sorted-sync.json' });
         t('aPatchKeepsTheRest', syncSettings().transport, 'network');
-        t('aPatchSetsItsOwnField', syncSettings().urlLan, 'http://sync.test/sorted-snapshot.json');
+        t('aPatchSetsItsOwnField', syncSettings().urlLan, 'http://sync.test/sorted-sync.json');
 
         // The two routes that became one keep their addresses. A phone set up
         // before the split is still set up after it.
-        localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-snapshot.json' }));
+        localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-sync.json' }));
         t('aHomeServerAddressBecomesTheWifiOne', syncSettings().transport, 'network');
-        t('andKeepsItsAddress', syncSettings().urlLan, 'http://192.168.1.10:8787/sorted-snapshot.json');
-        localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'tailscale', url: 'http://100.1.2.3:8787/sorted-snapshot.json' }));
-        t('aTailscaleAddressBecomesTheTailscaleOne', syncSettings().urlTailscale, 'http://100.1.2.3:8787/sorted-snapshot.json');
+        t('andKeepsItsAddress', syncSettings().urlLan, 'http://192.168.1.10:8787/sorted-sync.json');
+        localStorage.setItem('sorted-sync-settings', JSON.stringify({ transport: 'tailscale', url: 'http://100.1.2.3:8787/sorted-sync.json' }));
+        t('aTailscaleAddressBecomesTheTailscaleOne', syncSettings().urlTailscale, 'http://100.1.2.3:8787/sorted-sync.json');
 
         // No address, or a transport that is not available yet, are both results
         // rather than crashes. Both boxes are cleared: either one being filled
@@ -5783,7 +5862,7 @@ async function runSuite(driverBase) {
         setSyncSettings({ urlLan: '', urlTailscale: '' });
         const noUrl = await syncNow();
         t('noAddressIsAReasonNotACrash', !!noUrl.error && noUrl.ok === false, true);
-        setSyncSettings({ url: 'http://sync.test/sorted-snapshot.json' });
+        setSyncSettings({ url: 'http://sync.test/sorted-sync.json' });
         const realAvailable = SYNC_TRANSPORTS.network.available;
         SYNC_TRANSPORTS.network.available = false;
         const unavailable = await syncNow();
@@ -5846,13 +5925,13 @@ async function runSuite(driverBase) {
         setSyncSettings({ transport: 'lan', url: '' });
         t('noAddressIsSaidPlainly', (await syncTestAddress()).state, 'empty');
 
-        setSyncSettings({ url: '192.168.1.10:8787/sorted-snapshot.json' });
+        setSyncSettings({ url: '192.168.1.10:8787/sorted-sync.json' });
         t('junkIsNotAnAddress', (await syncTestAddress()).state, 'malformed');
 
         setSyncSettings({ url: 'http://192.168.1.10:8787/' });
         t('theWrongFileIsNamed', (await syncTestAddress()).state, 'wrong-path');
 
-        setSyncSettings({ url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        setSyncSettings({ url: 'http://192.168.1.10:8787/sorted-sync.json' });
         t('aDeadHostIsUnreachable', (await syncTestAddress()).state, 'unreachable');
 
         window.__host = { ok: true, snapshot: false, dir: '/home/x/sorted-sync' };
@@ -5922,7 +6001,7 @@ async function runSuite(driverBase) {
           }
           throw new TypeError('Failed to fetch');
         };
-        setSyncSettings({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        setSyncSettings({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-sync.json' });
         const hostUp = await syncNow();
         t('aFailureAsksTheHost', hostUp.ok, false);
         t('andReportsThatTheHostIsRunning', /The host is running at http:\\/\\/192\\.168\\.1\\.10:8787/.test(hostUp.error), true);
@@ -5963,7 +6042,7 @@ async function runSuite(driverBase) {
         t('andThereIsOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
         t('andItIsOffUntilThereIsAnAddress', shape.syncDisabled, true);
 
-        shape = cardOf(await draw('http://192.168.1.10:8787/sorted-snapshot.json'));
+        shape = cardOf(await draw('http://192.168.1.10:8787/sorted-sync.json'));
         t('andStayFoldedOnceTheQuestionIsAnswered', shape.details.open, false);
         t('andStillOnlyOneButton', JSON.stringify(shape.buttons), JSON.stringify(['Sync now']));
         t('andTheStepsSurviveToBeOpened', /node sorted\\/tools\\/sync-host\\.mjs/.test(shape.details.textContent), true);
@@ -5973,13 +6052,13 @@ async function runSuite(driverBase) {
         // Sync now that will not press, with nothing saying why.
         await draw('');
         const input = document.getElementById('sync-url-lan');
-        input.value = 'http://192.168.1.10:8787/sorted-snapshot.json';
+        input.value = 'http://192.168.1.10:8787/sorted-sync.json';
         input.dispatchEvent(new Event('change'));
         await new Promise((r) => setTimeout(r, 400));
         const after = cardOf([...document.querySelectorAll('.report-card')]
           .find((x) => /set this up/i.test(x.textContent) && /Wi-Fi/.test(x.textContent)));
         t('pastingAnAddressTurnsTheButtonOn', after.syncDisabled, false);
-        t('andTheAddressIsKept', syncSettings().urlLan, 'http://192.168.1.10:8787/sorted-snapshot.json');
+        t('andTheAddressIsKept', syncSettings().urlLan, 'http://192.168.1.10:8787/sorted-sync.json');
 
         localStorage.removeItem('sorted-sync-settings');
         localStorage.removeItem('sorted-sync-backup');
@@ -6053,7 +6132,7 @@ async function runSuite(driverBase) {
           syncNativeHttp({ isNativePlatform: () => true, CapacitorHttp: nativeHttp }) === nativeHttp, true);
 
         asked.length = 0;
-        const got = await syncFetch('http://192.168.1.10:8787/sorted-snapshot.json', { method: 'GET' });
+        const got = await syncFetch('http://192.168.1.10:8787/sorted-sync.json', { method: 'GET' });
         t('theNativePluginMadeTheRequest', asked.length, 1);
         t('andTheWebViewWasNotAsked', webviewCalls, 0);
         t('andTheRequestIsARead', asked[0].method, 'GET');
@@ -6062,7 +6141,7 @@ async function runSuite(driverBase) {
         t('andItReadsTheNativeAnswer', (await got.text()).indexOf('2026-01-01') >= 0, true);
 
         asked.length = 0;
-        const put = await syncFetch('http://192.168.1.10:8787/sorted-snapshot.json', {
+        const put = await syncFetch('http://192.168.1.10:8787/sorted-sync.json', {
           method: 'PUT', headers: { 'content-type': 'application/json' }, body: '{"format":1}'
         });
         t('aWriteGoesThroughThePluginToo', asked.length, 1);
@@ -6076,7 +6155,7 @@ async function runSuite(driverBase) {
           request: async () => { throw new Error('Failed to connect to /192.168.1.10:8787'); }
         } } };
         window.fetch = realFetch;
-        setSyncSettings({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        setSyncSettings({ transport: 'lan', url: 'http://192.168.1.10:8787/sorted-sync.json' });
         const down = await syncNow();
         t('aNativeRefusalIsAFailure', down.ok, false);
         t('andNamesTheAddressRatherThanOkHttp',
@@ -6150,7 +6229,7 @@ async function runSuite(driverBase) {
           format: 1, deviceId: 'old-phone', updatedAt: '2026-01-01T00:00:00.000Z',
           data: { spend: [{ id: 'r1', title: 'The real data', amount: 12, date: '2026-01-01', category: 'Groceries' }] }
         });
-        setSyncSettings({ transport: 'lan', url: 'http://sync.test/sorted-snapshot.json' });
+        setSyncSettings({ transport: 'lan', url: 'http://sync.test/sorted-sync.json' });
         window.__syncCalls.length = 0;
         const first = await syncNow();
         const afterFirst = (await getAll('spend')).map((r) => r.title);
@@ -6219,8 +6298,8 @@ async function runSuite(driverBase) {
         const out = {};
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
         const realFetch = window.fetch;
-        const LAN = 'http://192.168.1.10:8787/sorted-snapshot.json';
-        const TS = 'http://100.101.102.103:8787/sorted-snapshot.json';
+        const LAN = 'http://192.168.1.10:8787/sorted-sync.json';
+        const TS = 'http://100.101.102.103:8787/sorted-sync.json';
         const snapshot = JSON.stringify({
           format: 1, deviceId: 'host',
           updatedAt: new Date(Date.now() + 3600000).toISOString(),
@@ -6366,7 +6445,7 @@ async function runSuite(driverBase) {
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
         const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         const realFetch = window.fetch;
-        const url = 'http://sync.test/sorted-snapshot.json';
+        const url = 'http://sync.test/sorted-sync.json';
         window.__autoCalls = [];
         window.__autoRemote = null;
         const respond = async (u, options) => {
@@ -6488,14 +6567,14 @@ async function runSuite(driverBase) {
 
         setSyncSettings({ transport: 'network', urlLan: '' });
         t('anAddressRouteWithoutAnAddressIsNotReady', syncConfigured(), false);
-        setSyncSettings({ urlLan: 'http://192.168.1.10:8787/sorted-snapshot.json' });
+        setSyncSettings({ urlLan: 'http://192.168.1.10:8787/sorted-sync.json' });
         t('anAddressRouteWithOneIsReady', syncConfigured(), true);
-        setSyncSettings({ urlLan: '', urlTailscale: 'http://100.1.2.3:8787/sorted-snapshot.json' });
+        setSyncSettings({ urlLan: '', urlTailscale: 'http://100.1.2.3:8787/sorted-sync.json' });
         t('andEitherBoxCounts', syncConfigured(), true);
 
         setSyncSettings({ transport: 'cloud', urlLan: '', urlTailscale: '', fileUri: '', fileName: '' });
         t('aFileRouteWithoutAFileIsNotReady', syncConfigured(), false);
-        setSyncSettings({ fileUri: 'content://drive/document/Sorted%2Fsorted-snapshot.json', fileName: 'sorted-snapshot.json' });
+        setSyncSettings({ fileUri: 'content://drive/document/Sorted%2Fsorted-sync.json', fileName: 'sorted-sync.json' });
         t('butAChosenFileIsSetUpEvenWithNoAddress', syncConfigured(), true);
 
         setSyncSettings({ transport: 'syncthing', urlLan: '', urlTailscale: '', fileUri: '', folderUri: 'content://sd/tree/Sorted' });
@@ -6576,8 +6655,8 @@ async function runSuite(driverBase) {
         const out = {};
         const t = (label, got, want) => { out[label] = { got: JSON.stringify(got), want: JSON.stringify(want), pass: JSON.stringify(got) === JSON.stringify(want) }; };
         const realLookup = window.syncFolderPlugin;
-        const DOC_URI = 'content://com.proton.drive/document/sorted-snapshot.json';
-        const DOC_URI_2 = 'content://com.proton.drive/document/sorted-snapshot-2.json';
+        const DOC_URI = 'content://com.proton.drive/document/sorted-sync.json';
+        const DOC_URI_2 = 'content://com.proton.drive/document/sorted-sync-2.json';
         window.__files = {};
         window.__documents = {};
         window.__picked = null;
@@ -6641,7 +6720,7 @@ async function runSuite(driverBase) {
         c = await draw();
         t('thePhoneOffersTheThreeRoutes', labels(), ['Syncthing', 'Cloud', 'Network']);
         t('aFolderRouteDrawsNoAddressBox', document.getElementById('sync-url-lan') === null && document.getElementById('sync-url-tailscale') === null, true);
-        t('andSaysWhatToDoInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
+        t('andSaysWhatToDoInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Open');
         t('andCannotSyncYet', c.querySelector('.btn-primary').disabled, true);
         t('andKeepsTheStepsThatAnswerItFolded', c.querySelector('details.setup-steps').open, false);
 
@@ -6670,8 +6749,9 @@ async function runSuite(driverBase) {
         await chooseSyncFolderFromSettings(null);
         c = await draw();
         t('theChosenFolderIsKept', syncSettings().folderUri, window.__picked.uri);
-        t('andNamedOnTheCard', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Sorted');
-        t('andTheRowStillSaysItIsTheFolder', (document.getElementById('sync-folder-label') || {}).textContent.trim(), 'Folder');
+        t('andNamedOnTheCard', (document.getElementById('sync-folder') || {}).title, 'Sorted');
+        t('andTheRowStillSaysItIsTheFolder', (document.getElementById('sync-folder-label') || {}).textContent.trim(), 'Folder location:');
+        t('andTheButtonSaysOpen', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Open');
         t('andSyncCanRunNow', c.querySelector('.btn-primary').disabled, false);
         t('andTheStepsFoldAway', c.querySelector('details.setup-steps').open, false);
 
@@ -6706,7 +6786,8 @@ async function runSuite(driverBase) {
         await chooseSyncFolderFromSettings(null);
         t('changingTheFolderLetsGoOfTheLast', window.__forgot, [firstFolder]);
         t('andKeepsTheNewOne', syncSettings().folderUri, window.__picked.uri);
-        t('andNamesThatOneInstead', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Download/Synced');
+        t('andNamesThatOneInstead', (document.getElementById('sync-folder') || {}).title, 'Download/Synced');
+        t('andTheButtonStillSaysOpen', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Open');
 
         // (g) A folder that has gone says so in plain words, and does not go
         //     looking for a host that was never part of this route.
@@ -6723,11 +6804,11 @@ async function runSuite(driverBase) {
         //     and the first sync writes into it because it starts empty.
         window.syncFolderPlugin = fake;
         setSyncSettings({ transport: 'cloud', fileUri: '', fileName: '' });
-        window.__createdFile = { uri: DOC_URI, name: 'sorted-snapshot.json' };
+        window.__createdFile = { uri: DOC_URI, name: 'sorted-sync.json' };
         await chooseSyncFileFromSettings(null, true);
         c = await draw();
         t('theNewFileIsKept', syncSettings().fileUri, DOC_URI);
-        t('andNamedOnTheCard', /sorted-snapshot/.test(c.textContent), true);
+        t('andNamedOnTheCard', /sorted-sync/.test(c.textContent), true);
         t('andTheFileRowSaysItIsTheFile', (document.getElementById('sync-file-label') || {}).textContent.trim(), 'File');
         t('andSyncCanRunNowWithAFile', c.querySelector('.btn-primary').disabled, false);
         t('andTheCloudStepsFoldAway', c.querySelector('details.setup-steps').open, false);
@@ -6962,7 +7043,7 @@ async function runSuite(driverBase) {
         window.syncFolderPlugin = fake;
         window.__forgot.length = 0;
         const firstFile = syncSettings().fileUri;
-        window.__pickedFile = { uri: DOC_URI_2, name: 'sorted-snapshot-2.json' };
+        window.__pickedFile = { uri: DOC_URI_2, name: 'sorted-sync-2.json' };
         await chooseSyncFileFromSettings(null, false);
         t('changingTheFileLetsGoOfTheLast', window.__forgot, [firstFile]);
         t('andKeepsTheNewOneFile', syncSettings().fileUri, DOC_URI_2);
@@ -7016,6 +7097,7 @@ async function runSuite(driverBase) {
         folderRoute.detail.changingTheFolderLetsGoOfTheLast.pass
         && folderRoute.detail.andKeepsTheNewOne.pass
         && folderRoute.detail.andNamesThatOneInstead.pass
+        && folderRoute.detail.andTheButtonStillSaysOpen.pass
         && folderRoute.detail.aMissingFolderSaysSo.pass
         && folderRoute.detail.andSaysItWasTheFolder.pass, folderRoute);
       check('saving a new Cloud file is the whole setup, and the file row says so',
@@ -7131,7 +7213,7 @@ async function runSuite(driverBase) {
           }
         });
         const dirFile = makeFile(SYNC_FILE, 'dir');
-        const cloudFile = makeFile('sorted-snapshot.json', 'cloud');
+        const cloudFile = makeFile('sorted-sync.json', 'cloud');
         const dirHandle = {
           name: 'Sorted',
           queryPermission: async () => 'granted',
@@ -7172,7 +7254,7 @@ async function runSuite(driverBase) {
         let c = await draw({ transport: 'syncthing' });
         t('withTheApiAllThreeAreOffered', labels(), ['Syncthing', 'Cloud', 'Network']);
         t('andTheHintGoesAway', document.getElementById('sync-browser-hint'), null);
-        t('andTheCardAsksForAFolder', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Choose folder');
+        t('andTheCardAsksForAFolder', (document.getElementById('sync-folder') || {}).textContent.trim(), 'Open');
 
         await chooseSyncFolderFromSettings(null);
         t('theBrowserFolderIsKept', syncSettings().folderUri, 'browser:dir');
@@ -7551,28 +7633,47 @@ async function runSuite(driverBase) {
         // A drive that answers a write with a read-only verdict is remembered,
         // and the card says in one line what stays here and what still arrives,
         // so nobody has to test drives to find out what a route can do.
-        c = await draw({ transport: 'cloud', fileUri: 'u', fileName: 'sorted-snapshot.json', fileReadOnly: true });
+        c = await draw({ transport: 'cloud', fileUri: 'u', fileName: 'sorted-sync.json', fileReadOnly: true });
         t('theReadOnlyCardSaysWhatStaysAndWhatArrives',
           /reading only, so changes made here stay here/.test(c.textContent)
           && /Updates from the other devices still arrive/.test(c.textContent)
           && /drive app that can write to an existing file/.test(c.textContent), true);
         c = await draw({ transport: 'cloud', fileUri: '', fileName: '', fileReadOnly: '' });
         c = await draw({ transport: 'syncthing' });
-        t('andTheSyncthingStepsUseTheFolderButton', /Choose folder/.test(c.querySelector('details.setup-steps').textContent), true);
+        t('andTheSyncthingStepsUseTheFolderButton',
+          /Open/.test(c.querySelector('details.setup-steps').textContent)
+          && /Tap <strong>Sync<\\/strong>/.test(c.querySelector('details.setup-steps').innerHTML)
+          && /sorted-sync\\.json/.test(c.querySelector('details.setup-steps').textContent), true);
         window.syncFolderPlugin = realLookup;
 
         // The two addresses live in one route, and its steps carry both ways to
         // reach the same host rather than sending the reader to another list.
-        await draw({ transport: 'network', urlLan: 'http://192.168.1.10:8787/sorted-snapshot.json', urlTailscale: 'http://100.101.102.103:8787/sorted-snapshot.json' });
+        await draw({ transport: 'network', urlLan: 'http://192.168.1.10:8787/sorted-sync.json', urlTailscale: 'http://100.101.102.103:8787/sorted-sync.json' });
         const netSteps = card().querySelector('details.setup-steps');
         t('networkCarriesItsOwnTwoCommands', netSteps.querySelectorAll('.setup-copy').length, 2);
         t('andSendsTheReaderNowhereElse', /steps 1 and 2|Home server steps/.test(netSteps.textContent), false);
         // The Tailscale address is the one thing that has to be built by hand
         // rather than pasted, so the shape stays under the step.
         t('andShowsTheAddressShapeToCopy',
-          /http:\\/\\/100\\.101\\.102\\.103:8787\\/sorted-snapshot\\.json/.test(netSteps.textContent), true);
+          /http:\\/\\/100\\.101\\.102\\.103:8787\\/sorted-sync\\.json/.test(netSteps.textContent), true);
         t('andBothAddressBoxesAreThere',
           !!document.getElementById('sync-url-lan') && !!document.getElementById('sync-url-tailscale'), true);
+        // The warning that used to sit under the boxes is a note under the
+        // steps now, where the setup is read, and it says one address is enough.
+        const netNote = card().querySelector('.setup-note');
+        t('andTheNoteSaysOneAddressIsEnough',
+          /Only one IP address is needed/.test(netNote.textContent)
+          && /whichever answers first/.test(netNote.textContent), true);
+        // The step the user counted out: the host setup is five steps, then the
+        // tap, then the repeat on every other device. The repeat names 4 and 6,
+        // not 1 to 6, because installing Node and starting the host happen once
+        // on the computer rather than on every phone.
+        const netList = [...netSteps.querySelectorAll('.setup-steps-list li')];
+        t('theNetworkSetupIsSevenSteps', netList.length, 7);
+        t('andTheSixthIsTheTapToSync', netList[5].textContent.trim(), 'Tap Sync now.');
+        t('andTheSeventhRepeatsOnTheOtherDevices',
+          /Repeat steps 4 and 6/.test(netList[6].textContent)
+          && /computer is set up once/.test(netList[6].textContent), true);
 
         // No em dashes in the card, on any route. The user asked for them out of
         // the steps in as many words; the rest of the card is swept with them
@@ -7628,6 +7729,9 @@ async function runSuite(driverBase) {
         && stepsUi.detail.andSendsTheReaderNowhereElse.pass
         && stepsUi.detail.andShowsTheAddressShapeToCopy.pass
         && stepsUi.detail.andBothAddressBoxesAreThere.pass
+        && stepsUi.detail.theNetworkSetupIsSevenSteps.pass
+        && stepsUi.detail.andTheSixthIsTheTapToSync.pass
+        && stepsUi.detail.andTheSeventhRepeatsOnTheOtherDevices.pass
         && stepsUi.detail.andNoEmDashOnAnyRoute.pass, stepsUi);
       check('the address boxes show an example, and no longer spell out x.y.z',
         stepsUi.detail.theAddressPlaceholderSaysItIsAnExample.pass
@@ -7636,6 +7740,67 @@ async function runSuite(driverBase) {
       check('and the two faults in the card are gone: the rule under Sync now, and the clipped picker',
         stepsUi.detail.noRuleUnderTheSyncNowButton.pass
         && stepsUi.detail.thePickerFitsTheWidestOption.pass, stepsUi);
+      // A page-side result that is never added to a verdict is a check in name
+      // only. The read-only card check sat here passing nothing for a release,
+      // which is how a setting that was written but never read went unnoticed.
+      check('and no check in the group was left without a verdict',
+        stepsUi.failures.length === 0, stepsUi.failures);
+
+    // ---------------------------------------------------------------
+    // Updates: one press checks, and when there is a newer build it opens the
+    // APK asset itself rather than dropping the person on a release page to
+    // find the file. Android still asks before installing; this only starts
+    // the download.
+    const updates = await run(`
+      const out = {};
+      const t = (label, got, want) => { out[label] = { got: got, want: want, pass: JSON.stringify(got) === JSON.stringify(want) }; };
+      const realFetch = window.fetch;
+      const realOpen = window.open;
+      let opened = null;
+      window.open = (url) => { opened = url; return null; };
+      window.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          tag_name: 'v99.0.0',
+          html_url: 'https://github.com/jaquesbody/sorted/releases/tag/v99.0.0',
+          assets: [
+            { name: 'notes.txt', browser_download_url: 'https://example.test/notes.txt' },
+            { name: 'sorted-v2-99.0.0-debug.apk', browser_download_url: 'https://example.test/sorted-v2-99.0.0-debug.apk' }
+          ]
+        })
+      });
+      currentPage = 'settings'; await renderPage();
+      await new Promise((r) => setTimeout(r, 300));
+      const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Update');
+      t('theButtonSaysUpdate', !!button, true);
+      if (button) button.click();
+      await new Promise((r) => setTimeout(r, 250));
+      t('andItOpensTheApkItself', opened, 'https://example.test/sorted-v2-99.0.0-debug.apk');
+      t('andSaysItIsDownloading', /Downloading it now/.test(document.getElementById('update-note').textContent), true);
+      t('andTheButtonGoesBackToUpdate', button ? button.textContent.trim() : '', 'Update');
+
+      // The three rows and hints removed at the user's ask stay removed.
+      const page = document.querySelector('.page') || document.body;
+      t('noReplacedCopyRow', /Replaced copy/.test(page.textContent), false);
+      t('noAutomaticSyncHint', /Sorted also syncs/.test(page.textContent), false);
+      t('noTwoAddressHint', /Sorted tries both/.test(page.textContent), false);
+
+      window.fetch = realFetch;
+      window.open = realOpen;
+      localStorage.removeItem('sorted-sync-settings');
+      return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+    `);
+    check('the Updates button checks and starts the APK download itself',
+      updates.detail.theButtonSaysUpdate.pass
+      && updates.detail.andItOpensTheApkItself.pass
+      && updates.detail.andSaysItIsDownloading.pass
+      && updates.detail.andTheButtonGoesBackToUpdate.pass, updates);
+    check('and the removed rows and hints stay removed',
+      updates.detail.noReplacedCopyRow.pass
+      && updates.detail.noAutomaticSyncHint.pass
+      && updates.detail.noTwoAddressHint.pass
+      && updates.failures.length === 0, updates);
 
     console.log('\n# notifications: the plan, the memory, and the native route');
 

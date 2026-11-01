@@ -23,7 +23,7 @@
    -------------------------------------------------------------------------- */
 
 const SYNC_FORMAT = 1;
-const SYNC_FILE = 'sorted-snapshot.json';
+const SYNC_FILE = 'sorted-sync.json';
 
 const SYNC_SETTINGS_KEY = 'sorted-sync-settings';
 const SYNC_DEVICE_KEY = 'sorted-sync-device';
@@ -70,7 +70,7 @@ const SYNC_TRANSPORTS = {
     available: true,
     blurb: 'A computer on your Wi-Fi, or the same file over Tailscale',
     needsUrl: true,
-    urlHint: 'e.g. http://192.168.1.10:8787/sorted-snapshot.json'
+    urlHint: 'e.g. http://192.168.1.10:8787/sorted-sync.json'
   }
 };
 
@@ -125,11 +125,11 @@ function setupAside(html) {
 
 const SYNC_SETUP_STEPS = {
   network: [
-    'On a computer that stays on, and on the same Wi-Fi as this phone, install two things:'
-      + setupPart('<strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.')
-      + setupPart('<strong>The Sorted folder</strong>: open a <strong>new</strong> terminal, paste this in and press enter:'
-        + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
-        + setupAside('If it says <strong>git</strong> is not recognised, install Git from <a href="https://git-scm.com/install/" target="_blank" rel="noopener">git-scm.com</a> first, then run it again.')),
+    'On a computer that stays on, and on the same Wi-Fi as this phone, install <strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.',
+
+    'Open a <strong>new</strong> terminal and get <strong>the Sorted folder</strong>. Paste this in and press enter:'
+      + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
+      + setupAside('If it says <strong>git</strong> is not recognised, install Git from <a href="https://git-scm.com/install/" target="_blank" rel="noopener">git-scm.com</a> first, then run it again.'),
 
     'Start the sync host, in that same terminal:'
       + setupCommand('node sorted/tools/sync-host.mjs')
@@ -138,27 +138,29 @@ const SYNC_SETUP_STEPS = {
     'It prints an address for each network it can see. Copy the Wi-Fi one, the address starting <strong>192.168.</strong>, into the <strong>Wi-Fi</strong> box above.',
 
     'To sync away from home, install and set up <strong>Tailscale</strong> on the computer and this phone, sign in on both, and connect them. Then copy that computer\'s address starting <strong>100.</strong> into the <strong>Tailscale</strong> box above.'
-      + setupPart('<span class="setup-example">http://100.101.102.103:8787/<wbr>sorted-snapshot.json</span>'),
+      + setupPart('<span class="setup-example">http://100.101.102.103:8787/<wbr>sorted-sync.json</span>'),
 
-    'Tap <strong>Sync now</strong>. Done.'
+    'Tap <strong>Sync now</strong>.',
+
+    'Repeat steps 4 and 6 on every other device you want to sync with. The computer is set up once, so the other devices only need the address and a tap.'
   ],
   syncthing: [
     'Install and set up <strong>Syncthing</strong> on the devices you want to connect, creating and then linking a specific <strong>Sorted</strong> folder.',
 
-    'Tap <strong>Choose folder</strong> above and locate that <strong>Sorted</strong> folder.',
+    'Tap <strong>Open</strong> above and locate that <strong>Sorted</strong> folder. Sorted keeps one file there, <strong>sorted-sync.json</strong>.',
 
-    'Tap <strong>Sync now</strong>.',
+    'Tap <strong>Sync</strong>.',
 
-    'Repeat step 2 on the other devices. Done.'
+    'Repeat steps 2 and 3 on the other devices. Done.'
   ],
   cloud: [
-    'Install and sign in to a drive app that can <strong>write to a file it opened</strong>. That is the requirement: Sorted opens <strong>sorted-snapshot.json</strong> and saves back into that same file, so an app that can only upload a new copy will not keep the devices in sync. <strong>Proton Drive is not compatible</strong>: its Android app opens an existing file for reading only. Google Drive and OneDrive are the common choices, but no drive is guaranteed, because a drive app can change.',
+    'Install and sign in to a drive app that can <strong>write to a file it opened</strong>. That is the requirement: Sorted opens <strong>sorted-sync.json</strong> and saves back into that same file, so an app that can only upload a new copy will not keep the devices in sync. <strong>Proton Drive is not compatible</strong>: its Android app opens an existing file for reading only. Google Drive and OneDrive are the common choices, but no drive is guaranteed, because a drive app can change.',
 
-    'On <strong>one device</strong>, tap <strong>Save new copy</strong> above and save <strong>sorted-snapshot.json</strong> into that drive. This makes the file, so it is done once, and on one device only.',
+    'On <strong>one device</strong>, tap <strong>Save new copy</strong> above and save <strong>sorted-sync.json</strong> into that drive. This makes the file, so it is done once, and on one device only.',
 
     'Tap <strong>Sync now</strong> and let the drive finish uploading it.',
 
-    'On every other device, tap <strong>Choose file</strong> above and pick that same <strong>sorted-snapshot.json</strong>, then tap <strong>Sync now</strong>.',
+    'On every other device, tap <strong>Choose file</strong> above and pick that same <strong>sorted-sync.json</strong>, then tap <strong>Sync now</strong>.',
 
     'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other. If a phone cannot write to the file, Sorted says so on the first Sync now and keeps that phone\'s changes on the phone.'
   ]
@@ -170,6 +172,7 @@ const SYNC_SETUP_STEPS = {
 // that do not use a cloud are named in the same breath, because "your data
 // leaves your phone" is only a fair warning if the alternative is one tap away.
 const SYNC_SETUP_NOTES = {
+  network: 'Only one IP address is needed. If both are filled in, Sorted uses whichever answers first, so the Wi-Fi address alone is enough at home and the Tailscale address alone is enough away from home.',
   cloud: '<strong>What Cloud costs you in privacy.</strong> The file leaves your devices and is stored by the company that runs the drive. Unless the drive is end-to-end encrypted, that company can read it, and it holds every account, balance and bill in Sorted. Choose a provider you would trust with a bank statement, and turn on two-factor authentication. If that trade is not for you, the <strong>Syncthing</strong> route keeps the file on your own devices, and the <strong>Network</strong> route keeps it on a computer you own; neither uses a cloud. Proton Drive is respected for privacy, and it is the one this route cannot use.'
 };
 
@@ -234,7 +237,12 @@ function syncSettings() {
     // still uploading it. Another device's upload looks the same from here, so
     // this is the clock that lets a read wait instead of asking for a tap. A
     // successful read or write clears it.
-    filePendingSince: typeof set.filePendingSince === 'string' ? set.filePendingSince : ''
+    filePendingSince: typeof set.filePendingSince === 'string' ? set.filePendingSince : '',
+    // The drive's own answer to the first real write: it opened this file for
+    // reading only. Kept for the picked file so the card says it once and the
+    // automatic passes stop asking. It has to be returned here or every reader
+    // of these settings, the card and the pass included, never sees it.
+    fileReadOnly: set.fileReadOnly === true
   };
 }
 
@@ -426,7 +434,7 @@ async function writeSyncSnapshot(url, snapshot) {
     body: JSON.stringify(snapshot)
   });
   if (res.status === 404) {
-    throw new Error('Nothing at that address on the host. It should end with /sorted-snapshot.json.');
+    throw new Error('Nothing at that address on the host. It should end with /sorted-sync.json.');
   }
   if (!res.ok) throw new Error('The host answered ' + res.status + ', so nothing was saved.');
   return true;
@@ -818,8 +826,8 @@ async function syncTestAddressAt(url) {
   // The host answers two paths: the snapshot and /health. Two of the ways this
   // is got wrong are visible without asking it anything, and they are the two
   // cheapest to fix.
-  if (!/\/sorted-snapshot\.json$/.test(new URL(url).pathname)) {
-    return { state: 'wrong-path', message: 'The address has to end with /sorted-snapshot.json — that is the only file the host serves.' };
+  if (!/\/sorted-sync\.json$/.test(new URL(url).pathname)) {
+    return { state: 'wrong-path', message: 'The address has to end with /sorted-sync.json. That is the only file the host serves.' };
   }
 
   let res;

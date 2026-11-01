@@ -37,7 +37,7 @@ const flag = (name, fallback) => {
 const DIR = resolve(flag('dir', join(homedir(), 'sorted-sync')));
 const PORT = Number(flag('port', '8787'));
 const BIND = flag('host', '0.0.0.0');
-const FILE = join(DIR, 'sorted-snapshot.json');
+const FILE = join(DIR, 'sorted-sync.json');
 
 if (!existsSync(DIR)) await mkdir(DIR, { recursive: true });
 
@@ -69,7 +69,7 @@ const server = createServer(async (req, res) => {
     return send(res, 200, JSON.stringify({ ok: true, snapshot: has, dir: DIR }));
   }
 
-  if (path !== '/sorted-snapshot.json') {
+  if (path !== '/sorted-sync.json') {
     return send(res, 404, JSON.stringify({ error: 'not found' }));
   }
 
@@ -128,7 +128,7 @@ server.listen(PORT, BIND, () => {
   console.log(`  address  ${addrs.length ? addrs.join(', ') : BIND}`);
   console.log('');
   console.log('  In Sorted, Settings → Sync, use:');
-  for (const a of addrs) console.log(`    http://${a}:${PORT}/sorted-snapshot.json`);
+  for (const a of addrs) console.log(`    http://${a}:${PORT}/sorted-sync.json`);
   console.log('');
   console.log('  Leave this running. Ctrl-C to stop.');
 });

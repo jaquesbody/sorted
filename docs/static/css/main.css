@@ -3106,9 +3106,11 @@ body.is-locked {
   }
 
   /* Same width on every page, just a little narrower to leave room for the
-     action button beside it. */
+     action button beside it. 212px is the narrowest that still fits
+     "September 2026" whole: 130px of label, two 32px arrows and the two gaps
+     between them. At 196px it clipped, and only in the long months. */
   :root {
-    --month-nav-width: 196px;
+    --month-nav-width: 212px;
   }
 
   .month-nav {

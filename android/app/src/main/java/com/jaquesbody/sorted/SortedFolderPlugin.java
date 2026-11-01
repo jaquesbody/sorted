@@ -52,7 +52,7 @@ import java.util.Locale;
 public class SortedFolderPlugin extends Plugin {
 
     /** The one file Sorted reads and writes. Kept in step with SYNC_FILE in sync.js. */
-    private static final String FILE_NAME = "sorted-snapshot.json";
+    private static final String FILE_NAME = "sorted-sync.json";
     private static final String MIME_JSON = "application/json";
     private static final String[] NAME_COLUMN =
         new String[] { DocumentsContract.Document.COLUMN_DISPLAY_NAME };

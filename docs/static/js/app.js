@@ -1202,9 +1202,12 @@ function materialiseBillsForMonth(viewDate) {
 }
 
 async function materialiseBillsForMonthNow(viewDate) {
-  const now = new Date();
-  const inFuture = !isSameMonth(viewDate, now) && !isBeforeThisMonth(viewDate);
-  if (!inFuture) return getAll('due');
+  // The current month is made real as well as the ones ahead. Skipping it left
+  // an unpaid bill from last month riding forward only as a projection, and
+  // the Bills page does not draw projections: on the 1st, a monthly bill that
+  // had not been paid yet vanished from the month it was due in. A past month
+  // is still left alone, because it is a record of what it held.
+  if (isBeforeThisMonth(viewDate)) return getAll('due');
 
   const dueItems = await getAll('due');
   // Bills the month already has a row for. A series here needs nothing added,
@@ -1838,11 +1841,6 @@ function syncSettingsHtml() {
     return `<option value="${one}"${one === key ? ' selected' : ''}>${escapeHTML(t.label)}</option>`;
   }).join('');
 
-  const hasBackup = !!syncBackup();
-  // The button's own state is the status. It used to be a third row saying
-  // "Ready" or "No address set" in words, which is one more line to read and one
-  // more thing to keep in step with reality — a control that is enabled when it
-  // will work and disabled when it will not already says both of those.
   const ready = syncRouteReady(active, s);
   const byFolder = !!(active && active.needsFolder);
   const byFile = !!(active && active.needsFile);
@@ -1888,11 +1886,14 @@ function syncSettingsHtml() {
     ${byFolder ? `
     <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
       <div class="setting-text">
-        <div class="setting-label" id="sync-folder-label">Folder</div>
+        <div class="setting-label" id="sync-folder-label">Folder location:</div>
       </div>
-      <div class="setting-control">
+      <div class="setting-control" style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap;">
         <button class="btn btn-ghost" id="sync-folder"
-                onclick="chooseSyncFolderFromSettings(this)">${s.folderUri ? escapeHTML(shortFolderName(s.folderName)) : 'Choose folder'}</button>
+                title="${escapeHTML(s.folderName || '')}"
+                onclick="chooseSyncFolderFromSettings(this)">Open</button>
+        <button class="btn btn-primary" onclick="syncFromSettings(this)"
+                ${ready ? '' : 'disabled'}>Sync</button>
       </div>
     </div>` : byFile ? `
     <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
@@ -1914,7 +1915,7 @@ function syncSettingsHtml() {
       </div>
       <div class="setting-control setting-control--wide">
         <input class="form-input" id="sync-url-lan" type="url" inputmode="url"
-               placeholder="e.g. http://192.168.1.10:8787/sorted-snapshot.json"
+               placeholder="e.g. http://192.168.1.10:8787/sorted-sync.json"
                value="${escapeHTML(s.urlLan)}"
                style="text-align: left;"
                ${active && active.available ? '' : 'disabled'}
@@ -1927,34 +1928,23 @@ function syncSettingsHtml() {
       </div>
       <div class="setting-control setting-control--wide">
         <input class="form-input" id="sync-url-tailscale" type="url" inputmode="url"
-               placeholder="e.g. http://100.101.102.103:8787/sorted-snapshot.json"
+               placeholder="e.g. http://100.101.102.103:8787/sorted-sync.json"
                value="${escapeHTML(s.urlTailscale)}"
                style="text-align: left;"
                ${active && active.available ? '' : 'disabled'}
                onchange="setSyncAddress('urlTailscale', this.value); renderPage();">
       </div>
-    </div>
-    <div class="setting-hint" style="padding: 0 20px;">Sorted tries both addresses and uses whichever answers first.</div>`}
-    <button class="btn btn-primary" onclick="syncFromSettings(this)"
+    </div>`}
+    ${byFolder ? '' : `<button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
-            ${ready ? '' : 'disabled'}>Sync now</button>
-    ${ready ? '<div class="setting-hint" style="padding: 0 20px;">Sorted also syncs on its own when the data changes, when you return to the app and every 15 seconds while it is open.</div>' : ''}
+            ${ready ? '' : 'disabled'}>Sync now</button>`}
     <details class="setup-steps">
       <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
       ${SYNC_SETUP_NOTES[key] ? `<div class="setup-note">${SYNC_SETUP_NOTES[key]}</div>` : ''}
-    </details>
-    ${hasBackup ? `
-    <div class="setting-row setting-row--inline setting-row--tight">
-      <div class="setting-text">
-        <div class="setting-label">Replaced copy</div>
-      </div>
-      <div class="setting-control">
-        <button class="btn btn-ghost" onclick="restoreSyncBackupFromSettings(this)">Restore</button>
-      </div>
-    </div>` : ''}`;
+    </details>`;
 }
 
 // A folder's own name can be a paragraph — "My Drive / Documents / Accounts" and
@@ -1984,8 +1974,8 @@ function setSyncAddress(field, value) {
 // the system picker, and there is nothing to type afterwards.
 //
 // It does not sync on the way out. A pull replaces what is on the phone, and
-// doing that off the back of a tap labelled "Choose folder" would be a surprise;
-// the button underneath is where that decision belongs.
+// doing that off the back of a tap labelled "Open" would be a surprise; the
+// Sync beside it is where that decision belongs.
 async function chooseSyncFolderFromSettings(btn) {
   const plugin = syncFolderPlugin();
   if (!plugin) {
@@ -1994,7 +1984,10 @@ async function chooseSyncFolderFromSettings(btn) {
     showToast('Choosing a folder needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = 'Choosing…'; }
+  // The button says Open before and after the picker. Only its state changes,
+  // because a label that turns into "Choosing…" is motion on a screen that is
+  // about to leave for the system picker anyway.
+  if (btn) btn.disabled = true;
   let message = null;
   try {
     const res = await plugin.pick();
@@ -2007,7 +2000,7 @@ async function chooseSyncFolderFromSettings(btn) {
         try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
       }
       setSyncSettings({ folderUri: res.uri, folderName: res.name || '' });
-      message = 'Folder set. Tap Sync now to use it.';
+      message = 'Folder set. Tap Sync to use it.';
     }
   } catch (err) {
     message = String((err && err.message) || err);
@@ -2119,19 +2112,6 @@ async function syncFromSettings(btn) {
   // cannot reach the host says which of the four things went wrong and names the
   // address it tried, which is a sentence rather than a word.
   if (message) showToast(message, 8000);
-}
-
-async function restoreSyncBackupFromSettings(btn) {
-  if (btn) { btn.disabled = true; btn.textContent = 'Restoring…'; }
-  let message;
-  try {
-    const res = await restoreSyncBackup();
-    message = res.ok ? 'Restored the copy that was replaced' : res.error;
-  } catch (err) {
-    message = String((err && err.message) || err);
-  }
-  await renderPage();
-  if (message) showToast(message, 6000);
 }
 
 // The refresh arrow on the dashboard. Spins while a sync is running, so the
@@ -2472,8 +2452,10 @@ const BILL_FILTERS = [
 async function renderDue(container) {
   const token = renderToken;
   
-  // A future month is made real before it is read, so its bills are rows you
-  // can tap, edit and pay — and so Total Due counts them like any other month.
+  // The month on screen is made real before it is read, so its bills are rows
+  // you can tap, edit and pay — and so Total Due counts them like any other
+  // month. That includes the current month: an unpaid bill from last month
+  // must not disappear just because its next occurrence has not been stored.
   const all = await materialiseBillsForMonth(dueViewedDate);
   const [spendItems] = await Promise.all([getAll('spend')]);
   all.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
@@ -3346,14 +3328,15 @@ function renderPatternsCard(shift) {
 //
 // The app has no server, so this is a plain unauthenticated request to one
 // public URL. It sends the request and nothing else: no build id, no device
-// detail, no data of yours. Nothing is downloaded or installed without asking —
-// Android requires a human to confirm any install regardless, and a finance app
-// quietly replacing itself is not something to do to someone by surprise.
+// detail, no data of yours. Pressing Update checks, and when there is a newer
+// build it opens the APK itself so the download starts on that press. Android
+// still asks a human to confirm any install: a finance app quietly replacing
+// itself is not something to do to someone by surprise.
 async function checkForUpdate(btn) {
   const note = document.getElementById('update-note');
   const say = (text) => { if (note) note.textContent = text; };
   if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
-  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = 'Check'; } };
+  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = 'Update'; } };
 
   const RELEASES_API = 'https://api.github.com/repos/jaquesbody/sorted/releases/latest';
   try {
@@ -3377,13 +3360,15 @@ async function checkForUpdate(btn) {
     if (!latest) {
       say('Could not read the release name from GitHub.');
     } else if (cmp > 0) {
-      say(`v${latest} is available — you have v${here}.`);
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Get it';
-        btn.onclick = () => { window.open(data.html_url, '_blank', 'noopener'); };
-        return;
-      }
+      // The APK asset is the download itself. Sending the person to the release
+      // page makes them find it and tap again; opening the asset starts the
+      // download on the same press that discovered it. The release page is the
+      // fallback if a release is ever published without an APK attached.
+      const asset = (data.assets || []).find((file) => /\.apk$/i.test(String(file.name || '')));
+      const download = (asset && asset.browser_download_url) || data.html_url;
+      say(`v${latest} is available. Downloading it now; open the file when it finishes.`);
+      window.open(download, '_blank', 'noopener');
+      return;
     } else if (cmp === 0) {
       say(`Up to date. This is v${here}.`);
     } else {
@@ -4517,17 +4502,17 @@ function renderSettings(container) {
             <div class="setting-label">Updates</div>
           </div>
           <div class="setting-control">
-            <button class="btn btn-ghost" onclick="checkForUpdate(this)">Check</button>
+            <button class="btn btn-ghost" onclick="checkForUpdate(this)">Update</button>
           </div>
         </div>
         <!-- Top row first: "Updates" on the left with the button that acts on it
              on the right, then the version directly underneath it, then whatever
-             Check says directly underneath that. The three stack as one column
+             Update says directly underneath that. The three stack as one column
              under the heading, so the answer lands where the eye already is
              rather than in the far corner of the card.
 
              Still below the row rather than above it: above it, the note
-             appearing would shove the Check button out from under the next tap. -->
+             appearing would shove the Update button out from under the next tap. -->
         <p style="color: var(--text-secondary);">
           <strong>Sorted <span class="app-version">v${APP_VERSION}</span></strong> ·
           <a href="https://github.com/jaquesbody/sorted/releases" target="_blank" rel="noopener"
