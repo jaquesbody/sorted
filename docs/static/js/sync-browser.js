@@ -15,8 +15,8 @@
  * The handles live in their own small IndexedDB database rather than in the
  * app's, because adding a store to the app's database is a schema migration for
  * something that is not app data. The settings keep a short synthetic id
- * (`browser:dir`, `browser:file`); the handle itself never goes in
- * localStorage, which cannot hold one.
+ * (`browser:dir`, `browser:cloud-dir`, `browser:file`); the handle itself never
+ * goes in localStorage, which cannot hold one.
  *
  * Firefox and Safari do not implement the pickers. There `provider()` returns
  * null and the card does not offer these routes, which is the same answer the
@@ -26,6 +26,7 @@
 const BROWSER_SYNC_HANDLE_DB = 'sorted-sync-handles';
 const BROWSER_SYNC_HANDLE_STORE = 'handles';
 const BROWSER_SYNC_DIR_URI = 'browser:dir';
+const BROWSER_SYNC_CLOUD_DIR_URI = 'browser:cloud-dir';
 const BROWSER_SYNC_FILE_URI = 'browser:file';
 
 let browserSyncHandleDb = null;
@@ -79,10 +80,12 @@ async function dropBrowserSyncHandle(key) {
 }
 
 function browserSyncSupported() {
+  // Cloud is a folder now, so only the directory picker is part of this
+  // build's setup. The file pickers are still wrapped below for the old
+  // document route, but a browser without them is not a reason to hide the
+  // two folder routes.
   return typeof window !== 'undefined'
     && typeof window.showDirectoryPicker === 'function'
-    && typeof window.showOpenFilePicker === 'function'
-    && typeof window.showSaveFilePicker === 'function'
     && window.isSecureContext !== false;
 }
 
@@ -159,8 +162,10 @@ async function writeBrowserFileHandle(handle, fileName, data, noun) {
  * readFile/writeFile for one document. Keeping the shape identical is what lets
  * syncNow() have one code path per mechanism rather than one per platform.
  */
-function createSortedBrowserSync(fileName) {
+function createSortedBrowserSync(fileName, handleKey, dirUri) {
   if (!browserSyncSupported()) return null;
+  const key = handleKey || 'dir';
+  const uri = dirUri || BROWSER_SYNC_DIR_URI;
   const JSON_TYPES = [{
     description: 'Sorted snapshot',
     accept: { 'application/json': ['.json'] }
@@ -169,9 +174,9 @@ function createSortedBrowserSync(fileName) {
   return {
     pick: async () => {
       try {
-        const handle = await window.showDirectoryPicker({ id: 'sorted-sync-folder', mode: 'readwrite' });
-        await saveBrowserSyncHandle('dir', handle);
-        return { uri: BROWSER_SYNC_DIR_URI, name: handle.name || 'the folder you chose' };
+        const handle = await window.showDirectoryPicker({ id: 'sorted-sync-' + key, mode: 'readwrite' });
+        await saveBrowserSyncHandle(key, handle);
+        return { uri: uri, name: handle.name || 'the folder you chose' };
       } catch (err) {
         if (browserPickerCancelled(err)) return { cancelled: true };
         throw err;
@@ -179,18 +184,20 @@ function createSortedBrowserSync(fileName) {
     },
 
     read: async () => {
-      const handle = await loadBrowserSyncHandle('dir');
+      const handle = await loadBrowserSyncHandle(key);
       return readBrowserFileHandle(handle, fileName, 'folder');
     },
 
     write: async (options) => {
-      const handle = await loadBrowserSyncHandle('dir');
+      const handle = await loadBrowserSyncHandle(key);
       return writeBrowserFileHandle(handle, fileName, (options && options.data) || '', 'folder');
     },
 
     forget: async (options) => {
       const uri = String((options && options.uri) || '');
-      await dropBrowserSyncHandle(uri === BROWSER_SYNC_FILE_URI ? 'file' : 'dir');
+      const drop = uri === BROWSER_SYNC_FILE_URI ? 'file'
+        : uri === BROWSER_SYNC_CLOUD_DIR_URI ? 'cloud-dir' : key;
+      await dropBrowserSyncHandle(drop);
       return { ok: true };
     },
 

@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.12';
+const APP_VERSION = '2.103.14';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1786,7 +1786,7 @@ async function dashboardSyncNow(btn) {
 // knew better; this is the same answer.
 function syncConfigured() {
   const s = syncSettings();
-  return syncRouteReady(SYNC_TRANSPORTS[s.transport], s);
+  return syncRouteReady(SYNC_TRANSPORTS[s.transport], s, s.transport);
 }
 
 // The Sync card.
@@ -1841,9 +1841,10 @@ function syncSettingsHtml() {
     return `<option value="${one}"${one === key ? ' selected' : ''}>${escapeHTML(t.label)}</option>`;
   }).join('');
 
-  const ready = syncRouteReady(active, s);
+  const ready = syncRouteReady(active, s, key);
   const byFolder = !!(active && active.needsFolder);
   const byFile = !!(active && active.needsFile);
+  const folder = byFolder ? syncFolderSetting(key, s) : null;
 
   // One setting and one button, and that is the whole of it.
   //
@@ -1890,12 +1891,13 @@ function syncSettingsHtml() {
       </div>
       <div class="setting-control" style="display: flex; gap: 6px; justify-content: flex-end; flex-wrap: nowrap;">
         <button class="btn btn-ghost" id="sync-folder"
-                title="${escapeHTML(s.folderName || '')}"
+                title="${escapeHTML(folder.name || '')}"
                 onclick="chooseSyncFolderFromSettings(this)">Open</button>
         <button class="btn btn-primary" onclick="syncFromSettings(this)"
                 ${ready ? '' : 'disabled'}>Sync</button>
       </div>
-    </div>` : byFile ? `
+    </div>
+    ${folder.uri ? `<div class="setting-hint sync-folder-path" id="sync-folder-path">${escapeHTML(folder.name || 'the folder you chose')} / ${SYNC_FILE}</div>` : ''}` : byFile ? `
     <div class="setting-row setting-row--inline setting-row--nowrap" style="margin-top: 14px; padding: 0;">
       <div class="setting-text">
         <div class="setting-label" id="sync-file-label">File</div>
@@ -1914,8 +1916,8 @@ function syncSettingsHtml() {
         <div class="setting-label">Wi-Fi</div>
       </div>
       <div class="setting-control setting-control--wide">
-        <input class="form-input" id="sync-url-lan" type="url" inputmode="url"
-               placeholder="e.g. http://192.168.1.10:8787/sorted-sync.json"
+        <input class="form-input" id="sync-url-lan" type="text" inputmode="url"
+               placeholder="e.g. 192.168.1.10"
                value="${escapeHTML(s.urlLan)}"
                style="text-align: left;"
                ${active && active.available ? '' : 'disabled'}
@@ -1927,8 +1929,8 @@ function syncSettingsHtml() {
         <div class="setting-label">Tailscale</div>
       </div>
       <div class="setting-control setting-control--wide">
-        <input class="form-input" id="sync-url-tailscale" type="url" inputmode="url"
-               placeholder="e.g. http://100.101.102.103:8787/sorted-sync.json"
+        <input class="form-input" id="sync-url-tailscale" type="text" inputmode="url"
+               placeholder="e.g. 100.101.102.103"
                value="${escapeHTML(s.urlTailscale)}"
                style="text-align: left;"
                ${active && active.available ? '' : 'disabled'}
@@ -1937,12 +1939,13 @@ function syncSettingsHtml() {
     </div>`}
     ${byFolder ? '' : `<button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
-            ${ready ? '' : 'disabled'}>Sync now</button>`}
+            ${ready ? '' : 'disabled'}>Sync</button>`}
     <details class="setup-steps">
       <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
+      ${SYNC_SETUP_FOOTNOTES[key] ? `<div class="setup-footnote">${SYNC_SETUP_FOOTNOTES[key]}</div>` : ''}
       ${SYNC_SETUP_NOTES[key] ? `<div class="setup-note">${SYNC_SETUP_NOTES[key]}</div>` : ''}
     </details>`;
 }
@@ -1964,10 +1967,39 @@ function shortFolderName(name) {
 
 // One of the two Network addresses. Kept in its own field rather than a single
 // `url`, because they are two ways to the same host and either can be absent.
+// Only the host (and a port, if someone uses one) is stored: the protocol and
+// the file name are the same on every install, so making them part of the
+// answer makes the simplest possible entry look like a web address to copy.
 function setSyncAddress(field, value) {
   const patch = {};
-  patch[field] = String(value || '').trim();
+  patch[field] = syncAddressInput(value);
   setSyncSettings(patch);
+}
+
+// A quick note that the system picker is open, so that coming back lands on
+// Settings > Sync rather than the Dashboard. Android can suspend the WebView
+// while the picker is in front; when it comes back, the page has to know which
+// tab it was on. The note is short-lived so a stale one can never trap a later
+// launch on Settings.
+const SYNC_RETURN_KEY = 'sorted-sync-return';
+const SYNC_RETURN_MS = 120000;
+
+function noteSyncPickerReturn() {
+  try {
+    localStorage.setItem(SYNC_RETURN_KEY, JSON.stringify({ page: 'settings', at: Date.now() }));
+  } catch (err) {
+    // Storage being unavailable is not a reason to fail the picker.
+  }
+}
+
+function takeSyncPickerReturn() {
+  let value = null;
+  try { value = JSON.parse(localStorage.getItem(SYNC_RETURN_KEY) || 'null'); } catch (err) {
+    value = null;
+  }
+  try { localStorage.removeItem(SYNC_RETURN_KEY); } catch (err) { /* nothing to clear */ }
+  if (!value || typeof value.at !== 'number') return '';
+  return Date.now() - value.at < SYNC_RETURN_MS ? String(value.page || '') : '';
 }
 
 // Choosing the folder is the entire setup for the two folder routes: one tap,
@@ -1977,34 +2009,46 @@ function setSyncAddress(field, value) {
 // doing that off the back of a tap labelled "Open" would be a surprise; the
 // Sync beside it is where that decision belongs.
 async function chooseSyncFolderFromSettings(btn) {
-  const plugin = syncFolderPlugin();
+  const transport = syncSettings().transport;
+  const plugin = syncFolderPlugin(transport);
   if (!plugin) {
     // Only reachable if the browser build is somehow showing this row, but a
     // dead button that says nothing is worse than a sentence.
     showToast('Choosing a folder needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
     return;
   }
-  // The button says Open before and after the picker. Only its state changes,
-  // because a label that turns into "Choosing…" is motion on a screen that is
-  // about to leave for the system picker anyway.
+  // The button says Open before, during and after the picker. Only its state
+  // changes, because a label that turns into "Choosing…" is motion on a screen
+  // that is about to leave for the system picker anyway.
+  const current = syncFolderSetting(transport, syncSettings());
+  noteSyncPickerReturn();
+  currentPage = 'settings';
   if (btn) btn.disabled = true;
   let message = null;
   try {
     const res = await plugin.pick();
     // Backing out of the picker is a decision, not a failure.
     if (res && res.uri) {
-      const previous = syncSettings().folderUri;
-      if (previous && previous !== res.uri) {
+      if (current.uri && current.uri !== res.uri) {
         // Android holds a limited number of these grants per app; letting go of
         // the last folder is what keeps the next choice possible.
-        try { await plugin.forget({ uri: previous }); } catch (err) { /* nothing to undo */ }
+        try { await plugin.forget({ uri: current.uri }); } catch (err) { /* nothing to undo */ }
       }
-      setSyncSettings({ folderUri: res.uri, folderName: res.name || '' });
+      if (transport === 'cloud') {
+        setSyncSettings({ cloudFolderUri: res.uri, cloudFolderName: res.name || '' });
+      } else {
+        setSyncSettings({ folderUri: res.uri, folderName: res.name || '' });
+      }
       message = 'Folder set. Tap Sync to use it.';
     }
   } catch (err) {
     message = String((err && err.message) || err);
   }
+  try { localStorage.removeItem(SYNC_RETURN_KEY); } catch (err) { /* nothing to clear */ }
+  // The picker leaves the app, and Android may bring the WebView back with
+  // `currentPage` reset to its first value. Coming back to the folder row is the
+  // only sensible place to land after choosing that folder.
+  currentPage = 'settings';
   await renderPage();
   if (message) showToast(message, 6000);
 }
@@ -2021,7 +2065,7 @@ async function chooseSyncFileFromSettings(btn, create) {
     showToast('Choosing a file needs Chrome or Edge on a desktop, or the Sorted phone app.', 6000);
     return;
   }
-  if (btn) { btn.disabled = true; btn.textContent = create ? 'Saving…' : 'Choosing…'; }
+  if (btn) btn.disabled = true;
   let message = null;
   try {
     const res = create ? await plugin.createFile() : await plugin.pickFile();
@@ -3335,8 +3379,6 @@ function renderPatternsCard(shift) {
 async function checkForUpdate(btn) {
   const note = document.getElementById('update-note');
   const say = (text) => { if (note) note.textContent = text; };
-  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
-  const restore = () => { if (btn) { btn.disabled = false; btn.textContent = 'Update'; } };
 
   const RELEASES_API = 'https://api.github.com/repos/jaquesbody/sorted/releases/latest';
   try {
@@ -3376,8 +3418,6 @@ async function checkForUpdate(btn) {
     }
   } catch (err) {
     say(`Could not check: ${String((err && err.message) || err)}`);
-  } finally {
-    restore();
   }
 }
 
@@ -4502,7 +4542,7 @@ function renderSettings(container) {
             <div class="setting-label">Updates</div>
           </div>
           <div class="setting-control">
-            <button class="btn btn-ghost" onclick="checkForUpdate(this)">Update</button>
+            <button class="btn btn-ghost btn-update" onclick="checkForUpdate(this)">Update</button>
           </div>
         </div>
         <!-- Top row first: "Updates" on the left with the button that acts on it
@@ -6779,6 +6819,11 @@ maybeShowPrivacyNotice();
 // Only starts anything if notifications were already switched on, so the
 // common case costs one function call and no listeners.
 initNotifications();
+// A system picker can outlive the WebView that opened it. If it does, this is
+// how the fresh page knows to come back to Settings > Sync rather than the
+// Dashboard.
+const returnedPage = takeSyncPickerReturn();
+if (returnedPage) currentPage = returnedPage;
 renderPage();
 // Automatic sync from the first load, not from the first visit to Settings. The
 // delay lets the initial render finish before a pull replaces the data and asks

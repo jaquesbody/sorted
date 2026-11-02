@@ -62,15 +62,15 @@ const SYNC_TRANSPORTS = {
   cloud: {
     label: 'Cloud',
     available: true,
-    blurb: 'One file in your own drive, on a drive app that can write to it',
-    needsFile: true
+    blurb: 'A folder in your own drive, kept in step by its desktop or mobile app',
+    needsFolder: true
   },
   network: {
     label: 'Network',
     available: true,
     blurb: 'A computer on your Wi-Fi, or the same file over Tailscale',
     needsUrl: true,
-    urlHint: 'e.g. http://192.168.1.10:8787/sorted-sync.json'
+    urlHint: 'e.g. 192.168.1.10'
   }
 };
 
@@ -123,57 +123,67 @@ function setupAside(html) {
   return '<span class="setup-aside">' + html + '</span>';
 }
 
+// A note inside a numbered step rather than under a command. Same small grey
+// line, but it is not an explanation of the box above it.
+function setupNote(html) {
+  return '<span class="setup-step-note">' + html + '</span>';
+}
+
 const SYNC_SETUP_STEPS = {
   network: [
-    'On a computer that stays on, and on the same Wi-Fi as this phone, install <strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.',
+    'On a device that always stays on, and is on the same Wi-Fi as the device you want to sync to, install <strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.',
 
-    'Open a <strong>new</strong> terminal and get <strong>the Sorted folder</strong>. Paste this in and press enter:'
+    'Open a terminal, paste this in and press enter:'
       + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
       + setupAside('If it says <strong>git</strong> is not recognised, install Git from <a href="https://git-scm.com/install/" target="_blank" rel="noopener">git-scm.com</a> first, then run it again.'),
 
-    'Start the sync host, in that same terminal:'
+    'In that same terminal run:'
       + setupCommand('node sorted/tools/sync-host.mjs')
       + setupAside('Then leave it running.'),
 
     'It prints an address for each network it can see. Copy the Wi-Fi one, the address starting <strong>192.168.</strong>, into the <strong>Wi-Fi</strong> box above.',
 
-    'To sync away from home, install and set up <strong>Tailscale</strong> on the computer and this phone, sign in on both, and connect them. Then copy that computer\'s address starting <strong>100.</strong> into the <strong>Tailscale</strong> box above.'
-      + setupPart('<span class="setup-example">http://100.101.102.103:8787/<wbr>sorted-sync.json</span>'),
-
-    'Tap <strong>Sync now</strong>.',
-
-    'Repeat steps 4 and 6 on every other device you want to sync with. The computer is set up once, so the other devices only need the address and a tap.'
-  ],
-  syncthing: [
-    'Install and set up <strong>Syncthing</strong> on the devices you want to connect, creating and then linking a specific <strong>Sorted</strong> folder.',
-
-    'Tap <strong>Open</strong> above and locate that <strong>Sorted</strong> folder. Sorted keeps one file there, <strong>sorted-sync.json</strong>.',
+    'To sync away from home, install and set up <a href="https://play.google.com/store/apps/details?id=com.tailscale.ipn" target="_blank" rel="noopener"><strong>Tailscale</strong></a> on the computer and other devices, sign in on both, and connect them. Then copy your computer\'s address starting <strong>100.</strong> into the <strong>Tailscale</strong> box above.'
+      + setupNote('Note: Only one IP address is needed, if two IP addresses are used sync is performed by whichever answers first.'),
 
     'Tap <strong>Sync</strong>.',
 
-    'Repeat steps 2 and 3 on the other devices. Done.'
+    'Repeat steps 1-6 on all devices you want to sync with.'
+  ],
+  syncthing: [
+    'Create a <strong>sorted</strong> folder to save <strong>sorted-sync.json</strong> to.',
+
+    'Install and set up <a href="https://play.google.com/store/apps/details?id=com.github.catfriend1.syncthingandroid" target="_blank" rel="noopener"><strong>Syncthing</strong></a>.',
+
+    'Choose the <strong>Folder location</strong> above.',
+
+    'Tap <strong>Sync</strong>.',
+
+    'Repeat steps 1-5 on all devices you want to sync with.'
   ],
   cloud: [
-    'Install and sign in to a drive app that can <strong>write to a file it opened</strong>. That is the requirement: Sorted opens <strong>sorted-sync.json</strong> and saves back into that same file, so an app that can only upload a new copy will not keep the devices in sync. <strong>Proton Drive is not compatible</strong>: its Android app opens an existing file for reading only. Google Drive and OneDrive are the common choices, but no drive is guaranteed, because a drive app can change.',
+    'Create a <strong>sorted</strong> folder on your Cloud drive to save <strong>sorted-sync.json</strong> to.',
 
-    'On <strong>one device</strong>, tap <strong>Save new copy</strong> above and save <strong>sorted-sync.json</strong> into that drive. This makes the file, so it is done once, and on one device only.',
+    'Choose the <strong>Folder location</strong> above.',
 
-    'Tap <strong>Sync now</strong> and let the drive finish uploading it.',
+    'Tap <strong>Sync</strong>.',
 
-    'On every other device, tap <strong>Choose file</strong> above and pick that same <strong>sorted-sync.json</strong>, then tap <strong>Sync now</strong>.',
-
-    'That is the whole setup. After it, changes sync on their own, with nothing to press. If a device ever asks for the file again, choose the same one. Never save a second copy: it makes a new file, and devices on different files never see each other. If a phone cannot write to the file, Sorted says so on the first Sync now and keeps that phone\'s changes on the phone.'
+    'Repeat steps 1-4 on all devices you want to sync with.'
   ]
+};
+
+// A line under the steps that is worth saying once, apart from the numbered
+// instructions.
+const SYNC_SETUP_FOOTNOTES = {
+  cloud: 'Note: Proton Drive is not compatible.'
 };
 
 // What a route costs, said under the steps where the choice is made. Cloud is
 // the only route that puts the whole file on somebody else's computer, so its
-// note is blunt: this is a bank statement, not a shopping list. The two routes
-// that do not use a cloud are named in the same breath, because "your data
-// leaves your phone" is only a fair warning if the alternative is one tap away.
+// note is the one the user wrote: a plain statement of what the provider can
+// see, with no sales pitch for the alternatives.
 const SYNC_SETUP_NOTES = {
-  network: 'Only one IP address is needed. If both are filled in, Sorted uses whichever answers first, so the Wi-Fi address alone is enough at home and the Tailscale address alone is enough away from home.',
-  cloud: '<strong>What Cloud costs you in privacy.</strong> The file leaves your devices and is stored by the company that runs the drive. Unless the drive is end-to-end encrypted, that company can read it, and it holds every account, balance and bill in Sorted. Choose a provider you would trust with a bank statement, and turn on two-factor authentication. If that trade is not for you, the <strong>Syncthing</strong> route keeps the file on your own devices, and the <strong>Network</strong> route keeps it on a computer you own; neither uses a cloud. Proton Drive is respected for privacy, and it is the one this route cannot use.'
+  cloud: '<strong>Important note on compatibility and privacy:</strong> For cloud sync to work seamlessly the provider must be able to \'write to file\', this allows for effortless sync between devices. However, this may limit who can provide this service, and subsequently what data and personal information they can obtain about you.'
 };
 
 // ---------------------------------------------------------------- settings
@@ -213,10 +223,15 @@ function syncSettings() {
     // so switching routes does not lose an answer.
     folderUri: typeof set.folderUri === 'string' ? set.folderUri : '',
     folderName: typeof set.folderName === 'string' ? set.folderName : '',
-    // The Cloud route's setting, and a different shape from a folder on purpose:
-    // the system's Save-to picker creates one document and hands back that
-    // document's URI, which is what Proton and others expose. A folder tree
-    // needs a provider that publishes a browseable tree, and Proton does not.
+    // Cloud is a folder too, but its own folder: switching between Syncthing
+    // and Cloud must not carry one route's answer into the other. Sharing
+    // `folderUri` would make the card show Syncthing's folder as Cloud's and
+    // then write the snapshot into the wrong place.
+    cloudFolderUri: typeof set.cloudFolderUri === 'string' ? set.cloudFolderUri : '',
+    cloudFolderName: typeof set.cloudFolderName === 'string' ? set.cloudFolderName : '',
+    // The file route's old settings. Cloud no longer uses a document, but a
+    // phone that had one is not made to lose the rest of its settings on the
+    // way to the folder picker; these are simply not read by the card.
     fileUri: typeof set.fileUri === 'string' ? set.fileUri : '',
     fileName: typeof set.fileName === 'string' ? set.fileName : '',
     // A document the Save-to picker has just made is empty on purpose, and some
@@ -522,8 +537,16 @@ async function syncFetch(url, options) {
 // that can be used again after a reload; sync-browser.js wraps it in the same
 // shape. Firefox and Safari have neither, so the routes are not offered there.
 let syncFolderCap = null;
+let syncFolderCaps = {};
 
-function syncFolderPlugin() {
+// Which stored handle a route owns in a desktop browser. The two folder routes
+// are two different folders even on one machine, so they cannot share one.
+function syncFolderKey(transport) {
+  return transport === 'cloud' ? 'cloud-dir' : 'dir';
+}
+
+function syncFolderPlugin(transport) {
+  const key = syncFolderKey(transport);
   const cap = window.Capacitor;
   const native = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
   if (native) {
@@ -531,10 +554,10 @@ function syncFolderPlugin() {
     if (!syncFolderCap) syncFolderCap = cap.registerPlugin('SortedFolder');
     return syncFolderCap;
   }
-  if (!syncFolderCap && typeof createSortedBrowserSync === 'function') {
-    syncFolderCap = createSortedBrowserSync(SYNC_FILE);
+  if (!syncFolderCaps[key] && typeof createSortedBrowserSync === 'function') {
+    syncFolderCaps[key] = createSortedBrowserSync(SYNC_FILE, key, 'browser:' + key);
   }
-  return syncFolderCap;
+  return syncFolderCaps[key];
 }
 
 // Whether this build can use a folder at all. One function, because three places
@@ -543,14 +566,55 @@ function syncFolderHere() {
   return !!syncFolderPlugin();
 }
 
+// Where a route keeps its folder. One question per route, so Cloud and
+// Syncthing each answer for themselves.
+function syncFolderSetting(transport, settings) {
+  const s = settings || syncSettings();
+  const key = typeof transport === 'string' ? transport : s.transport;
+  if (key === 'cloud') {
+    return { uri: s.cloudFolderUri, name: s.cloudFolderName };
+  }
+  return { uri: s.folderUri, name: s.folderName };
+}
+
 // What "ready to sync" means for a route: an address it can try, a folder, or
 // a file. One question per mechanism, asked of the setting that mechanism
 // actually uses, so the wrong one's absence never reads as "not set up".
-function syncRouteReady(transport, settings) {
+function syncRouteReady(transport, settings, transportKey) {
   if (!transport || !transport.available) return false;
-  if (transport.needsFolder) return !!settings.folderUri;
+  if (transport.needsFolder) {
+    return !!syncFolderSetting(transportKey || (settings && settings.transport), settings).uri;
+  }
   if (transport.needsFile) return !!settings.fileUri;
   return !!(settings.urlLan || settings.urlTailscale);
+}
+
+// The address as it is kept: a bare host, or host and port. The rest of the
+// URL is the app's business, not something to type on a phone. A full address
+// pasted from an older release is accepted and reduced to the part that varies.
+function syncAddressInput(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const full = text.match(/^https?:\/\/([^/]+)(?:\/sorted-sync\.json)?\/?$/i);
+  if (full) return full[1].replace(/:8787$/i, '');
+  return text
+    .replace(/\/sorted-sync\.json\/?$/i, '')
+    .replace(/:8787$/i, '');
+}
+
+// The URL the Network route actually fetches, built from the bare address.
+// Accepting a whole URL as well keeps an address saved by an earlier release
+// working, and a moved host working when someone pastes the printed line.
+function syncAddressUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const hasScheme = /^https?:\/\//i.test(text);
+  const scheme = hasScheme ? text.slice(0, text.indexOf('://') + 3) : 'http://';
+  let rest = hasScheme ? text.slice(scheme.length) : text.replace(/^\/+/, '');
+  if (/\/sorted-sync\.json\/?$/i.test(rest)) return scheme + rest;
+  rest = rest.replace(/\/+$/, '');
+  const base = rest.split('/')[0];
+  return scheme + (/:(\d+)$/.test(base) ? base : base + ':8787') + '/sorted-sync.json';
 }
 
 // The addresses a Network route will try, in order. Wi-Fi first, because it is
@@ -559,7 +623,9 @@ function syncRouteReady(transport, settings) {
 // host, so trying one after the other is a fallback, not a conflict.
 function syncAddresses(settings) {
   const s = settings || syncSettings();
-  return [s.urlLan, s.urlTailscale].filter((url) => !!url);
+  return [s.urlLan, s.urlTailscale]
+    .map((value) => syncAddressUrl(value))
+    .filter((url) => !!url);
 }
 
 // A first attempt can fail because the phone is still moving between Wi-Fi and
@@ -615,8 +681,8 @@ function readAnyAddress(urls) {
 
 // Reading a folder the person chose. "No file" is the ordinary first-run answer
 // rather than an error: the first sync creates it.
-async function folderReadSnapshot(uri) {
-  const plugin = syncFolderPlugin();
+async function folderReadSnapshot(uri, transport) {
+  const plugin = syncFolderPlugin(transport);
   if (!plugin) throw new Error('Syncing to a folder needs a folder picker.');
   const res = await plugin.read({ uri: uri });
   if (!res || !res.exists) return null;
@@ -628,8 +694,8 @@ async function folderReadSnapshot(uri) {
   return parsed;
 }
 
-async function folderWriteSnapshot(uri, snapshot) {
-  const plugin = syncFolderPlugin();
+async function folderWriteSnapshot(uri, snapshot, transport) {
+  const plugin = syncFolderPlugin(transport);
   if (!plugin) throw new Error('Syncing to a folder needs a folder picker.');
   await plugin.write({ uri: uri, data: JSON.stringify(snapshot) });
   return true;
@@ -952,7 +1018,8 @@ async function syncPassOnce(retried) {
   // uses, so the wrong one's absence never reads as "not set up".
   const byFolder = !!transport.needsFolder;
   const byFile = !!transport.needsFile;
-  if (byFolder && !settings.folderUri) {
+  const folder = byFolder ? syncFolderSetting(settings.transport, settings) : null;
+  if (byFolder && !folder.uri) {
     return { ok: false, error: 'No folder has been chosen yet.' };
   }
   if (byFile && !settings.fileUri) {
@@ -971,9 +1038,9 @@ async function syncPassOnce(retried) {
   let fileModified = 0;
 
   if (byFolder) {
-    writeRemote = (snapshot) => folderWriteSnapshot(settings.folderUri, snapshot);
+    writeRemote = (snapshot) => folderWriteSnapshot(folder.uri, snapshot, settings.transport);
     try {
-      remote = await folderReadSnapshot(settings.folderUri);
+      remote = await folderReadSnapshot(folder.uri, settings.transport);
     } catch (err) {
       const detail = String((err && err.message) || err);
       return { ok: false, error: detail, where: 'folder', detail: detail };
