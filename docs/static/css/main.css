@@ -2089,6 +2089,39 @@ body {
   color: var(--accent-on-tint);
 }
 
+/* Spend and Bills ask three questions — status, whose, and order — and the
+   answers sit together on one line rather than as two rows of lozenges. Each
+   picker is one answer, and the row wraps nowhere: a phone has room for three
+   at this size, and a split across two lines would stop them reading as a
+   single toolbar. */
+.filter-bar--lists {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 560px;
+}
+
+.filter-bar--lists .list-select {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  padding: 6px 5px;
+  font-size: var(--fs-xs);
+  line-height: calc(var(--toolbar-h) - 16px);
+  text-overflow: ellipsis;
+}
+
+/* Names are short and "Alphabetically" is not, so the middle picker gives up a
+   little of its share to the one that needs it. On the narrowest phones the
+   whole row takes the 11px step so every answer still fits without an ellipsis. */
+.filter-bar--lists .list-select--person { flex-grow: 0.95; }
+.filter-bar--lists .list-select--sort { flex-grow: 1.25; }
+
+@media (max-width: 380px) {
+  .filter-bar--lists .list-select { font-size: var(--fs-2xs); }
+}
+
 /* First-visit privacy notice. Its own overlay rather than the app modal: the
    site's notice (jaquesbody.github.io/know) is a bordered card with no title
    bar and a single full-width button, and the app modal would put a
@@ -3039,13 +3072,6 @@ body.is-locked {
 
 .person-options .person-option[aria-current="true"] {
   border-color: var(--accent);
-}
-
-/* The people row of a filter bar sits tighter to the list than the status
-   row does, since the two read as one control with two axes. */
-.filter-bar--people {
-  margin-top: -8px;
-  margin-bottom: 20px;
 }
 
 /* Report range chips stay on one line — three short labels always fit a

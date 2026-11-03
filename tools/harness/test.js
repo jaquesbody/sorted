@@ -496,7 +496,7 @@ async function runSuite(driverBase) {
     window.__recSaved = {
       spend: await getAll('spend'), due: await getAll('due'),
       page: currentPage, viewed: viewedDate.getTime(), dueViewed: dueViewedDate.getTime(),
-      spendFilter, dueFilter, personFilter
+      listFilter, listSort, personFilter
     };
     for (const s of ['spend', 'due']) for (const it of await getAll(s)) await deleteItem(s, it.id);
     const base = (y, m, d) => localISO(new Date(y, m, d));
@@ -1104,8 +1104,8 @@ async function runSuite(driverBase) {
     currentPage = saved.page;
     viewedDate = new Date(saved.viewed);
     dueViewedDate = new Date(saved.dueViewed);
-    spendFilter = saved.spendFilter;
-    dueFilter = saved.dueFilter;
+    listFilter = saved.listFilter;
+    listSort = saved.listSort;
     personFilter = saved.personFilter;
     navigate(currentPage);
   `);
@@ -1883,8 +1883,8 @@ async function runSuite(driverBase) {
 
     currentPage = 'spend'; renderPage();
     await new Promise((r) => setTimeout(r, 500));
-    out.peopleBar = !!document.querySelector('.filter-bar--people');
-    out.chips = [...document.querySelectorAll('.filter-bar--people .filter-chip')].map((c) => c.lastChild.textContent.trim());
+    out.peopleBar = !!document.querySelector('.filter-bar--lists select[aria-label="Person"]');
+    out.chips = [...document.querySelectorAll('.filter-bar--lists select[aria-label="Person"] option')].map((o) => o.textContent.trim());
     out.rowsAll = document.querySelectorAll('.item-row').length;
     out.totalAll = document.querySelector('.stat-card-value').textContent;
 
@@ -1907,6 +1907,101 @@ async function runSuite(driverBase) {
   check('the total follows the person filter', personUi.totalTom !== personUi.totalAll, personUi);
   check('Everyone brings the rows back', personUi.rowsEveryone === personUi.rowsAll, personUi);
   check('rows carry a person dot', personUi.dotsOnDashboard > 0, personUi);
+
+  // The three lozenge rows became one row of pickers, and the third one sorts.
+  // A month of our own keeps the order predictable; everything is put back
+  // afterwards because later checks read the real list.
+  const listUi = await run(`
+    const out = {};
+    const t = (label, got, want) => { out[label] = { got: got, want: want, pass: JSON.stringify(got) === JSON.stringify(want) }; };
+    window.__listSaved = {
+      spend: await getAll('spend'),
+      viewed: viewedDate.getTime(),
+      page: currentPage,
+      filter: listFilter,
+      sort: listSort,
+      person: personFilter
+    };
+    for (const item of await getAll('spend')) await deleteItem('spend', item.id);
+    const day = (n) => localISO(new Date(2027, 0, n));
+    await addItem('spend', { title: 'Zebra', amount: 5, date: day(3), category: 'Food' });
+    await addItem('spend', { title: 'Apple', amount: 20, date: day(1), category: 'Food', confirmed: false, recurring: true });
+    await addItem('spend', { title: 'Mango', amount: 10, date: day(2), category: 'Food' });
+    viewedDate = new Date(2027, 0, 1);
+    listFilter = 'all';
+    listSort = 'date';
+    personFilter = 'all';
+    currentPage = 'spend';
+    await renderPage();
+    await new Promise((r) => setTimeout(r, 500));
+
+    const titles = () => [...document.querySelectorAll('.item-title')].map((el) => el.textContent.trim());
+    const selects = [...document.querySelectorAll('.filter-bar--lists select')];
+    const bar = document.querySelector('.filter-bar--lists');
+    t('threePickers', selects.length, 3);
+    t('withTheThreeQuestions', selects.map((s) => s.getAttribute('aria-label')).join('|'), 'Status|Person|Sort');
+    t('statusOffersFour', [...selects[0].options].map((o) => o.textContent).join('|'), 'All|Confirmed|Pending|Recurring');
+    t('personOffersEveryoneThenNames', [...selects[1].options].map((o) => o.textContent).join('|'), 'Everyone|Sarah|Tom');
+    t('sortOffersFourOrders', [...selects[2].options].map((o) => o.textContent).join('|'), 'Date|£ High-Low|£ Low-High|Alphabetically');
+    t('allOnOneLine', new Set(selects.map((s) => Math.round(s.getBoundingClientRect().top))).size, 1);
+    t('andNoPickerOverflowsTheRow', bar ? bar.scrollWidth > bar.clientWidth + 1 : true, false);
+    t('andNoLozengeIsLeft', document.querySelectorAll('.filter-chip').length, 0);
+
+    t('dateIsNewestFirst', titles().join('|'), 'Zebra|Mango|Apple');
+    setListSort('amount-high');
+    await new Promise((r) => setTimeout(r, 400));
+    t('amountHighIsBiggestFirst', titles().join('|'), 'Apple|Mango|Zebra');
+    setListSort('amount-low');
+    await new Promise((r) => setTimeout(r, 400));
+    t('amountLowIsSmallestFirst', titles().join('|'), 'Zebra|Mango|Apple');
+    setListSort('title');
+    await new Promise((r) => setTimeout(r, 400));
+    t('alphabeticallyIsByTitle', titles().join('|'), 'Apple|Mango|Zebra');
+
+    // Back to Date for the status checks, so their order is the page's own.
+    setListSort('date');
+    await new Promise((r) => setTimeout(r, 400));
+    setListFilter('pending');
+    await new Promise((r) => setTimeout(r, 400));
+    t('pendingShowsOnlyTheUnticked', titles().join('|'), 'Apple');
+    setListFilter('recurring');
+    await new Promise((r) => setTimeout(r, 400));
+    t('recurringShowsOnlyTheRepeating', titles().join('|'), 'Apple');
+    setListFilter('confirmed');
+    await new Promise((r) => setTimeout(r, 400));
+    t('confirmedStillReadsAMissingTickAsTicked', titles().join('|'), 'Zebra|Mango');
+
+    const saved = window.__listSaved;
+    for (const item of await getAll('spend')) await deleteItem('spend', item.id);
+    for (const item of saved.spend) await addItem('spend', item);
+    viewedDate = new Date(saved.viewed);
+    currentPage = saved.page;
+    listFilter = saved.filter;
+    listSort = saved.sort;
+    personFilter = saved.person;
+    await renderPage();
+    await new Promise((r) => setTimeout(r, 500));
+    return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
+  `);
+  check('Spend and Bills have three pickers on one line',
+    listUi.detail.threePickers.pass
+    && listUi.detail.withTheThreeQuestions.pass
+    && listUi.detail.statusOffersFour.pass
+    && listUi.detail.personOffersEveryoneThenNames.pass
+    && listUi.detail.sortOffersFourOrders.pass
+    && listUi.detail.allOnOneLine.pass
+    && listUi.detail.andNoPickerOverflowsTheRow.pass
+    && listUi.detail.andNoLozengeIsLeft.pass, listUi);
+  check('and the order picker orders Date, both amounts and title',
+    listUi.detail.dateIsNewestFirst.pass
+    && listUi.detail.amountHighIsBiggestFirst.pass
+    && listUi.detail.amountLowIsSmallestFirst.pass
+    && listUi.detail.alphabeticallyIsByTitle.pass
+    && listUi.failures.length === 0, listUi);
+  check('and the status picker still means confirmed, pending and recurring',
+    listUi.detail.pendingShowsOnlyTheUnticked.pass
+    && listUi.detail.recurringShowsOnlyTheRepeating.pass
+    && listUi.detail.confirmedStillReadsAMissingTickAsTicked.pass, listUi);
 
   const stamped = await run(`
     // A new spend is stamped with whoever is using the app, with no tapping.
@@ -2578,9 +2673,9 @@ async function runSuite(driverBase) {
     const month = document.querySelector('.month-label').textContent;
     const due = localISO(new Date(dueViewedDate.getFullYear(), dueViewedDate.getMonth(), 15));
     await addItem('due', { title: 'Filter test', dueDate: due, amount: 42, category: 'Utilities', recurring: true, frequency: 'monthly' });
-    filterBills('all');
+    setListFilter('all');
     await new Promise((r) => setTimeout(r, 400));
-    const chips = [...document.querySelectorAll('.filter-bar[aria-label="Status"] .filter-chip')].map((c) => c.textContent);
+    const chips = [...document.querySelectorAll('.filter-bar--lists select[aria-label="Status"] option')].map((o) => o.textContent);
     const totalBefore = document.querySelector('.stat-card-value').textContent;
 
     // Pay it, then look at the same (now past) month again.
@@ -2599,14 +2694,31 @@ async function runSuite(driverBase) {
     const filterCounts = {};
     const filterPaid = {};
     for (const value of ['confirmed', 'pending', 'recurring', 'all']) {
-      filterBills(value);
+      setListFilter(value);
       await new Promise((r) => setTimeout(r, 350));
       filterCounts[value] = document.querySelectorAll('.item-row').length;
       filterPaid[value] = document.querySelectorAll('.item-timing--paid').length;
     }
-    return { month, chips, totalBefore, afterPay, filterCounts, filterPaid };
+    // The order picker is the same one Spend uses, applied to bills.
+    const amounts = () => [...document.querySelectorAll('.value-cell')]
+      .map((el) => Number(el.textContent.replace(/[^0-9.]/g, '')));
+    const billsTitles = () => [...document.querySelectorAll('.item-title')]
+      .map((el) => el.textContent.trim());
+    setListSort('amount-high');
+    await new Promise((r) => setTimeout(r, 350));
+    const amountHigh = amounts();
+    setListSort('amount-low');
+    await new Promise((r) => setTimeout(r, 350));
+    const amountLow = amounts();
+    setListSort('title');
+    await new Promise((r) => setTimeout(r, 350));
+    const titleOrder = billsTitles();
+    setListSort('date');
+    await new Promise((r) => setTimeout(r, 350));
+    return { month, chips, totalBefore, afterPay, filterCounts, filterPaid, amountHigh,
+      amountLow, titleOrder };
   `);
-  check('four filter chips, as on Spend', bills.chips.join() === 'All,Confirmed,Pending,Recurring', bills);
+  check('four status options, as on Spend', bills.chips.join() === 'All,Confirmed,Pending,Recurring', bills);
   check('the paid bill stays in the month it was due', bills.afterPay.month === bills.month, bills);
   check('nothing left owing in that past month', bills.afterPay.total === '£0.00', bills);
   check('paying leaves a Paid line', bills.afterPay.paidLines >= 1, bills);
@@ -2618,6 +2730,13 @@ async function runSuite(driverBase) {
   check('Pending shows no paid rows', bills.filterPaid.pending === 0, bills);
   check('Recurring catches the paid bill row', bills.filterPaid.recurring >= 1, bills);
   check('All is the widest', bills.filterCounts.all >= Math.max(bills.filterCounts.confirmed, bills.filterCounts.pending), bills);
+  check('the bill order picker goes high to low',
+    bills.amountHigh.every((n, i) => i === 0 || bills.amountHigh[i - 1] >= n), bills.amountHigh);
+  check('and low to high',
+    bills.amountLow.every((n, i) => i === 0 || bills.amountLow[i - 1] <= n), bills.amountLow);
+  check('and alphabetically by title',
+    bills.titleOrder.join('|') === [...bills.titleOrder].sort((a, b) => a.localeCompare(b)).join('|'),
+    bills.titleOrder);
 
   const history = await run(`
     // The month before this one holds the bill we just paid, and the months
@@ -2626,7 +2745,7 @@ async function runSuite(driverBase) {
     // recurring fixture also lives in that month, and what matters is that the
     // paid bill is still listed there and that it stops after that.
     goToThisMonth('due');
-    filterBills('all');
+    setListFilter('all');
     await new Promise((r) => setTimeout(r, 400));
     const older = [];
     for (let i = 0; i < 4; i++) {
@@ -2640,7 +2759,7 @@ async function runSuite(driverBase) {
   check('and months before it list nothing',
     history.older.slice(1).every((m) => m.rows === 0), history);
   check('months before it come up empty', history.older.slice(1).every((m) => m.rows === 0), history);
-  await run(`goToThisMonth('due'); filterBills('all');`);
+  await run(`goToThisMonth('due'); setListFilter('all');`);
 
   console.log('\n# bar colours');
   const tones = await run(`
@@ -2955,7 +3074,7 @@ async function runSuite(driverBase) {
       dueDate:iso(m,1),frequency:'monthly',recurring:true,accountId:acct});
     await markDuePaid(await getItem('due',id), null);
 
-    currentPage='due'; goToThisMonth('due'); filterBills('all');
+    currentPage='due'; goToThisMonth('due'); setListFilter('all');
     renderPage(); await new Promise(r=>setTimeout(r,900));
     const settled=[...document.querySelectorAll('.item-row')].find(r=>/Rent/.test(r.textContent));
     const tick=settled?settled.querySelector('[data-action="unpaid"]'):null;
@@ -3192,7 +3311,7 @@ async function runSuite(driverBase) {
 
   console.log('\n# this round: the bill says when');
   const billWhen = await run(`
-    currentPage='due'; goToThisMonth('due'); filterBills('all'); renderPage();
+    currentPage='due'; goToThisMonth('due'); setListFilter('all'); renderPage();
     await new Promise(r=>setTimeout(r,900));
     const rows=[...document.querySelectorAll('.item-row')];
     const far=rows.find(r=>/Rent/.test(r.textContent));
@@ -3956,6 +4075,32 @@ async function runSuite(driverBase) {
   check('the savings nudge says what it says now',
     round.copy.goal && round.copy.goalBody && !round.copy.oldGoal, round.copy);
 
+  // The bar, not just the legend. A negative Left used to be added into the
+  // scale, so £1 Spent and £100 Savings both clamped to 100% and the browser's
+  // flex sizing split the two segments 50/50. The legend was right all along;
+  // this checks the widths that were wrong.
+  const barScale = await run(`
+    const host = document.createElement('div');
+    host.innerHTML = renderTotalMoneyCard(
+      [{ name: 'Bank', balance: 0 }], 1, 0, 0, 100, 0, 0, null);
+    const segments = [...host.querySelectorAll('.total-seg')].map((el) => ({
+      tone: (el.className.match(/tone-([a-z]+)/) || [])[1],
+      width: Number.parseFloat(el.style.width)
+    }));
+    const legend = [...host.querySelectorAll('.total-key')].map((el) => el.textContent.trim());
+    return { segments, legend };
+  `);
+  check('the Total money bar gives £1 Spent and £100 Savings their real share',
+    barScale.segments.length === 2
+      && barScale.segments[0].tone === 'accent'
+      && barScale.segments[1].tone === 'success'
+      && Math.abs(barScale.segments[0].width - (1 / 101) * 100) < 0.05
+      && Math.abs(barScale.segments[1].width - (100 / 101) * 100) < 0.05,
+    barScale);
+  check('and the legend still states the figures it drew',
+    barScale.legend.includes('Spent £1.00') && barScale.legend.includes('Savings £100.00'),
+    barScale.legend);
+
   // ---------------------------------------------------------------------------
   // The Total Money card answers to its own month.
   //
@@ -4535,7 +4680,7 @@ async function runSuite(driverBase) {
       viewedDate = new Date(2027, 0, 1);
       dueViewedDate = new Date(2027, 0, 1);
       dashViewedDate = new Date(2027, 0, 1);
-      spendFilter = 'all'; dueFilter = 'all'; personFilter = 'all';
+      listFilter = 'all'; listSort = 'date'; personFilter = 'all';
       currentPage = page;
       await renderPage();
       await new Promise((r) => setTimeout(r, 700));
@@ -7534,15 +7679,16 @@ async function runSuite(driverBase) {
         stepsUi.failures.length === 0, stepsUi.failures);
 
     // ---------------------------------------------------------------
-    // Updates: one press checks, and when there is a newer build it opens the
-    // APK asset itself rather than dropping the person on a release page to
-    // find the file. Android still asks before installing; this only starts
-    // the download.
+    // Updates: one press checks, and when there is a newer build the phone
+    // downloads the APK and hands it to Android's installer. In a browser the
+    // APK opens as before. Android still asks before installing; this starts
+    // the download and the prompt, rather than leaving a file in notifications.
     const updates = await run(`
       const out = {};
       const t = (label, got, want) => { out[label] = { got: got, want: want, pass: JSON.stringify(got) === JSON.stringify(want) }; };
       const realFetch = window.fetch;
       const realOpen = window.open;
+      const realCap = window.Capacitor;
       let opened = null;
       window.open = (url) => { opened = url; return null; };
       window.fetch = async () => ({
@@ -7561,11 +7707,32 @@ async function runSuite(driverBase) {
       await new Promise((r) => setTimeout(r, 300));
       const button = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Update');
       t('theButtonSaysUpdate', !!button, true);
+
+      // A browser has no installer, so the APK is opened as a download.
+      window.Capacitor = { isNativePlatform: () => false };
       if (button) button.click();
       await new Promise((r) => setTimeout(r, 250));
-      t('andItOpensTheApkItself', opened, 'https://example.test/sorted-v2-99.0.0-debug.apk');
+      t('andInABrowserItOpensTheApkItself', opened, 'https://example.test/sorted-v2-99.0.0-debug.apk');
       t('andSaysItIsDownloading', /Downloading it now/.test(document.getElementById('update-note').textContent), true);
       t('andTheButtonGoesBackToUpdate', button ? button.textContent.trim() : '', 'Update');
+
+      // On the phone the same press goes through the native updater, which
+      // launches Android's own install prompt. Nothing is sent to window.open.
+      opened = null;
+      let seen = null;
+      window.Capacitor = {
+        isNativePlatform: () => true,
+        registerPlugin: (name) => ({
+          install: async (args) => { seen = { name, args }; return { launched: true }; }
+        })
+      };
+      if (button) button.click();
+      await new Promise((r) => setTimeout(r, 300));
+      t('theNativeUpdaterIsUsedOnThePhone', seen && seen.name, 'SortedUpdater');
+      t('andItGetsTheApkUrl', seen && seen.args.url, 'https://example.test/sorted-v2-99.0.0-debug.apk');
+      t('andTheBrowserIsNotOpened', opened, null);
+      t('andTheNoteSaysTheInstallerIsOpen',
+        /Android's installer is open/.test(document.getElementById('update-note').textContent), true);
 
       // The three rows and hints removed at the user's ask stay removed.
       const page = document.querySelector('.page') || document.body;
@@ -7575,19 +7742,45 @@ async function runSuite(driverBase) {
 
       window.fetch = realFetch;
       window.open = realOpen;
+      window.Capacitor = realCap;
       localStorage.removeItem('sorted-sync-settings');
       return { checks: Object.keys(out).length, failures: Object.entries(out).filter(([, v]) => !v.pass).map(([k]) => k), detail: out };
     `);
     check('the Updates button checks and starts the APK download itself',
       updates.detail.theButtonSaysUpdate.pass
-      && updates.detail.andItOpensTheApkItself.pass
+      && updates.detail.andInABrowserItOpensTheApkItself.pass
       && updates.detail.andSaysItIsDownloading.pass
       && updates.detail.andTheButtonGoesBackToUpdate.pass, updates);
+    check('and on the phone it hands the APK to Android\'s installer',
+      updates.detail.theNativeUpdaterIsUsedOnThePhone.pass
+      && updates.detail.andItGetsTheApkUrl.pass
+      && updates.detail.andTheBrowserIsNotOpened.pass
+      && updates.detail.andTheNoteSaysTheInstallerIsOpen.pass, updates);
     check('and the removed rows and hints stay removed',
       updates.detail.noReplacedCopyRow.pass
       && updates.detail.noAutomaticSyncHint.pass
       && updates.detail.noTwoAddressHint.pass
       && updates.failures.length === 0, updates);
+
+    // The native half is Java, so the suite reads it rather than pretending a
+    // browser can install a package. Registration, the permission, and the
+    // FileProvider hand-off are the three things whose absence made the old
+    // button leave a download pending.
+    const updaterSource = fs.readFileSync(
+      path.join(REPO, 'android/app/src/main/java/com/jaquesbody/sorted/SortedUpdaterPlugin.java'), 'utf8');
+    const mainSource = fs.readFileSync(
+      path.join(REPO, 'android/app/src/main/java/com/jaquesbody/sorted/MainActivity.java'), 'utf8');
+    const manifestSource = fs.readFileSync(
+      path.join(REPO, 'android/app/src/main/AndroidManifest.xml'), 'utf8');
+    check('the updater plugin is registered and allowed to install',
+      /@CapacitorPlugin\(name = "SortedUpdater"\)/.test(updaterSource)
+      && /registerPlugin\(SortedUpdaterPlugin\.class\)/.test(mainSource)
+      && /android\.permission\.REQUEST_INSTALL_PACKAGES/.test(manifestSource), {});
+    check('and it downloads an APK and hands it to the system installer',
+      /FileProvider\.getUriForFile/.test(updaterSource)
+      && /Intent\.ACTION_VIEW/.test(updaterSource)
+      && /application\/vnd\.android\.package-archive/.test(updaterSource)
+      && /canRequestPackageInstalls/.test(updaterSource), {});
 
     console.log('\n# notifications: the plan, the memory, and the native route');
 

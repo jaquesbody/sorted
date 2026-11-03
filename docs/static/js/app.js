@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.15';
+const APP_VERSION = '2.103.16';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -16,8 +16,12 @@ let dueViewedDate = new Date();
 dueViewedDate.setDate(1);
 let dashViewedDate = new Date();
 dashViewedDate.setDate(1);
-let spendFilter = 'all';
-let dueFilter = 'all'; // Bills page: 'all' | 'pending' | 'confirmed' | 'recurring'
+// Spend and Bills share the three questions now asked by one row of pickers:
+// which status, whose, and in what order. They were chips on each page, and a
+// person switching tabs found the other list quietly filtered to a different
+// slice.
+let listFilter = 'all'; // 'all' | 'confirmed' | 'pending' | 'recurring'
+let listSort = 'date'; // 'date' | 'amount-high' | 'amount-low' | 'title'
 let reportRange = 'month'; // Reports date range: 'month' | 'year' | 'all'
 
 /* -----------------------------------------------------------------------------
@@ -402,7 +406,7 @@ function setPersonFilter(id) {
 // The dot beside a number in a list: colour plus first letter, so it is
 // identifiable without spending row width on a full name. `decorative` for
 // the places where the name is already right next to it (the chip, the
-// picker, a filter chip) — otherwise a screen reader announces "S Sarah".
+// picker, the person filter) — otherwise a screen reader announces "S Sarah".
 function personDot(person, size, decorative) {
   if (!person) return '';
   const initial = String(person.name).trim().charAt(0).toUpperCase() || '?';
@@ -442,13 +446,88 @@ function renderPersonChip() {
   }
 }
 
-function personChipsHtml() {
+const LIST_FILTERS = [
+  ['all', 'All'],
+  ['confirmed', 'Confirmed'],
+  ['pending', 'Pending'],
+  ['recurring', 'Recurring']
+];
+
+const LIST_SORTS = [
+  ['date', 'Date'],
+  ['amount-high', '£ High-Low'],
+  ['amount-low', '£ Low-High'],
+  ['title', 'Alphabetically']
+];
+
+// The one row of pickers shared by Spend and Bills. Three selects rather than a
+// wall of lozenges, and no wrapping: each question is one control, and the
+// three of them read as one toolbar.
+function listFiltersHtml() {
   const people = [...peopleCache.values()];
-  const chip = (value, label, dot) => `<span class="filter-chip ${personFilter === value ? 'active' : ''}" role="button" tabindex="0" onclick="setPersonFilter('${value}')">${dot || ''}${label}</span>`;
-  return [
-    chip('all', 'Everyone'),
-    ...people.map((p) => chip(p.id, escapeHTML(p.name), personDot(p, 16, true)))
-  ].join('');
+  const chosenPerson = personFilterActive() ? personFilter : 'all';
+  const option = (value, label, selected) =>
+    `<option value="${escapeHTML(value)}"${selected ? ' selected' : ''}>${escapeHTML(label)}</option>`;
+  return `
+    <div class="filter-bar filter-bar--lists">
+      <select class="form-input list-select list-select--status" aria-label="Status"
+              onchange="setListFilter(this.value)">
+        ${LIST_FILTERS.map(([value, label]) => option(value, label, listFilter === value)).join('')}
+      </select>
+      <select class="form-input list-select list-select--person" aria-label="Person"
+              onchange="setPersonFilter(this.value)">
+        ${option('all', 'Everyone', chosenPerson === 'all')}
+        ${people.map((p) => option(p.id, p.name, chosenPerson === p.id)).join('')}
+      </select>
+      <select class="form-input list-select list-select--sort" aria-label="Sort"
+              onchange="setListSort(this.value)">
+        ${LIST_SORTS.map(([value, label]) => option(value, label, listSort === value)).join('')}
+      </select>
+    </div>`;
+}
+
+function setListFilter(value) {
+  listFilter = value || 'all';
+  renderPage();
+}
+
+function setListSort(value) {
+  listSort = value || 'date';
+  renderPage();
+}
+
+// Date means newest first on Spend and soonest first on Bills, which is what
+// each page read like before the pickers existed. The other orders are the
+// same on both.
+function compareByTitle(a, b) {
+  return String(a.title || '').localeCompare(String(b.title || ''));
+}
+
+function sortSpendItems(items) {
+  const out = [...items];
+  if (listSort === 'amount-high') {
+    return out.sort((a, b) => (b.amount || 0) - (a.amount || 0) || compareByTitle(a, b));
+  }
+  if (listSort === 'amount-low') {
+    return out.sort((a, b) => (a.amount || 0) - (b.amount || 0) || compareByTitle(a, b));
+  }
+  if (listSort === 'title') return out.sort(compareByTitle);
+  return out.sort((a, b) => new Date(b.date) - new Date(a.date) || compareByTitle(a, b));
+}
+
+function sortBillRows(rows) {
+  const out = [...rows];
+  if (listSort === 'amount-high') {
+    return out.sort((a, b) => (b.item.amount || 0) - (a.item.amount || 0)
+      || compareByTitle(a.item, b.item));
+  }
+  if (listSort === 'amount-low') {
+    return out.sort((a, b) => (a.item.amount || 0) - (b.item.amount || 0)
+      || compareByTitle(a.item, b.item));
+  }
+  if (listSort === 'title') return out.sort((a, b) => compareByTitle(a.item, b.item));
+  return out.sort((a, b) => new Date(a.item.dueDate) - new Date(b.item.dueDate)
+    || compareByTitle(a.item, b.item));
 }
 
 function openPersonPicker() {
@@ -862,7 +941,14 @@ function renderTotalMoneyCard(balances, spent, due, outstanding, saved, savedTar
   // total any more, so the scale has to hold the four parts as well: money
   // already spent shows on the bar, and drawing it against a smaller total
   // would push the last segment off the end.
-  const barTotal = spent + billsShown + savedPart + spare;
+  //
+  // Left can be negative — savings set aside can exceed the balance on screen,
+  // and a month can spend more than it held. That negative belongs in the
+  // legend, which is a statement of fact, but not on the bar: adding it shrank
+  // the scale until Spent £1 and Savings £100 each clamped to 100% and flex
+  // split them 50/50. The bar shows only what is actually there.
+  const spareDrawn = Math.max(0, spare);
+  const barTotal = spent + billsShown + savedPart + spareDrawn;
   const scale = Math.max(total, barTotal, 1);
   const pct = (n) => Math.max(0, Math.min(100, (Math.max(0, n) / scale) * 100));
 
@@ -2265,9 +2351,9 @@ async function renderSpend(container) {
   
   const inMonth = items.filter(i => isSameMonth(i.date, viewedDate));
   const inYear = items.filter(i => isSameYear(i.date, viewedDate));
-  // The totals follow the filters, so tapping a person chip changes what the
-  // card is counting rather than leaving the household total above a list of
-  // one person's items.
+  // The totals follow the filters, so choosing a person changes what the card is
+  // counting rather than leaving the household total above a list of one
+  // person's items.
   // A recurring subscription projects its own next occurrence forward, so
   // stepping through the months shows what they'll hold. Projections sit
   // outside the totals: a forecast isn't money spent, and adding it to "Monthly
@@ -2312,14 +2398,7 @@ async function renderSpend(container) {
       <div class="stat-card-sub">Year: ${currency(yearTotal)}</div>
     </div>
     
-    <div class="filter-bar" aria-label="Status">
-      <span class="filter-chip ${spendFilter === 'all' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('all')">All</span>
-      <span class="filter-chip ${spendFilter === 'confirmed' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('confirmed')">Confirmed</span>
-      <span class="filter-chip ${spendFilter === 'pending' ? 'active' : ''}" role="button" tabindex="0" onclick="filterSpend('pending')">Pending</span>
-    </div>
-    <div class="filter-bar filter-bar--people" aria-label="Person">
-      ${personChipsHtml()}
-    </div>
+    ${listFiltersHtml()}
     
     <div class="item-list" id="spend-list">
       ${renderSpendList(monthItems, inMonth.length > 0, monthTotal, projections)}
@@ -2332,22 +2411,22 @@ function applySpendFilter(items) {
   // The same rule the balance uses: a row with no `confirmed` field at all
   // predates the tick and reads as ticked, so it lands under Confirmed and not
   // under Pending.
-  if (spendFilter === 'confirmed') return mine.filter(i => i.confirmed !== false);
-  if (spendFilter === 'pending') return mine.filter(i => i.confirmed === false);
-  if (spendFilter === 'recurring') return mine.filter(i => !!i.recurring);
+  if (listFilter === 'confirmed') return mine.filter(i => i.confirmed !== false);
+  if (listFilter === 'pending') return mine.filter(i => i.confirmed === false);
+  if (listFilter === 'recurring') return mine.filter(i => !!i.recurring);
   return mine;
 }
 
 function renderSpendList(monthItems, monthHasAnything, monthTotal, projections = []) {
-  // Something in the month, but nothing matching: the chips above already say
+  // Something in the month, but nothing matching: the pickers above already say
   // why, so there's no need to name the filter here as well.
   if (monthItems.length === 0 && monthHasAnything) {
     return '<div class="empty-state"><div class="empty-state-text">No items match</div></div>';
   }
   // Projections follow the real rows so a month that has both reads in date
-  // order rather than real-then-forecast.
-  const rows = [...monthItems, ...projections]
-    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  // order rather than real-then-forecast. The chosen order applies to whatever
+  // the pickers left.
+  const rows = sortSpendItems([...monthItems, ...projections]);
   return renderSpendItems(rows, monthTotal);
 }
 
@@ -2394,11 +2473,6 @@ function renderSpendItems(items, total) {
       </div>
     `;
   }).join('');
-}
-
-function filterSpend(filter) {
-  spendFilter = filter;
-  renderPage();
 }
 
 // Month stepper, shared by Dashboard, Spend and Bills so all three
@@ -2490,37 +2564,21 @@ function applyDueFilter(outstanding, paid) {
   // filter reads as "nothing owed".
   const mine = outstanding.filter(matchesPersonFilter);
   const minePaid = paid.filter(matchesPersonFilter);
-  if (dueFilter === 'pending') return mine.map((i) => ({ item: i, paid: false }));
-  if (dueFilter === 'confirmed') return minePaid.map((i) => ({ item: i, paid: true }));
-  if (dueFilter === 'recurring') {
+  if (listFilter === 'pending') return mine.map((i) => ({ item: i, paid: false }));
+  if (listFilter === 'confirmed') return minePaid.map((i) => ({ item: i, paid: true }));
+  if (listFilter === 'recurring') {
     return [...mine, ...minePaid]
       .filter((i) => i.recurring)
-      .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))
       .map((i) => ({ item: i, paid: minePaid.includes(i) }));
   }
-  // All: everything the month held, in date order. It used to be unpaid first
-  // and then the paid ones, which made the list jump: paying a bill moved it
-  // from the top group to the bottom, and the following month it rolled back to
-  // the top, so a recurring bill changed place every month — the one thing a
-  // list of fixed commitments must not do if you scan it by eye. Paid state is
-  // already on the row: it says it once, and in green.
+  // All: everything the month held. The order is chosen by the sort picker;
+  // Date keeps the old rule of soonest due first, and paid and unpaid remain
+  // interleaved so paying one does not move it to the bottom of the list.
   return [
     ...mine.map((i) => ({ item: i, paid: false })),
     ...minePaid.map((i) => ({ item: i, paid: true }))
-  ].sort((a, b) => new Date(a.item.dueDate) - new Date(b.item.dueDate));
+  ];
 }
-
-function filterBills(filter) {
-  dueFilter = filter;
-  renderPage();
-}
-
-const BILL_FILTERS = [
-  ['all', 'All'],
-  ['confirmed', 'Confirmed'],
-  ['pending', 'Pending'],
-  ['recurring', 'Recurring']
-];
 
 // Due Page
 async function renderDue(container) {
@@ -2542,7 +2600,7 @@ async function renderDue(container) {
   const { stored: outstanding, inMonth, overdueElsewhere, projections } = read;
   const paid = paidBillsForMonth(all, spendItems, dueViewedDate);
   // Only the stored rows go through the filters; a forecast isn't a bill you
-  // can have confirmed or pay, and letting a status chip hide it would make a
+  // can have confirmed or pay, and letting a status picker hide it would make a
   // month look emptier than it is.
   //
   // And a forecast is not drawn at all. Materialising above makes every bill in
@@ -2551,7 +2609,7 @@ async function renderDue(container) {
   // the fault this page kept being reported for. It is dropped, and deduped:
   // a month that somehow holds the same bill twice shows it once, because a
   // duplicate is how someone pays for something they do not owe.
-  const rows = dedupeBills(applyDueFilter(outstanding, paid));
+  const rows = sortBillRows(dedupeBills(applyDueFilter(outstanding, paid)));
   
   // What's actually owed: the real stored rows only. Adding a forecast to this
   // figure would report money that hasn't been billed yet as though it already
@@ -2599,14 +2657,7 @@ async function renderDue(container) {
         ? `<div class="stat-card-sub">Includes ${overdueElsewhere.length} overdue from an earlier month</div>` : ''}
     </div>
     
-    <div class="filter-bar" aria-label="Status">
-      ${BILL_FILTERS.map(([value, label]) =>
-        `<span class="filter-chip ${dueFilter === value ? 'active' : ''}" role="button" tabindex="0" onclick="filterBills('${value}')">${label}</span>`
-      ).join('')}
-    </div>
-    <div class="filter-bar filter-bar--people" aria-label="Person">
-      ${personChipsHtml()}
-    </div>
+    ${listFiltersHtml()}
 
     <div class="item-list">
       ${rows.length === 0 ? `
@@ -2614,7 +2665,7 @@ async function renderDue(container) {
           <div class="empty-state-text">${
             all.length === 0 && paid.length === 0
               ? 'No bills due'
-              : personFilterActive() || dueFilter !== 'all'
+              : personFilterActive() || listFilter !== 'all'
                 ? 'No bills match'
                 : 'Nothing due this month'
           }</div>
@@ -3397,19 +3448,29 @@ function renderPatternsCard(shift) {
     ${rows}`;
 }
 
+// The native side downloads the APK and hands it to Android's own installer.
+// A WebView cannot install a package itself, and opening the download in the
+// browser left a file sitting in notifications — which read as the update
+// being stuck. The plugin keeps the download inside the app's cache and opens
+// the system prompt on the same press.
+let capUpdater = null;
+
 // Asks GitHub what the newest published release is and compares it with the
 // running build.
 //
 // The app has no server, so this is a plain unauthenticated request to one
 // public URL. It sends the request and nothing else: no build id, no device
 // detail, no data of yours. Pressing Update checks, and when there is a newer
-// build it opens the APK itself so the download starts on that press. Android
+// build the phone downloads the APK and opens Android's install prompt. Android
 // still asks a human to confirm any install: a finance app quietly replacing
 // itself is not something to do to someone by surprise.
 async function checkForUpdate(btn) {
   const note = document.getElementById('update-note');
   const say = (text) => { if (note) note.textContent = text; };
 
+  const native = !!(window.Capacitor
+    && typeof window.Capacitor.isNativePlatform === 'function'
+    && window.Capacitor.isNativePlatform());
   const RELEASES_API = 'https://api.github.com/repos/jaquesbody/sorted/releases/latest';
   try {
     const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
@@ -3432,12 +3493,28 @@ async function checkForUpdate(btn) {
     if (!latest) {
       say('Could not read the release name from GitHub.');
     } else if (cmp > 0) {
-      // The APK asset is the download itself. Sending the person to the release
-      // page makes them find it and tap again; opening the asset starts the
-      // download on the same press that discovered it. The release page is the
-      // fallback if a release is ever published without an APK attached.
+      // The APK asset is the download itself. On the phone it goes through the
+      // native updater, which launches the system installer; everywhere else
+      // opening the asset starts the download on the same press that found it.
+      // The release page is the fallback if a release is ever published
+      // without an APK attached.
       const asset = (data.assets || []).find((file) => /\.apk$/i.test(String(file.name || '')));
       const download = (asset && asset.browser_download_url) || data.html_url;
+      if (native && asset) {
+        say(`v${latest} is available. Downloading the update.`);
+        try {
+          if (!capUpdater) capUpdater = window.Capacitor.registerPlugin('SortedUpdater');
+          const result = await capUpdater.install({ url: download });
+          if (result && result.needsPermission) {
+            say('Allow Sorted to install updates in the screen that opened, then tap Update again.');
+          } else {
+            say("Android's installer is open. Tap Install to update. Your data stays put.");
+          }
+        } catch (err) {
+          say(`Could not start the update: ${String((err && err.message) || err)}`);
+        }
+        return;
+      }
       say(`v${latest} is available. Downloading it now; open the file when it finishes.`);
       window.open(download, '_blank', 'noopener');
       return;

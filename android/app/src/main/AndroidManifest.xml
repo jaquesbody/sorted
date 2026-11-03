@@ -2,6 +2,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- The package installer is reached by implicit intent. Android 11's
+         package visibility would otherwise hide it from this app, which looks
+         exactly like no installer being available. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:fullBackupContent="false"
@@ -43,6 +53,13 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The Update button downloads the published APK and hands it to Android's
+         installer. Android 8+ shows this as a per-app "install unknown apps"
+         switch; the plugin opens that screen when it is off. Without the
+         permission the installer refuses the package before the person ever
+         sees a prompt. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Reminders. POST_NOTIFICATIONS is the Android 13+ runtime prompt; without
          it the channel is created silently and nothing ever appears.
