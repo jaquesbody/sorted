@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.14';
+const APP_VERSION = '2.103.15';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -1789,6 +1789,37 @@ function syncConfigured() {
   return syncRouteReady(SYNC_TRANSPORTS[s.transport], s, s.transport);
 }
 
+// Whether the steps are unfolded belongs to the card, and renderPage rebuilds
+// the card. Without remembering it, coming back to the app (or typing an
+// address, which re-renders too) folded the instructions the reader was working
+// through. Kept per route, so opening Network's steps does not unfold Cloud's.
+const SYNC_SETUP_OPEN_KEY = 'sorted-sync-setup-open';
+
+function syncSetupOpenMap() {
+  try {
+    const value = JSON.parse(localStorage.getItem(SYNC_SETUP_OPEN_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function syncSetupOpen(transport) {
+  return !!syncSetupOpenMap()[transport];
+}
+
+function rememberSyncSetup(details) {
+  const key = details && details.dataset ? details.dataset.transport : '';
+  if (!key) return;
+  const map = syncSetupOpenMap();
+  map[key] = !!details.open;
+  try {
+    localStorage.setItem(SYNC_SETUP_OPEN_KEY, JSON.stringify(map));
+  } catch (err) {
+    // Storage being unavailable is not a reason to fail to draw the card.
+  }
+}
+
 // The Sync card.
 //
 // Every transport is listed, whether or not it is built yet, because the choice
@@ -1940,12 +1971,11 @@ function syncSettingsHtml() {
     ${byFolder ? '' : `<button class="btn btn-primary" onclick="syncFromSettings(this)"
             style="width: 100%; margin-top: 10px;"
             ${ready ? '' : 'disabled'}>Sync</button>`}
-    <details class="setup-steps">
+    <details class="setup-steps" data-transport="${escapeHTML(key)}"${syncSetupOpen(key) ? ' open' : ''} ontoggle="rememberSyncSetup(this)">
       <summary class="setup-steps-head">How to set this up</summary>
       <ol class="setup-steps-list">
         ${(SYNC_SETUP_STEPS[key] || []).map((step) => `<li>${step}</li>`).join('')}
       </ol>
-      ${SYNC_SETUP_FOOTNOTES[key] ? `<div class="setup-footnote">${SYNC_SETUP_FOOTNOTES[key]}</div>` : ''}
       ${SYNC_SETUP_NOTES[key] ? `<div class="setup-note">${SYNC_SETUP_NOTES[key]}</div>` : ''}
     </details>`;
 }

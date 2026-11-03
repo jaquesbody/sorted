@@ -123,15 +123,16 @@ function setupAside(html) {
   return '<span class="setup-aside">' + html + '</span>';
 }
 
-// A note inside a numbered step rather than under a command. Same small grey
-// line, but it is not an explanation of the box above it.
+// A note inside a numbered step. It gets the same box and left bar as the
+// paragraph under Cloud's steps, because both are something to read rather
+// than something to do.
 function setupNote(html) {
-  return '<span class="setup-step-note">' + html + '</span>';
+  return '<div class="setup-note">' + html + '</div>';
 }
 
 const SYNC_SETUP_STEPS = {
   network: [
-    'On a device that always stays on, and is on the same Wi-Fi as the device you want to sync to, install <strong>Node.js</strong>: get it from <a href="https://nodejs.org/en/download" target="_blank" rel="noopener">nodejs.org</a> and run the installer. It is the same download on Windows, Mac and Linux.',
+    'On a device that always stays on, and is on the same Wi-Fi as the device you want to sync to, install <a href="https://nodejs.org/en/download" target="_blank" rel="noopener"><strong>Node.js</strong></a>.',
 
     'Open a terminal, paste this in and press enter:'
       + setupCommand('git clone https://github.com/jaquesbody/sorted.git')
@@ -143,12 +144,10 @@ const SYNC_SETUP_STEPS = {
 
     'It prints an address for each network it can see. Copy the Wi-Fi one, the address starting <strong>192.168.</strong>, into the <strong>Wi-Fi</strong> box above.',
 
-    'To sync away from home, install and set up <a href="https://play.google.com/store/apps/details?id=com.tailscale.ipn" target="_blank" rel="noopener"><strong>Tailscale</strong></a> on the computer and other devices, sign in on both, and connect them. Then copy your computer\'s address starting <strong>100.</strong> into the <strong>Tailscale</strong> box above.'
-      + setupNote('Note: Only one IP address is needed, if two IP addresses are used sync is performed by whichever answers first.'),
+    'To sync away from home, install and set up <a href="https://play.google.com/store/apps/details?id=com.tailscale.ipn" target="_blank" rel="noopener"><strong>Tailscale</strong></a> on all devices. Then copy the main device address starting <strong>100.</strong> into the <strong>Tailscale</strong> box above.'
+      + setupNote('<strong>Note:</strong> Only one IP address is needed, if both are provided sync is performed by whichever answers first.'),
 
-    'Tap <strong>Sync</strong>.',
-
-    'Repeat steps 1-6 on all devices you want to sync with.'
+    'Repeat steps 1-5 on all devices you want to sync.'
   ],
   syncthing: [
     'Create a <strong>sorted</strong> folder to save <strong>sorted-sync.json</strong> to.',
@@ -159,7 +158,7 @@ const SYNC_SETUP_STEPS = {
 
     'Tap <strong>Sync</strong>.',
 
-    'Repeat steps 1-5 on all devices you want to sync with.'
+    'Repeat steps 1-4 on all devices you want to sync.'
   ],
   cloud: [
     'Create a <strong>sorted</strong> folder on your Cloud drive to save <strong>sorted-sync.json</strong> to.',
@@ -168,14 +167,8 @@ const SYNC_SETUP_STEPS = {
 
     'Tap <strong>Sync</strong>.',
 
-    'Repeat steps 1-4 on all devices you want to sync with.'
+    'Repeat steps 1-3 on all devices you want to sync.'
   ]
-};
-
-// A line under the steps that is worth saying once, apart from the numbered
-// instructions.
-const SYNC_SETUP_FOOTNOTES = {
-  cloud: 'Note: Proton Drive is not compatible.'
 };
 
 // What a route costs, said under the steps where the choice is made. Cloud is

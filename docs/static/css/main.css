@@ -934,12 +934,10 @@ body {
   font-size: var(--fs-sm);
 }
 
-/* A note inside a step: the same small grey line, without saying it explains
-   the command above it. */
-.setup-step-note {
-  display: block;
-  margin-top: 5px;
-  font-size: var(--fs-sm);
+/* A note inside a step has the same left bar as the paragraph under the steps,
+   but sits a little closer to the sentence it follows. */
+.setup-steps-list .setup-note {
+  margin-top: 8px;
 }
 
 /* What a route costs, set below its steps. Cloud is the only route that puts the
@@ -958,13 +956,6 @@ body {
 
 .setup-note strong {
   color: var(--text-primary);
-}
-
-/* A single sentence that belongs with the steps but is not one of them. */
-.setup-footnote {
-  margin-top: 8px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
 }
 
 /* The chosen folder and the one file inside it, under the row that names the

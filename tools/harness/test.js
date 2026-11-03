@@ -7272,6 +7272,7 @@ async function runSuite(driverBase) {
         const realLookup = window.syncFolderPlugin;
         localStorage.removeItem('sorted-sync-settings');
         localStorage.removeItem('sorted-sync-backup');
+        localStorage.removeItem('sorted-sync-setup-open');
 
         let c = await draw({ transport: 'network', urlLan: '', urlTailscale: '', folderUri: '', folderName: '', fileUri: '', fileName: '' });
         const details = c.querySelector('details.setup-steps');
@@ -7308,15 +7309,17 @@ async function runSuite(driverBase) {
         t('andTheFirstIsTheClone', copies[0].querySelector('code').textContent.trim(), 'git clone https://github.com/jaquesbody/sorted.git');
         t('andTheSecondStartsTheHost', copies[1].querySelector('code').textContent.trim(), 'node sorted/tools/sync-host.mjs');
         t('noCommandIsLeftAsBareCode', [...details.querySelectorAll('code')].every((el) => !!el.closest('.setup-copy')), true);
-        t('andTheStepsSayWhereNodeComesFrom', /nodejs\\.org/.test(details.textContent), true);
+        t('andTheFirstStepLinksNodeJs', /install <a [^>]*><strong>Node\\.js<\\/strong><\\/a>\\./.test(details.querySelector('.setup-steps-list li').innerHTML), true);
+        t('andTheFirstStepDoesNotExplainEveryOperatingSystem',
+          /Windows, Mac and Linux/.test(details.textContent), false);
         t('andGiveTheWindowsAnswerForGit', /git is not recognised/.test(details.textContent), true);
 
         // Both downloads are links to the page they are installed from, on the
-        // user's ask. nodejs.org was set in bold, which names the site without
-        // going there, and "install Git from git-scm.com" read the same way.
+        // user's ask. Node.js is the bold text itself, and "install Git from
+        // git-scm.com" reads the same way.
         const linkTo = (text, href) => [...details.querySelectorAll('a')]
           .some((a) => a.textContent.trim() === text && a.getAttribute('href') === href);
-        t('andNodeIsALinkToItsDownloadPage', linkTo('nodejs.org', 'https://nodejs.org/en/download'), true);
+        t('andNodeIsALinkToItsDownloadPage', linkTo('Node.js', 'https://nodejs.org/en/download'), true);
         t('andSoIsGit', linkTo('git-scm.com', 'https://git-scm.com/install/'), true);
 
         // One line under each command and nothing more. Two explanations were
@@ -7366,9 +7369,9 @@ async function runSuite(driverBase) {
           && /sorted-sync\\.json/.test(cloudList[0].textContent), true);
         t('andTheSecondChoosesTheFolder', /Choose the <strong>Folder location<\\/strong>/.test(cloudList[1].innerHTML), true);
         t('andTheThirdIsTheTapToSync', cloudList[2].textContent.trim(), 'Tap Sync.');
-        t('andTheFourthRepeatsOnTheOtherDevices', /Repeat steps 1-4/.test(cloudList[3].textContent), true);
-        t('andNameProtonDriveAsNotCompatible',
-          /Note: Proton Drive is not compatible\\./.test(cloudSteps.textContent), true);
+        t('andTheFourthRepeatsOnTheOtherDevices', /Repeat steps 1-3/.test(cloudList[3].textContent), true);
+        t('andTheFourthRepeatsTheFirstThree', cloudList[3].textContent.trim(), 'Repeat steps 1-3 on all devices you want to sync.');
+        t('andProtonDriveNoteIsGone', /Proton Drive is not compatible/.test(cloudSteps.textContent), false);
         // The black box is the user's own paragraph, not a paraphrase.
         const cloudNote = cloudSteps.querySelector('.setup-note');
         t('andTheBlackBoxIsTheExactWording',
@@ -7387,7 +7390,8 @@ async function runSuite(driverBase) {
             && a.getAttribute('href') === 'https://play.google.com/store/apps/details?id=com.github.catfriend1.syncthingandroid'), true);
         t('andTheThirdChoosesTheFolder', /Choose the <strong>Folder location<\\/strong>/.test(synList[2].innerHTML), true);
         t('andTheFourthIsTheTapToSync', synList[3].textContent.trim(), 'Tap Sync.');
-        t('andTheFifthRepeatsOneToFive', /Repeat steps 1-5/.test(synList[4].textContent), true);
+        t('andTheFifthRepeatsOneToFour', /Repeat steps 1-4/.test(synList[4].textContent), true);
+        t('andTheFifthRepeatsTheFirstFour', synList[4].textContent.trim(), 'Repeat steps 1-4 on all devices you want to sync.');
         window.syncFolderPlugin = realLookup;
 
         // The two addresses live in one route, and its steps carry both ways to
@@ -7403,18 +7407,41 @@ async function runSuite(driverBase) {
         t('andBothAddressBoxesAreThere',
           !!document.getElementById('sync-url-lan') && !!document.getElementById('sync-url-tailscale'), true);
         // The warning that used to sit under the boxes is inside the Tailscale
-        // step now, where the setup is read, and it says one address is enough.
-        const netNote = [...card().querySelectorAll('.setup-step-note')]
+        // step now, in the same boxed style as Cloud's note, and it says one
+        // address is enough.
+        const netNote = [...card().querySelectorAll('.setup-steps-list .setup-note')]
           .find((one) => /Only one IP address is needed/.test(one.textContent));
         t('andTheNoteSaysOneAddressIsEnough',
           !!netNote && /whichever answers first/.test(netNote.textContent), true);
-        // The step the user counted out: the host setup is five steps, then the
-        // tap, then the repeat on every other device.
+        t('andTheNoteIsInTheTailscaleStep',
+          !!netNote && netNote.closest('li') === netSteps.querySelectorAll('.setup-steps-list li')[4], true);
+        t('andTheNoteHasTheCloudLeftBar',
+          netNote ? getComputedStyle(netNote).borderLeftWidth : '', '3px');
+        t('andTheNoteNamesOneAddressTwice', netNote ? netNote.textContent.trim() : '',
+          'Note: Only one IP address is needed, if both are provided sync is performed by whichever answers first.');
+        // The step the user counted out: five setup steps, then the repeat.
         const netList = [...netSteps.querySelectorAll('.setup-steps-list li')];
-        t('theNetworkSetupIsSevenSteps', netList.length, 7);
-        t('andTheSixthIsTheTapToSync', netList[5].textContent.trim(), 'Tap Sync.');
-        t('andTheSeventhRepeatsOnTheOtherDevices',
-          /Repeat steps 1-6/.test(netList[6].textContent), true);
+        t('theNetworkSetupIsSixSteps', netList.length, 6);
+        t('andTheFifthIsTheTailscaleStep',
+          /install and set up <a [^>]*><strong>Tailscale<\\/strong><\\/a> on all devices/.test(netList[4].innerHTML)
+          && /main device address starting <strong>100/.test(netList[4].innerHTML), true);
+        t('andTheSixthRepeatsTheFirstFive',
+          netList[5].textContent.trim(), 'Repeat steps 1-5 on all devices you want to sync.');
+        t('andNoTapIsAskedForInTheSteps', /Tap <strong>Sync<\\/strong>/.test(netSteps.innerHTML), false);
+
+        // The steps are part of the card's state. Rendering the card — which is
+        // what returning to the app does — must not fold the panel the reader
+        // left open.
+        details.open = true;
+        rememberSyncSetup(details);
+        c = await draw({ transport: 'network' });
+        t('theOpenStepsSurviveARender', c.querySelector('details.setup-steps').open, true);
+        const reopened = c.querySelector('details.setup-steps');
+        reopened.open = false;
+        rememberSyncSetup(reopened);
+        c = await draw({ transport: 'network' });
+        t('andAClosedPanelStaysClosed', c.querySelector('details.setup-steps').open, false);
+        localStorage.removeItem('sorted-sync-setup-open');
 
         // No em dashes in the card, on any route. The user asked for them out of
         // the steps in as many words; the rest of the card is swept with them
@@ -7448,7 +7475,8 @@ async function runSuite(driverBase) {
         && stepsUi.detail.andTheFirstIsTheClone.pass
         && stepsUi.detail.andTheSecondStartsTheHost.pass
         && stepsUi.detail.noCommandIsLeftAsBareCode.pass
-        && stepsUi.detail.andTheStepsSayWhereNodeComesFrom.pass
+        && stepsUi.detail.andTheFirstStepLinksNodeJs.pass
+        && stepsUi.detail.andTheFirstStepDoesNotExplainEveryOperatingSystem.pass
         && stepsUi.detail.andGiveTheWindowsAnswerForGit.pass
         && stepsUi.detail.andNodeIsALinkToItsDownloadPage.pass
         && stepsUi.detail.andSoIsGit.pass
@@ -7466,23 +7494,32 @@ async function runSuite(driverBase) {
         && stepsUi.detail.andTheSecondChoosesTheFolder.pass
         && stepsUi.detail.andTheThirdIsTheTapToSync.pass
         && stepsUi.detail.andTheFourthRepeatsOnTheOtherDevices.pass
-        && stepsUi.detail.andNameProtonDriveAsNotCompatible.pass
+        && stepsUi.detail.andTheFourthRepeatsTheFirstThree.pass
+        && stepsUi.detail.andProtonDriveNoteIsGone.pass
         && stepsUi.detail.andTheBlackBoxIsTheExactWording.pass
         && stepsUi.detail.andTheOldFileButtonsAreGone.pass
         && stepsUi.detail.theSyncthingSetupIsFiveSteps.pass
         && stepsUi.detail.andTheSecondLinksToSyncthingOnThePlayStore.pass
         && stepsUi.detail.andTheFourthIsTheTapToSync.pass
-        && stepsUi.detail.andTheFifthRepeatsOneToFive.pass, stepsUi);
+        && stepsUi.detail.andTheFifthRepeatsOneToFour.pass
+        && stepsUi.detail.andTheFifthRepeatsTheFirstFour.pass, stepsUi);
       check('and the Network steps carry both addresses and stand on their own, with no em dash',
         stepsUi.detail.networkCarriesItsOwnTwoCommands.pass
         && stepsUi.detail.andSendsTheReaderNowhereElse.pass
         && stepsUi.detail.andTheStepsNoLongerShowAFullAddress.pass
         && stepsUi.detail.andBothAddressBoxesAreThere.pass
         && stepsUi.detail.andTheNoteSaysOneAddressIsEnough.pass
-        && stepsUi.detail.theNetworkSetupIsSevenSteps.pass
-        && stepsUi.detail.andTheSixthIsTheTapToSync.pass
-        && stepsUi.detail.andTheSeventhRepeatsOnTheOtherDevices.pass
+        && stepsUi.detail.andTheNoteIsInTheTailscaleStep.pass
+        && stepsUi.detail.andTheNoteHasTheCloudLeftBar.pass
+        && stepsUi.detail.andTheNoteNamesOneAddressTwice.pass
+        && stepsUi.detail.theNetworkSetupIsSixSteps.pass
+        && stepsUi.detail.andTheFifthIsTheTailscaleStep.pass
+        && stepsUi.detail.andTheSixthRepeatsTheFirstFive.pass
+        && stepsUi.detail.andNoTapIsAskedForInTheSteps.pass
         && stepsUi.detail.andNoEmDashOnAnyRoute.pass, stepsUi);
+      check('the open setup panel survives a re-render, and a closed one stays closed',
+        stepsUi.detail.theOpenStepsSurviveARender.pass
+        && stepsUi.detail.andAClosedPanelStaysClosed.pass, stepsUi);
       check('the address boxes show an example, and no longer spell out x.y.z',
         stepsUi.detail.theAddressPlaceholderSaysItIsAnExample.pass
         && stepsUi.detail.andTheTailscaleOneNoLongerSpellsOutXyz.pass
