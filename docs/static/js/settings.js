@@ -14,6 +14,13 @@ const THEME_KEY = 'sorted-theme';
 const PASSCODE_KEY = 'sorted-passcode';
 const TIMEOUT_KEY = 'sorted-lock-timeout';
 const PERSON_PINS_KEY = 'sorted-person-pins';
+// Which person's PIN protects the session, and when the app was last used.
+// The owner is the person who actually entered a PIN. Switching people does
+// not change it: attribution is not authentication. An empty owner is an
+// explicit "nobody" (a session opened without a PIN); a missing owner is a
+// build older than this one, and is migrated once in initLock.
+const LOCK_OWNER_KEY = 'sorted-lock-owner';
+const LAST_ACTIVE_KEY = 'sorted-last-active';
 
 // Idle periods offered in Settings. 0 means "lock the moment the app is
 // backgrounded" — the launch/foreground lock is handled separately and always
@@ -141,9 +148,17 @@ function isPasscodeSet() {
 function setPasscodeEnabled(on) {
   if (on) {
     localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: true }));
+    // Turning the switch on is deliberate, so arm it for the person using the
+    // app. Somebody with no PIN leaves the session explicitly unarmed rather
+    // than waiting for the next person they switch to to arm it.
+    const current = localStorage.getItem('sorted-current-person');
+    setLockOwner(current && hasPersonPin(current) ? current : '');
+    persistLastActive(Date.now());
   } else {
     localStorage.setItem(PASSCODE_KEY, JSON.stringify({ on: false }));
     localStorage.removeItem(TIMEOUT_KEY);
+    setLockOwner('');
+    localStorage.removeItem(LAST_ACTIVE_KEY);
     // Turning the passcode off must never leave the app locked. With the key gone
     // there is nothing that could open it, and a lock nobody can open is a way to
     // lose your own data.
@@ -279,6 +294,13 @@ async function setPersonPin(personId, pin) {
   const records = getPersonPinRecords();
   records[personId] = { salt, hash: await hashPasscode(clean, salt), length: clean.length };
   localStorage.setItem(PERSON_PINS_KEY, JSON.stringify(records));
+  // Setting your own PIN is entering it, so it arms the session the same way
+  // unlocking does. Setting somebody else's PIN must not arm the app against
+  // the person doing the setting.
+  if (isPasscodeSet() && localStorage.getItem('sorted-current-person') === personId) {
+    setLockOwner(personId);
+    persistLastActive(Date.now());
+  }
   return null;
 }
 
@@ -288,11 +310,14 @@ function clearPersonPin(personId) {
   delete records[personId];
   if (Object.keys(records).length === 0) localStorage.removeItem(PERSON_PINS_KEY);
   else localStorage.setItem(PERSON_PINS_KEY, JSON.stringify(records));
+  // A lock belonging to a person whose PIN is gone could never be opened.
+  if (localStorage.getItem(LOCK_OWNER_KEY) === personId) setLockOwner('');
   return true;
 }
 
 function clearAllPersonPins() {
   localStorage.removeItem(PERSON_PINS_KEY);
+  setLockOwner('');
 }
 
 // Which person, if any, this entry belongs to. Deliberately does not fall back
@@ -309,37 +334,75 @@ async function matchAnyPasscode(pin) {
   return { ok: false, personId: null };
 }
 
-// The app locks for the person who is active, and only if that person holds a
-// PIN. Somebody else's key must never be the price of opening your own app:
-// with one PIN set on another person, an active user without one would be
-// asked for a code they were never given. "Anyone" holds no PIN, so a household
-// that has set PINs but is not using one is not locked either.
+// The lock belongs to the session, not to whoever happens to be selected in
+// the People picker. Switching people is attribution, not authentication: it
+// must never turn a free session into one that demands the new person's PIN on
+// the next launch. Only entering a PIN (unlock, or setting your own) and
+// "Lock now" arm it.
 //
-// The switch still has to be on, and a person removed from the app takes their
-// PIN with them, so "on with no PIN" remains a state the app can be put in
-// without sealing itself.
-function currentPersonHasPin() {
-  const id = localStorage.getItem('sorted-current-person');
-  return !!id && hasPersonPin(id);
+// `''` is stored for an explicitly unarmed session. A missing key is an old
+// build's state, migrated in initLock so upgrading does not silently drop a
+// lock somebody already had.
+function getLockOwner() {
+  const id = localStorage.getItem(LOCK_OWNER_KEY);
+  return id && hasPersonPin(id) ? id : null;
 }
 
+function setLockOwner(personId) {
+  if (personId && hasPersonPin(personId)) localStorage.setItem(LOCK_OWNER_KEY, personId);
+  else localStorage.setItem(LOCK_OWNER_KEY, '');
+}
+
+// Whether the current session is armed. This is what idle locking and launch
+// locking consult — not the active person.
 function isLockEnabled() {
-  return isPasscodeSet() && currentPersonHasPin();
+  return isPasscodeSet() && !!getLockOwner();
+}
+
+// Whether a lock could be opened at all. "Lock now" is offered from an unarmed
+// session too, and the PIN entered there arms the session.
+function canLockNow() {
+  return isPasscodeSet() && anyPersonPins();
+}
+
+// A build before the session lock had no owner recorded. Arm the person who
+// was active and holds a PIN, so the upgrade keeps the lock it had; otherwise
+// record an explicit unarmed session so a later switch cannot arm it by
+// accident.
+function migrateLockSession() {
+  if (localStorage.getItem(LOCK_OWNER_KEY) !== null) return;
+  const current = localStorage.getItem('sorted-current-person');
+  setLockOwner(isPasscodeSet() && current && hasPersonPin(current) ? current : '');
 }
 
 // Lock screen
 let locked = false;
 let lastActivity = Date.now();
+let lastPersistedAt = 0;
 let entry = '';
 
 function isLocked() {
   return locked;
 }
 
+// Writing the timestamp is what lets a cold start know how long the app was
+// away. It is throttled because pointer events are frequent and localStorage
+// is synchronous; ten seconds is well inside the shortest timed lock.
+function persistLastActive(when) {
+  const t = Number(when) > 0 ? Number(when) : Date.now();
+  lastActivity = t;
+  lastPersistedAt = t;
+  localStorage.setItem(LAST_ACTIVE_KEY, String(t));
+}
+
 function showLockScreen() {
   locked = true;
   entry = '';
   document.body.classList.add('is-locked');
+  // A reload while this screen is up must not count as a fresh, recent
+  // session, so zero means "still locked" to shouldLockOnLaunch. A real
+  // timestamp is always greater than zero.
+  localStorage.setItem(LAST_ACTIVE_KEY, '0');
 
   // A modal left open behind the lock would still be there on unlock, and the
   // passcode field on Settings must not survive into the next lock.
@@ -355,16 +418,16 @@ function showLockScreen() {
 }
 
 function lockApp() {
-  if (!isLockEnabled() || locked) return;
+  if (!canLockNow() || locked) return;
   showLockScreen();
 }
 
 function unlockApp() {
   locked = false;
   entry = '';
-  lastActivity = Date.now();
   document.body.classList.remove('is-locked');
   document.getElementById('lock-screen').hidden = true;
+  persistLastActive(Date.now());
   if (typeof renderPage === 'function') renderPage();
 }
 
@@ -397,6 +460,9 @@ async function submitLockEntry() {
     // identity, so whoever was in use stays in use.
     if (match.personId) {
       localStorage.setItem('sorted-current-person', match.personId);
+      // The PIN that opened the app names the person whose session this is.
+      // Everything until the next PIN entry or manual lock belongs to them.
+      setLockOwner(match.personId);
     }
     unlockApp();
     return;
@@ -441,20 +507,31 @@ document.addEventListener('keydown', (e) => {
 // lastActivity only advances while unlocked, so time spent on the lock screen
 // can't push the app further into the locked state.
 function noteActivity() {
-  if (!locked) lastActivity = Date.now();
+  if (locked) return;
+  const now = Date.now();
+  lastActivity = now;
+  if (now - lastPersistedAt >= 10000) persistLastActive(now);
 }
 
 function checkIdle() {
   if (locked || !isLockEnabled()) return;
   const minutes = getLockTimeoutMinutes();
-  // "Immediately" means as soon as the app is put away — checked on
-  // visibilitychange, since a backgrounded WebView may not tick reliably.
+  // "Immediately" is handled when the app is put away, since a backgrounded
+  // WebView may not tick reliably.
   if (minutes === 0) return;
   if (Date.now() - lastActivity >= minutes * 60 * 1000) lockApp();
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) { lastActivity = Math.min(lastActivity, Date.now()); return; }
+  if (document.hidden) {
+    // A screen that is already up must stay "locked" on disk; writing a fresh
+    // timestamp here would make the next cold start look like a recent
+    // unlocked session.
+    if (locked) return;
+    persistLastActive(Date.now());
+    if (getLockTimeoutMinutes() === 0) lockApp();
+    return;
+  }
   checkIdle();
   noteActivity();
 });
@@ -463,15 +540,40 @@ document.addEventListener('visibilitychange', () => {
   document.addEventListener(evt, noteActivity, { passive: true });
 });
 
+// The WebView can be killed without another pointer event. Both events write
+// the moment the page goes away, so the next cold start measures the absence
+// from the right time.
+['pagehide', 'beforeunload'].forEach((evt) => {
+  window.addEventListener(evt, () => { if (!locked) persistLastActive(Date.now()); });
+});
+
 // Fifteen seconds is often enough for the idle check to feel instant on
 // return, and cheap enough to sit in a backgrounded WebView.
 setInterval(checkIdle, 15000);
 
 // Launch
+// A cold start locks only when the session is armed and it has actually been
+// away for the chosen period. The switch to a PIN-holder is not an arming
+// event, so a borrowed session reopens without demanding that person's code.
+function shouldLockOnLaunch() {
+  if (!isLockEnabled()) return false;
+  const saved = Number(localStorage.getItem(LAST_ACTIVE_KEY));
+  // No timestamp (first run after the upgrade) or zero (reloaded while the
+  // screen was up) both mean lock. A real timestamp is compared with "Lock
+  // after", with zero minutes meaning every launch.
+  if (!Number.isFinite(saved) || saved <= 0) return true;
+  return Date.now() - saved >= getLockTimeoutMinutes() * 60 * 1000;
+}
+
 // Called from app.js at the end of its own run, before the first render — a
 // page must never paint behind the lock screen, and the two need to happen in
 // that order. index.html has already set data-theme before first paint.
 function initLock() {
-  if (isLockEnabled()) showLockScreen();
-  else document.getElementById('lock-screen').hidden = true;
+  migrateLockSession();
+  if (shouldLockOnLaunch()) {
+    showLockScreen();
+  } else {
+    document.getElementById('lock-screen').hidden = true;
+    persistLastActive(Date.now());
+  }
 }

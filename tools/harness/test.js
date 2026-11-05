@@ -1700,10 +1700,14 @@ async function runSuite(driverBase) {
     const savedPasscode = localStorage.getItem('sorted-passcode');
     const savedTimeout = localStorage.getItem('sorted-lock-timeout');
     const savedPerson = localStorage.getItem('sorted-current-person');
+    const savedOwner = localStorage.getItem('sorted-lock-owner');
+    const savedLastActive = localStorage.getItem('sorted-last-active');
     for (const p of await getAll('people')) await deleteItem('people', p.id);
     localStorage.removeItem('sorted-passcode');
     localStorage.removeItem('sorted-person-pins');
-    window.__pinSaved = { savedPasscode, savedTimeout, savedPerson };
+    localStorage.removeItem('sorted-lock-owner');
+    localStorage.removeItem('sorted-last-active');
+    window.__pinSaved = { savedPasscode, savedTimeout, savedPerson, savedOwner, savedLastActive };
 
     const anna = await addItem('people', { name: 'Anna', colour: PERSON_COLOURS[0] });
     const ben = await addItem('people', { name: 'Ben', colour: PERSON_COLOURS[1] });
@@ -1714,6 +1718,10 @@ async function runSuite(driverBase) {
 
   const pinSet = await run(`
     const { anna, ben } = window.__pinPeople;
+    // Anna is the person using the app while she sets her own PIN, which is
+    // the case that arms the session. Setting Ben's afterwards must not move
+    // that lock to him.
+    localStorage.setItem('sorted-current-person', anna);
     const results = {
       anna: await setPersonPin(anna, '1234'),
       // The wrong length is refused: the keypad has one length for everything.
@@ -1723,9 +1731,6 @@ async function runSuite(driverBase) {
       duplicate: await setPersonPin(ben, '1234'),
       ben: await setPersonPin(ben, '5678')
     };
-    // The lock belongs to the active person, so it can only be on when that
-    // person is one of the two holding a PIN.
-    localStorage.setItem('sorted-current-person', anna);
     return {
       results,
       annaHas: hasPersonPin(anna), benHas: hasPersonPin(ben),
@@ -1771,37 +1776,101 @@ async function runSuite(driverBase) {
   check('and holding no PIN disarms the lock rather than sealing it',
     armed.armWithoutPin === true, armed);
 
-  // The bug this guards: one person sets a PIN, somebody else is active, and
-  // reopening asked the active person for a code they were never given. The
-  // lock belongs to whoever is active; another person's PIN is not the price
-  // of opening the app as yourself.
-  const pinScope = await run(`
+  // The bug this guards: a session opened without a PIN, then switched to a
+  // PIN-holder, used to demand that person's code on the next launch. A
+  // switch is attribution, not authentication, so only a PIN entry (or Lock
+  // now) arms the launch lock.
+  console.log('\n# the lock follows the session, not the selected person');
+  const sessionLock = await run(`
     const { anna } = window.__pinPeople;
+    setLockTimeoutMinutes(5);
+    unlockApp();
     const cara = await addItem('people', { name: 'Cara', colour: PERSON_COLOURS[2] });
+
+    // An upgrade from a build with no session owner keeps the lock it had:
+    // the active PIN-holder becomes the owner once.
+    localStorage.removeItem('sorted-lock-owner');
     localStorage.setItem('sorted-current-person', anna);
-    const asAnna = isLockEnabled();
+    persistLastActive(Date.now() - 60 * 60 * 1000);
+    initLock();
+    const migrated = !document.getElementById('lock-screen').hidden;
+    const migratedOwner = getLockOwner();
+    unlockApp();
+
+    // Unarmed session: opened without a PIN, then switched to a PIN-holder.
+    setLockOwner('');
+    persistLastActive(Date.now());
+    localStorage.setItem('sorted-current-person', anna);
+    const armedAfterSwitch = isLockEnabled();
+    initLock();
+    const lockedAfterSwitch = !document.getElementById('lock-screen').hidden;
+    unlockApp();
+
+    // Even a long absence does not turn that switch into an arming event.
+    persistLastActive(Date.now() - 60 * 60 * 1000);
+    initLock();
+    const lockedAfterLongAway = !document.getElementById('lock-screen').hidden;
+    unlockApp();
+
+    // Lock now arms even an unarmed session, and the PIN names its owner.
+    localStorage.setItem('sorted-current-person', anna);
+    lockApp();
+    const manual = isLocked() && !document.getElementById('lock-screen').hidden;
+    // A reload or a kill while the screen is up must not look like a recent
+    // unlocked session.
+    const lockPersisted = localStorage.getItem('sorted-last-active') === '0';
+    for (const d of '1234'.split('')) pressKey(d);
+    await new Promise((r) => setTimeout(r, 400));
+    const ownerAfterUnlock = getLockOwner();
+
+    // An armed session locks after a real absence...
+    persistLastActive(Date.now() - 60 * 60 * 1000);
+    initLock();
+    const lockedAfterArmed = !document.getElementById('lock-screen').hidden;
+    unlockApp();
+
+    // ...while a quick close and reopen asks for nothing.
+    persistLastActive(Date.now());
+    initLock();
+    const recentReopen = !document.getElementById('lock-screen').hidden;
+    unlockApp();
+
+    // "Immediately" means every launch, however brief the absence.
+    setLockTimeoutMinutes(0);
+    persistLastActive(Date.now());
+    initLock();
+    const immediateReopen = !document.getElementById('lock-screen').hidden;
+    unlockApp();
+    setLockTimeoutMinutes(5);
+
+    // Switching while armed leaves the lock with the person who unlocked.
     localStorage.setItem('sorted-current-person', cara);
-    const asCara = isLockEnabled();
-    unlockApp();
-    initLock();
-    const caraScreen = !document.getElementById('lock-screen').hidden;
-    // ...while a PIN-holder still gets the screen.
-    localStorage.setItem('sorted-current-person', anna);
-    initLock();
-    const annaScreen = !document.getElementById('lock-screen').hidden;
-    localStorage.removeItem('sorted-current-person');
-    const asAnyone = isLockEnabled();
-    initLock();
-    const anyoneScreen = !document.getElementById('lock-screen').hidden;
-    unlockApp();
+    const ownerAfterSwitch = getLockOwner();
+    const stillArmed = isLockEnabled();
+
     await deleteItem('people', cara);
-    return { asAnna, asCara, caraScreen, annaScreen, asAnyone, anyoneScreen };
+    return { migrated, migratedOwner, armedAfterSwitch, lockedAfterSwitch,
+             lockedAfterLongAway, manual, lockPersisted, ownerAfterUnlock,
+             lockedAfterArmed, recentReopen, immediateReopen, ownerAfterSwitch,
+             stillArmed, anna };
   `);
-  check('the active person with a PIN is the one who is locked',
-    pinScope.asAnna === true && pinScope.asCara === false && pinScope.annaScreen === true, pinScope);
-  check('and reopening as someone without a PIN asks for nothing',
-    pinScope.caraScreen === false && pinScope.asAnyone === false && pinScope.anyoneScreen === false,
-    pinScope);
+  check('an upgrade keeps the lock the active PIN-holder already had',
+    sessionLock.migrated === true && sessionLock.migratedOwner === sessionLock.anna, sessionLock);
+  check('switching to a PIN-holder does not arm the lock',
+    sessionLock.armedAfterSwitch === false && sessionLock.lockedAfterSwitch === false, sessionLock);
+  check('and an absence after that switch still asks for nothing',
+    sessionLock.lockedAfterLongAway === false, sessionLock);
+  check('Lock now arms the session, and the PIN names its owner',
+    sessionLock.manual === true && sessionLock.lockPersisted === true
+    && sessionLock.ownerAfterUnlock === sessionLock.anna, sessionLock);
+  check('once armed, a real absence locks again',
+    sessionLock.lockedAfterArmed === true, sessionLock);
+  check('while a quick close and reopen asks for nothing',
+    sessionLock.recentReopen === false, sessionLock);
+  check('and "Immediately" locks on every launch',
+    sessionLock.immediateReopen === true, sessionLock);
+  check('switching later leaves the lock with the session',
+    sessionLock.ownerAfterSwitch === sessionLock.anna && sessionLock.stillArmed === true, sessionLock);
 
   const unlockBen = await run(`
     const { anna, ben } = window.__pinPeople;
@@ -1813,12 +1882,13 @@ async function runSuite(driverBase) {
     await new Promise((r) => setTimeout(r, 400));
     return {
       lockedBefore, lockedAfter: isLocked(),
-      who: getCurrentPersonId(), ben
+      who: getCurrentPersonId(), owner: getLockOwner(), ben
     };
   `);
   check('the lock screen shows with only a person PIN', unlockBen.lockedBefore, unlockBen);
   check('their PIN unlocks the app', unlockBen.lockedAfter === false, unlockBen);
   check('and switches to them', unlockBen.who === unlockBen.ben, unlockBen);
+  check('and the session now belongs to them', unlockBen.owner === unlockBen.ben, unlockBen);
 
   const wrongPin = await run(`
     showLockScreen();
@@ -1881,6 +1951,10 @@ async function runSuite(driverBase) {
     if (s.savedTimeout) localStorage.setItem('sorted-lock-timeout', s.savedTimeout);
     if (s.savedPerson) localStorage.setItem('sorted-current-person', s.savedPerson);
     else localStorage.removeItem('sorted-current-person');
+    if (s.savedOwner != null) localStorage.setItem('sorted-lock-owner', s.savedOwner);
+    else localStorage.removeItem('sorted-lock-owner');
+    if (s.savedLastActive != null) localStorage.setItem('sorted-last-active', s.savedLastActive);
+    else localStorage.removeItem('sorted-last-active');
     await renderPage();
     return { afterRemove, stillLocked, anyPins: anyPersonPins(), lockEnabled: isLockEnabled() };
   `);

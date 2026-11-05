@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.18';
+const APP_VERSION = '2.103.19';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -4941,7 +4941,7 @@ function passcodeBlockHtml() {
                 onclick="togglePasscodeFromSettings(this)"></button>
       </div>
     </div>
-    ${isLockEnabled() ? `
+    ${canLockNow() ? `
       <div class="setting-block">
         <div class="setting-row setting-row--inline setting-row--tight">
           <div class="setting-text"><div class="setting-label">Lock after</div></div>
