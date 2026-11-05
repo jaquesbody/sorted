@@ -1915,6 +1915,12 @@ async function runSuite(driverBase) {
         .find((text) => /Wording/.test(text)) || ''
       : '';
     out.usingNow = card ? /using now/.test(card.textContent) : true;
+    const pill = card ? card.querySelector('.person-active') : null;
+    out.activePill = pill ? {
+      text: pill.textContent.trim(),
+      radius: getComputedStyle(pill).borderRadius,
+      bg: getComputedStyle(pill).backgroundColor
+    } : null;
     out.titleWeights = [...document.querySelectorAll([
       '.settings-grid > .report-card > .report-title',
       '.settings-grid > .report-card > .setting-row:first-child .setting-label'
@@ -1924,6 +1930,16 @@ async function runSuite(driverBase) {
     await new Promise((r) => setTimeout(r, 250));
     const last4 = document.getElementById('account-cardLast4');
     out.last4Hint = last4.nextElementSibling.textContent.trim();
+    // Every label in the add form shares its row with the control it names,
+    // so Save is reachable without scrolling on a phone.
+    out.accountFields = [...document.querySelectorAll('#modal .form-group')].map((g) => {
+      const label = g.querySelector(':scope > .form-label');
+      const control = g.querySelector(':scope > .form-input');
+      if (!label || !control) return true;
+      const lr = label.getBoundingClientRect(), cr = control.getBoundingClientRect();
+      return Math.abs(((lr.top + lr.bottom) / 2) - ((cr.top + cr.bottom) / 2)) < 6
+        && lr.right <= cr.left + 1;
+    });
     closeModal();
 
     await openAddModal('due');
@@ -1936,11 +1952,19 @@ async function runSuite(driverBase) {
     return out;
   `);
   check('the people picker explains switching and says it is not a login',
-    wording.pickerLead === 'Switch users to easily keep track of whose spending, paying bills or saving.'
+    wording.pickerLead === 'Switch users to easily record who is spending, paying the bills and saving.'
     && wording.pickerNote === 'Note: this is not a login, anyone can switch, anytime. Add more people in Settings.',
     wording);
   check('Settings calls the current person active, not "using now"',
     /Wording active$/.test(wording.activeLabel) && wording.usingNow === false, wording);
+  check('and the active marker is a blue lozenge',
+    wording.activePill
+    && wording.activePill.text === 'active'
+    && parseFloat(wording.activePill.radius) >= 8
+    && wording.activePill.bg !== 'rgba(0, 0, 0, 0)'
+    && wording.activePill.bg !== 'transparent', wording);
+  check('every field label shares a row with its control in the add form',
+    wording.accountFields.length >= 5 && wording.accountFields.every(Boolean), wording);
   check('every Settings card title is bold',
     wording.titleWeights.length >= 8 && wording.titleWeights.every((w) => Number(w) >= 700), wording);
   check('the account card helper is only the one line',
@@ -3010,30 +3034,26 @@ async function runSuite(driverBase) {
 
   const threeBtns = await run(`
     const content = document.getElementById('content');
-    const buttons = [...content.querySelectorAll('.section-head .btn')];
+    // The three add buttons are the page's fixed top row again. They were
+    // briefly moved onto the section headings, which read as a row that came
+    // and went as the page scrolled.
+    const toolbar = content.querySelector('.page-toolbar--fixed');
+    const buttons = toolbar ? [...toolbar.querySelectorAll('.btn')] : [];
     const labels = buttons.map((b) => b.textContent.trim());
-    // Each add button sits on its own section's title line, not in a toolbar
-    // above the total card.
-    const inline = buttons.map((b) => {
-      const head = b.closest('.section-head');
-      const title = head.querySelector('.section-title');
-      const br = b.getBoundingClientRect(), tr = title.getBoundingClientRect();
-      // Same row: their vertical spans overlap, even though the button and the
-      // small-caps title sit on different baselines.
-      return br.top < tr.bottom && br.bottom > tr.top;
-    });
+    const card = content.querySelector('.stat-card');
     return {
-      labels, inline,
+      labels,
       primary: buttons.filter((b) => b.className.includes('btn-primary')).length,
-      topToolbar: !!content.querySelector('.page-toolbar')
+      aboveCard: !!toolbar && !!card
+        && toolbar.getBoundingClientRect().bottom <= card.getBoundingClientRect().top + 1,
+      sectionButtons: content.querySelectorAll('.section-head .btn').length
     };
   `);
   check('Savings offers Account, Income and Goal',
     threeBtns.labels.slice().sort().join('|') === '+ Account|+ Goal|+ Income', threeBtns);
   check('all three buttons are blue', threeBtns.primary === 3, threeBtns);
-  check('and each sits on its section title line, with no toolbar row above',
-    threeBtns.inline.length === 3 && threeBtns.inline.every(Boolean) && threeBtns.topToolbar === false,
-    threeBtns);
+  check('and they are back in the fixed row above the total card',
+    threeBtns.aboveCard && threeBtns.sectionButtons === 0, threeBtns);
 
   // A scenario with the shape that matters: a bill early in the month and pay
   // later in it. The whole feature exists for that fortnight.
@@ -4807,26 +4827,22 @@ async function runSuite(driverBase) {
     return out;
   `);
   check('every page with a control row pins it',
-    ['dashboard', 'spend', 'due', 'reports'].every((page) => pinned[page].found)
-    // Savings is the exception by request: its three add buttons now sit on
-    // each section's title line, so there is no row above the total card left
-    // to pin.
-    && pinned.savings.found === false, pinned);
+    ['dashboard', 'spend', 'due', 'savings', 'reports'].every((page) => pinned[page].found), pinned);
   check('and they all stay put while the page scrolls',
-    ['dashboard', 'spend', 'due', 'reports']
+    ['dashboard', 'spend', 'due', 'savings', 'reports']
       .every((page) => pinned[page].scrolled > 100 && pinned[page].after === pinned[page].before.row),
     pinned);
   check('their controls keep their line and their row its height',
     // Each control where it was — the month navigator's own arrows sit a few
     // pixels below its label by design, so it is each one against itself rather
     // than all of them against the first.
-    ['dashboard', 'spend', 'due', 'reports'].every((page) => {
+    ['dashboard', 'spend', 'due', 'savings', 'reports'].every((page) => {
       const p = pinned[page];
       return p.height === p.before.height
         && p.controlsAfter.every((c, i) => c === p.before.controls[i]);
     }), pinned);
   check('and the row paints over what is beneath it',
-    ['dashboard', 'spend', 'due', 'reports'].every((page) => pinned[page].onTop), pinned);
+    ['dashboard', 'spend', 'due', 'savings', 'reports'].every((page) => pinned[page].onTop), pinned);
 
   // A receipt photographed with the phone held sideways.
   console.log('\n# the four data-loss bugs found in the full review');
@@ -5012,9 +5028,7 @@ async function runSuite(driverBase) {
   console.log('\n# the strip below the fixed row is painted');
   const painted = await (async () => {
     const out = {};
-    // Savings has no fixed row any more: its add buttons sit on the section
-    // headings. The paint modifier only has meaning where a row exists.
-    for (const page of ['dashboard', 'spend', 'due', 'reports']) {
+    for (const page of ['dashboard', 'spend', 'due', 'savings', 'reports']) {
       const geo = await run(`
         viewedDate = dueViewedDate = dashViewedDate = new Date(2027, 0, 1);
         currentPage = ${JSON.stringify(page)};
@@ -5059,7 +5073,7 @@ async function runSuite(driverBase) {
   check('and the modifier leaves the row the size it always was',
     await (async () => {
       const out = {};
-      for (const page of ['dashboard', 'spend', 'due', 'reports']) {
+      for (const page of ['dashboard', 'spend', 'due', 'savings', 'reports']) {
         out[page] = await run(`
           viewedDate = dueViewedDate = dashViewedDate = new Date(2027, 0, 1);
           currentPage = ${JSON.stringify(page)};

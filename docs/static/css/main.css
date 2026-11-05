@@ -1708,22 +1708,6 @@ body {
   margin-top: 4px;
 }
 
-/* A section's add button belongs on the heading line, beside the name and the
-   total it adds to. It used to sit in a toolbar above the card, which cost a
-   whole row of scrolling before the first list. */
-.section-head-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.section-add {
-  padding: 6px 12px;
-  font-size: var(--fs-sm);
-  white-space: nowrap;
-}
-
 /* See .stat-card-title: the one uppercase micro-label treatment. 700 was
    wrong here for two reasons — a 13px label is not display type, and its
    near-twin on the dashboard carried no weight at all. */
@@ -2407,6 +2391,42 @@ body {
   flex: 1;
 }
 
+/* The add/edit modals are one label-and-control pair per line: the label sits
+   in a column of its own beside the box rather than above it. Six stacked
+   pairs put Save below the fold on a phone, and the field name is just as
+   readable to the left of its answer. A hint, a suggestions list or a
+   conditional sub-field spans both columns underneath.
+
+   Pairs that used to sit side by side (.form-row) stack here: two half-width
+   fields would leave each label a sliver, and stacking them costs the same
+   two lines the labels above the boxes used to take. */
+#modal .form-group {
+  display: grid;
+  grid-template-columns: minmax(84px, 34%) minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+#modal .form-group > .form-label {
+  margin-bottom: 0;
+}
+
+#modal .form-group > p,
+#modal .form-group > .setting-hint,
+#modal .form-group > .title-suggestions,
+#modal .form-group > div:not(.form-row) {
+  grid-column: 1 / -1;
+}
+
+#modal .form-row {
+  display: block;
+}
+
+#modal .form-row .form-group {
+  flex: none;
+}
+
 /* Charts */
 .chart-container {
   background: var(--bg-card);
@@ -3064,6 +3084,19 @@ body.is-locked {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Who the picker is recording for, as a word in a blue pill rather than three
+   characters of plain text after the name — it is a state, and the name it
+   belongs to should read as a name. */
+.person-active {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-muted);
+  color: var(--accent-on-tint);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 /* Picker options — one row per person, tappable end to end */

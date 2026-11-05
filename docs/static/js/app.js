@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.17';
+const APP_VERSION = '2.103.18';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -535,7 +535,7 @@ function openPersonPicker() {
   const current = getCurrentPersonId();
   const option = (id, label, dot) => `<button class="person-option" data-action="choose-person" data-id="${id || ''}"${id === current ? ' aria-current="true"' : ''}>${dot}<span>${label}</span></button>`;
   openModal('Who\'s using the app', `
-    <p class="form-label" style="margin-bottom: 14px;">Switch users to easily keep track of whose spending, paying bills or saving.</p>
+    <p class="form-label" style="margin-bottom: 14px;">Switch users to easily record who is spending, paying the bills and saving.</p>
     <div class="person-options">
       ${option('', 'Anyone', personDot(null, 24, true))}
       ${people.map((p) => option(p.id, escapeHTML(p.name), personDot(p, 24, true))).join('')}
@@ -2739,6 +2739,12 @@ async function renderSavings(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
+    <div class="page-toolbar page-toolbar--fixed page-toolbar--end page-toolbar--wrap">
+      <button class="btn btn-primary" onclick="openAccountSetup()">+ Account</button>
+      <button class="btn btn-primary" onclick="openIncomeSetup()">+ Income</button>
+      <button class="btn btn-primary" onclick="openAddModal('savings')">+ Goal</button>
+    </div>
+
     <div class="stat-card" style="margin-bottom: 20px;">
       <div class="stat-card-header">
         <span class="stat-card-title">Total saved</span>
@@ -2753,9 +2759,6 @@ async function renderSavings(container) {
     
     <div class="section-head" id="goals-section">
       <span class="section-title">Goals</span>
-      <span class="section-head-actions">
-        <button class="btn btn-primary section-add" onclick="openAddModal('savings')">+ Goal</button>
-      </span>
     </div>
     <div class="item-list">
       ${items.length === 0 ? `
@@ -2801,10 +2804,7 @@ async function renderSavings(container) {
 
     <div class="section-head" id="accounts-section">
       <span class="section-title">Accounts</span>
-      <span class="section-head-actions">
-        <button class="btn btn-primary section-add" onclick="openAccountSetup()">+ Account</button>
-        <span class="stat-card-sub">${currency(totalBalance)}</span>
-      </span>
+      <span class="stat-card-sub">${currency(totalBalance)}</span>
     </div>
     <div class="item-list">
       ${balances.length === 0 ? `
@@ -2822,10 +2822,7 @@ async function renderSavings(container) {
 
     <div class="section-head">
       <span class="section-title">Income</span>
-      <span class="section-head-actions">
-        <button class="btn btn-primary section-add" onclick="openIncomeSetup()">+ Income</button>
-        <span class="stat-card-sub">${currency(incomeTotal)}</span>
-      </span>
+      <span class="stat-card-sub">${currency(incomeTotal)}</span>
     </div>
     <div class="item-list">
       ${incomeItems.length === 0 ? `
@@ -4884,7 +4881,7 @@ function peopleSettingsHtml() {
   const rows = people.map((p) => `
     <div class="setting-row setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' active' : ''}</div>
+        <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' <span class="person-active">active</span>' : ''}</div>
       </div>
       <div class="setting-control">
         <button class="btn btn-icon-sq${passcodeOn ? '' : ' btn-icon-sq--off'}"
@@ -5247,9 +5244,7 @@ function buildForm(type, editId = null, existingCategory = null) {
   const forms = {
     spend: `
       ${receiptHtml}
-      <div class="form-group">
-        ${titleInput('Title', 'e.g., Electricity bill')}
-      </div>
+      ${titleInput('Title', 'e.g., Electricity bill')}
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Amount (£)</label>
@@ -5272,9 +5267,7 @@ function buildForm(type, editId = null, existingCategory = null) {
     `,
     due: `
       ${receiptHtml}
-      <div class="form-group">
-        ${titleInput('Title', 'e.g., Mortgage payment')}
-      </div>
+      ${titleInput('Title', 'e.g., Mortgage payment')}
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Amount (£)</label>
@@ -5312,9 +5305,7 @@ function buildForm(type, editId = null, existingCategory = null) {
       <button class="btn btn-primary" style="width: 100%; margin-top: 10px;" onclick="${saveCall}">Save</button>${deleteBtn}
     `,
     savings: `
-      <div class="form-group">
-        ${titleInput('Goal name', 'e.g., Holiday fund')}
-      </div>
+      ${titleInput('Goal name', 'e.g., Holiday fund')}
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Current (£)</label>
