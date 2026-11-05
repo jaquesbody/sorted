@@ -309,12 +309,22 @@ async function matchAnyPasscode(pin) {
   return { ok: false, personId: null };
 }
 
-// The app locks when the switch is on and somebody holds a PIN. Both halves
-// matter: with nobody holding a key the app must not lock, because the only way
-// back in would be clearing storage — and a person removed from the app takes
-// their PIN with them, so "on with no PIN" is a state the app can be put in.
+// The app locks for the person who is active, and only if that person holds a
+// PIN. Somebody else's key must never be the price of opening your own app:
+// with one PIN set on another person, an active user without one would be
+// asked for a code they were never given. "Anyone" holds no PIN, so a household
+// that has set PINs but is not using one is not locked either.
+//
+// The switch still has to be on, and a person removed from the app takes their
+// PIN with them, so "on with no PIN" remains a state the app can be put in
+// without sealing itself.
+function currentPersonHasPin() {
+  const id = localStorage.getItem('sorted-current-person');
+  return !!id && hasPersonPin(id);
+}
+
 function isLockEnabled() {
-  return isPasscodeSet() && anyPersonPins();
+  return isPasscodeSet() && currentPersonHasPin();
 }
 
 // Lock screen

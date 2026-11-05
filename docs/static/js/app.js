@@ -2,7 +2,7 @@
 
 // Single source for the version shown in the UI. Bump this together with
 // package.json and android/app/build.gradle.
-const APP_VERSION = '2.103.16';
+const APP_VERSION = '2.103.17';
 document.querySelectorAll('.app-version').forEach((el) => { el.textContent = 'v' + APP_VERSION; });
 
 let currentPage = 'dashboard';
@@ -535,12 +535,12 @@ function openPersonPicker() {
   const current = getCurrentPersonId();
   const option = (id, label, dot) => `<button class="person-option" data-action="choose-person" data-id="${id || ''}"${id === current ? ' aria-current="true"' : ''}>${dot}<span>${label}</span></button>`;
   openModal('Who\'s using the app', `
-    <p class="form-label" style="margin-bottom: 14px;">New spend and bills you add are marked as theirs, and marking a bill paid records who paid it.</p>
+    <p class="form-label" style="margin-bottom: 14px;">Switch users to easily keep track of whose spending, paying bills or saving.</p>
     <div class="person-options">
       ${option('', 'Anyone', personDot(null, 24, true))}
       ${people.map((p) => option(p.id, escapeHTML(p.name), personDot(p, 24, true))).join('')}
     </div>
-    <p class="setting-hint" style="margin-top: 14px;">This isn't a login — anyone can switch. Add people in Settings.</p>
+    <p class="setting-hint" style="margin-top: 14px;">Note: this is not a login, anyone can switch, anytime. Add more people in Settings.</p>
   `);
 }
 
@@ -2739,12 +2739,6 @@ async function renderSavings(container) {
   
   if (token !== renderToken) return;
   container.innerHTML = `
-    <div class="page-toolbar page-toolbar--fixed page-toolbar--end page-toolbar--wrap">
-      <button class="btn btn-primary" onclick="openAccountSetup()">+ Account</button>
-      <button class="btn btn-primary" onclick="openIncomeSetup()">+ Income</button>
-      <button class="btn btn-primary" onclick="openAddModal('savings')">+ Goal</button>
-    </div>
-    
     <div class="stat-card" style="margin-bottom: 20px;">
       <div class="stat-card-header">
         <span class="stat-card-title">Total saved</span>
@@ -2759,6 +2753,9 @@ async function renderSavings(container) {
     
     <div class="section-head" id="goals-section">
       <span class="section-title">Goals</span>
+      <span class="section-head-actions">
+        <button class="btn btn-primary section-add" onclick="openAddModal('savings')">+ Goal</button>
+      </span>
     </div>
     <div class="item-list">
       ${items.length === 0 ? `
@@ -2804,7 +2801,10 @@ async function renderSavings(container) {
 
     <div class="section-head" id="accounts-section">
       <span class="section-title">Accounts</span>
-      <span class="stat-card-sub">${currency(totalBalance)}</span>
+      <span class="section-head-actions">
+        <button class="btn btn-primary section-add" onclick="openAccountSetup()">+ Account</button>
+        <span class="stat-card-sub">${currency(totalBalance)}</span>
+      </span>
     </div>
     <div class="item-list">
       ${balances.length === 0 ? `
@@ -2822,7 +2822,10 @@ async function renderSavings(container) {
 
     <div class="section-head">
       <span class="section-title">Income</span>
-      <span class="stat-card-sub">${currency(incomeTotal)}</span>
+      <span class="section-head-actions">
+        <button class="btn btn-primary section-add" onclick="openIncomeSetup()">+ Income</button>
+        <span class="stat-card-sub">${currency(incomeTotal)}</span>
+      </span>
     </div>
     <div class="item-list">
       ${incomeItems.length === 0 ? `
@@ -3121,7 +3124,7 @@ function openAccountSetup(id) {
       <input type="text" class="form-input" id="account-cardLast4" maxlength="4"
              inputmode="numeric" placeholder="e.g. 4242"
              value="${account ? escapeHTML(account.cardLast4 || '') : ''}">
-      <p class="setting-hint" style="margin: 4px 0 0;">Helps automate receipt reading — a receipt showing these digits is filed against this account.</p>
+      <p class="setting-hint" style="margin: 4px 0 0;">Helps automate receipt reading</p>
     </div>
     <div class="form-group">
       <label class="form-label" for="account-type">Type</label>
@@ -3468,9 +3471,15 @@ async function checkForUpdate(btn) {
   const note = document.getElementById('update-note');
   const say = (text) => { if (note) note.textContent = text; };
 
-  const native = !!(window.Capacitor
-    && typeof window.Capacitor.isNativePlatform === 'function'
-    && window.Capacitor.isNativePlatform());
+  const cap = window.Capacitor;
+  const native = !!(cap
+    && typeof cap.isNativePlatform === 'function'
+    && cap.isNativePlatform());
+  // Native alone is not enough: an older build can be native and still have no
+  // installer plugin. Asking first turns that into one sentence instead of a
+  // rejected call that reads like the update itself failed.
+  const nativeInstaller = native && (
+    typeof cap.isPluginAvailable !== 'function' || cap.isPluginAvailable('SortedUpdater'));
   const RELEASES_API = 'https://api.github.com/repos/jaquesbody/sorted/releases/latest';
   try {
     const res = await fetch(RELEASES_API, { headers: { Accept: 'application/vnd.github+json' } });
@@ -3500,10 +3509,10 @@ async function checkForUpdate(btn) {
       // without an APK attached.
       const asset = (data.assets || []).find((file) => /\.apk$/i.test(String(file.name || '')));
       const download = (asset && asset.browser_download_url) || data.html_url;
-      if (native && asset) {
+      if (nativeInstaller && asset) {
         say(`v${latest} is available. Downloading the update.`);
         try {
-          if (!capUpdater) capUpdater = window.Capacitor.registerPlugin('SortedUpdater');
+          if (!capUpdater) capUpdater = cap.registerPlugin('SortedUpdater');
           const result = await capUpdater.install({ url: download });
           if (result && result.needsPermission) {
             say('Allow Sorted to install updates in the screen that opened, then tap Update again.');
@@ -3513,6 +3522,16 @@ async function checkForUpdate(btn) {
         } catch (err) {
           say(`Could not start the update: ${String((err && err.message) || err)}`);
         }
+        return;
+      }
+      if (native) {
+        // A native build without the installer plugin cannot hand an APK to
+        // Android, and opening the download here is exactly what leaves it
+        // pending in Downloads. Send them to the release page instead, where
+        // the APK can be installed once by hand; every later build has the
+        // plugin and updates in place.
+        say(`v${latest} is available. This copy cannot install updates itself. Open Releases and install the APK there once.`);
+        window.open(data.html_url, '_blank', 'noopener');
         return;
       }
       say(`v${latest} is available. Downloading it now; open the file when it finishes.`);
@@ -4591,7 +4610,7 @@ function renderPersonBreakdown(spendItems, dueItems) {
 // Settings Page
 function renderSettings(container) {
   container.innerHTML = `
-    <div class="reports-grid">
+    <div class="reports-grid settings-grid">
       <div class="report-card">
         ${peopleSettingsHtml()}
       </div>
@@ -4865,7 +4884,7 @@ function peopleSettingsHtml() {
   const rows = people.map((p) => `
     <div class="setting-row setting-row--people setting-row--inline setting-row--tight">
       <div class="setting-text">
-        <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' — using now' : ''}</div>
+        <div class="setting-label person-setting-label">${personDot(p, 20, true)} ${escapeHTML(p.name)}${current === p.id ? ' active' : ''}</div>
       </div>
       <div class="setting-control">
         <button class="btn btn-icon-sq${passcodeOn ? '' : ' btn-icon-sq--off'}"
@@ -5326,7 +5345,11 @@ async function openAddModal(type) {
   receiptRemoved = false;
   ocrStatusText = '';
   const suggestions = await titleSuggestions(type);
-  openModal(`Add ${type.charAt(0).toUpperCase() + type.slice(1)}`, buildForm(type));
+  // Bills are called bills in the modal too. "Add Due" was the store's name
+  // leaking through, and the button that opened it says + Bill.
+  const addLabel = { spend: 'Spend', due: 'Bill', savings: 'Savings' }[type]
+    || type.charAt(0).toUpperCase() + type.slice(1);
+  openModal(`Add ${addLabel}`, buildForm(type));
   initTitleSuggestions(suggestions);
   // Default to whoever is using the app, rather than making the common case
   // a dropdown trip every time.

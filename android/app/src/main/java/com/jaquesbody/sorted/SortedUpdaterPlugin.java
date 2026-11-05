@@ -2,6 +2,7 @@ package com.jaquesbody.sorted;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
@@ -142,6 +143,10 @@ public class SortedUpdaterPlugin extends Plugin {
             .setDataAndType(apk, APK_MIME)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_ACTIVITY_NEW_TASK);
+        // The package installer reads the file through the content URI. On a
+        // few OEM builds the read grant is honoured only when the URI is also
+        // in the clip data, so the same grant is placed there as well.
+        intent.setClipData(ClipData.newRawUri("update", apk));
         try {
             activity.startActivity(intent);
         } catch (ActivityNotFoundException ex) {

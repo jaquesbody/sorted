@@ -1723,6 +1723,9 @@ async function runSuite(driverBase) {
       duplicate: await setPersonPin(ben, '1234'),
       ben: await setPersonPin(ben, '5678')
     };
+    // The lock belongs to the active person, so it can only be on when that
+    // person is one of the two holding a PIN.
+    localStorage.setItem('sorted-current-person', anna);
     return {
       results,
       annaHas: hasPersonPin(anna), benHas: hasPersonPin(ben),
@@ -1756,7 +1759,7 @@ async function runSuite(driverBase) {
     const ok = setPasscodeEnabled(true);
     const matchAnna = await matchAnyPasscode('1234');
     const matchWrong = await matchAnyPasscode('9999');
-    setCurrentPersonId(null);
+    localStorage.setItem('sorted-current-person', anna);
     return { ok, locked: isLockEnabled(), whoAnna: matchAnna.personId, whoWrong: matchWrong.ok,
              anna, armWithoutPin };
   `);
@@ -1768,9 +1771,41 @@ async function runSuite(driverBase) {
   check('and holding no PIN disarms the lock rather than sealing it',
     armed.armWithoutPin === true, armed);
 
+  // The bug this guards: one person sets a PIN, somebody else is active, and
+  // reopening asked the active person for a code they were never given. The
+  // lock belongs to whoever is active; another person's PIN is not the price
+  // of opening the app as yourself.
+  const pinScope = await run(`
+    const { anna } = window.__pinPeople;
+    const cara = await addItem('people', { name: 'Cara', colour: PERSON_COLOURS[2] });
+    localStorage.setItem('sorted-current-person', anna);
+    const asAnna = isLockEnabled();
+    localStorage.setItem('sorted-current-person', cara);
+    const asCara = isLockEnabled();
+    unlockApp();
+    initLock();
+    const caraScreen = !document.getElementById('lock-screen').hidden;
+    // ...while a PIN-holder still gets the screen.
+    localStorage.setItem('sorted-current-person', anna);
+    initLock();
+    const annaScreen = !document.getElementById('lock-screen').hidden;
+    localStorage.removeItem('sorted-current-person');
+    const asAnyone = isLockEnabled();
+    initLock();
+    const anyoneScreen = !document.getElementById('lock-screen').hidden;
+    unlockApp();
+    await deleteItem('people', cara);
+    return { asAnna, asCara, caraScreen, annaScreen, asAnyone, anyoneScreen };
+  `);
+  check('the active person with a PIN is the one who is locked',
+    pinScope.asAnna === true && pinScope.asCara === false && pinScope.annaScreen === true, pinScope);
+  check('and reopening as someone without a PIN asks for nothing',
+    pinScope.caraScreen === false && pinScope.asAnyone === false && pinScope.anyoneScreen === false,
+    pinScope);
+
   const unlockBen = await run(`
-    const { ben } = window.__pinPeople;
-    setCurrentPersonId(null);
+    const { anna, ben } = window.__pinPeople;
+    localStorage.setItem('sorted-current-person', anna);
     showLockScreen();
     const lockedBefore = isLocked();
     // Type Ben's digits on the keypad, the way a person would.
@@ -1853,6 +1888,64 @@ async function runSuite(driverBase) {
   check('their PIN no longer unlocks once removed', pinCleanup.stillLocked === true, pinCleanup);
   check('no PINs are left behind', pinCleanup.anyPins === false, pinCleanup);
   check('and the lock is back to whatever it was', pinCleanup.lockEnabled === false, pinCleanup);
+
+  console.log('\n# People copy, the active label, and Settings card titles');
+  const wording = await run(`
+    const out = {};
+    const who = await addItem('people', { name: 'Wording', colour: PERSON_COLOURS[2] });
+    await loadPeople();
+    setCurrentPersonId(who);
+    await new Promise((r) => setTimeout(r, 400));
+
+    openPersonPicker();
+    await new Promise((r) => setTimeout(r, 250));
+    out.pickerLead = document.querySelector('#modal .form-label').textContent.trim();
+    out.pickerNote = [...document.querySelectorAll('#modal .setting-hint')]
+      .map((p) => p.textContent.trim()).join(' ');
+    closeModal();
+
+    currentPage = 'settings';
+    await renderPage();
+    await new Promise((r) => setTimeout(r, 400));
+    const card = [...document.querySelectorAll('.settings-grid .report-card')]
+      .find((c) => c.querySelector('.report-title') && c.querySelector('.report-title').textContent.trim() === 'People');
+    out.activeLabel = card
+      ? [...card.querySelectorAll('.person-setting-label')]
+        .map((el) => el.textContent.replace(/\\s+/g, ' ').trim())
+        .find((text) => /Wording/.test(text)) || ''
+      : '';
+    out.usingNow = card ? /using now/.test(card.textContent) : true;
+    out.titleWeights = [...document.querySelectorAll([
+      '.settings-grid > .report-card > .report-title',
+      '.settings-grid > .report-card > .setting-row:first-child .setting-label'
+    ].join(','))].map((el) => getComputedStyle(el).fontWeight);
+
+    openAccountSetup();
+    await new Promise((r) => setTimeout(r, 250));
+    const last4 = document.getElementById('account-cardLast4');
+    out.last4Hint = last4.nextElementSibling.textContent.trim();
+    closeModal();
+
+    await openAddModal('due');
+    await new Promise((r) => setTimeout(r, 250));
+    out.billTitle = document.getElementById('modal-title').textContent.trim();
+    closeModal();
+
+    await deleteItem('people', who);
+    setCurrentPersonId(null);
+    return out;
+  `);
+  check('the people picker explains switching and says it is not a login',
+    wording.pickerLead === 'Switch users to easily keep track of whose spending, paying bills or saving.'
+    && wording.pickerNote === 'Note: this is not a login, anyone can switch, anytime. Add more people in Settings.',
+    wording);
+  check('Settings calls the current person active, not "using now"',
+    /Wording active$/.test(wording.activeLabel) && wording.usingNow === false, wording);
+  check('every Settings card title is bold',
+    wording.titleWeights.length >= 8 && wording.titleWeights.every((w) => Number(w) >= 700), wording);
+  check('the account card helper is only the one line',
+    wording.last4Hint === 'Helps automate receipt reading', wording);
+  check('the bill form is titled Add Bill', wording.billTitle === 'Add Bill', wording);
 
   console.log('\n# people: attribution');
   const people = await run(`
@@ -2852,7 +2945,12 @@ async function runSuite(driverBase) {
   console.log('\n# passcode settings controls');
   const lockUi = await run(`
     // The passcode lives in the People card now, so the lock controls are armed
-    // by that card's switch rather than by a passcode of its own.
+    // by that card's switch rather than by a passcode of its own. They only
+    // exist while the active person holds a PIN, because that is when a lock
+    // applies.
+    const who = await addItem('people', { name: 'Lock test', colour: PERSON_COLOURS[0] });
+    await setPersonPin(who, '2468');
+    localStorage.setItem('sorted-current-person', who);
     localStorage.removeItem('sorted-passcode');
     setPasscodeEnabled(true);
     setLockTimeoutMinutes(5);
@@ -2870,6 +2968,7 @@ async function runSuite(driverBase) {
     const lockedNow = isLocked();
     const screenUp = !document.getElementById('lock-screen').hidden;
     setPasscodeEnabled(false);
+    await deleteItem('people', who);
     return { afterChange, stored, lockedNow, screenUp, gone: !isPasscodeSet(), unlocked: !isLocked() };
   `);
   check('dropdown stores the chosen timeout', lockUi.afterChange === 30 && lockUi.stored === '30', lockUi);
@@ -2910,13 +3009,31 @@ async function runSuite(driverBase) {
   await sleep(700);
 
   const threeBtns = await run(`
-    const bar = document.querySelector('.page-toolbar');
-    const labels = [...bar.querySelectorAll('.btn')].map((b) => b.textContent.trim());
-    return { labels, primary: [...bar.querySelectorAll('.btn-primary')].length };
+    const content = document.getElementById('content');
+    const buttons = [...content.querySelectorAll('.section-head .btn')];
+    const labels = buttons.map((b) => b.textContent.trim());
+    // Each add button sits on its own section's title line, not in a toolbar
+    // above the total card.
+    const inline = buttons.map((b) => {
+      const head = b.closest('.section-head');
+      const title = head.querySelector('.section-title');
+      const br = b.getBoundingClientRect(), tr = title.getBoundingClientRect();
+      // Same row: their vertical spans overlap, even though the button and the
+      // small-caps title sit on different baselines.
+      return br.top < tr.bottom && br.bottom > tr.top;
+    });
+    return {
+      labels, inline,
+      primary: buttons.filter((b) => b.className.includes('btn-primary')).length,
+      topToolbar: !!content.querySelector('.page-toolbar')
+    };
   `);
   check('Savings offers Account, Income and Goal',
-    threeBtns.labels.join('|') === '+ Account|+ Income|+ Goal', threeBtns);
+    threeBtns.labels.slice().sort().join('|') === '+ Account|+ Goal|+ Income', threeBtns);
   check('all three buttons are blue', threeBtns.primary === 3, threeBtns);
+  check('and each sits on its section title line, with no toolbar row above',
+    threeBtns.inline.length === 3 && threeBtns.inline.every(Boolean) && threeBtns.topToolbar === false,
+    threeBtns);
 
   // A scenario with the shape that matters: a bill early in the month and pay
   // later in it. The whole feature exists for that fortnight.
@@ -4689,17 +4806,27 @@ async function runSuite(driverBase) {
     window.scrollTo(0, 0);
     return out;
   `);
-  check('every page has a top row to pin', Object.values(pinned).every((p) => p.found), pinned);
+  check('every page with a control row pins it',
+    ['dashboard', 'spend', 'due', 'reports'].every((page) => pinned[page].found)
+    // Savings is the exception by request: its three add buttons now sit on
+    // each section's title line, so there is no row above the total card left
+    // to pin.
+    && pinned.savings.found === false, pinned);
   check('and they all stay put while the page scrolls',
-    Object.values(pinned).every((p) => p.scrolled > 100 && p.after === p.before.row), pinned);
+    ['dashboard', 'spend', 'due', 'reports']
+      .every((page) => pinned[page].scrolled > 100 && pinned[page].after === pinned[page].before.row),
+    pinned);
   check('their controls keep their line and their row its height',
     // Each control where it was — the month navigator's own arrows sit a few
     // pixels below its label by design, so it is each one against itself rather
     // than all of them against the first.
-    Object.values(pinned).every((p) => p.height === p.before.height
-      && p.controlsAfter.every((c, i) => c === p.before.controls[i])), pinned);
+    ['dashboard', 'spend', 'due', 'reports'].every((page) => {
+      const p = pinned[page];
+      return p.height === p.before.height
+        && p.controlsAfter.every((c, i) => c === p.before.controls[i]);
+    }), pinned);
   check('and the row paints over what is beneath it',
-    Object.values(pinned).every((p) => p.onTop), pinned);
+    ['dashboard', 'spend', 'due', 'reports'].every((page) => pinned[page].onTop), pinned);
 
   // A receipt photographed with the phone held sideways.
   console.log('\n# the four data-loss bugs found in the full review');
@@ -4885,7 +5012,9 @@ async function runSuite(driverBase) {
   console.log('\n# the strip below the fixed row is painted');
   const painted = await (async () => {
     const out = {};
-    for (const page of ['dashboard', 'spend', 'due', 'savings', 'reports']) {
+    // Savings has no fixed row any more: its add buttons sit on the section
+    // headings. The paint modifier only has meaning where a row exists.
+    for (const page of ['dashboard', 'spend', 'due', 'reports']) {
       const geo = await run(`
         viewedDate = dueViewedDate = dashViewedDate = new Date(2027, 0, 1);
         currentPage = ${JSON.stringify(page)};
@@ -4924,13 +5053,13 @@ async function runSuite(driverBase) {
     }
     return out;
   })();
-  check('the strip below the row is painted on every page',
+  check('the strip below the row is painted on every page that has one',
     Object.values(painted).every((p) => p.edgeAt >= 14 && p.edgeAt <= 17
       && new Set(p.colours.slice(0, p.edgeAt)).size === 1), painted);
   check('and the modifier leaves the row the size it always was',
     await (async () => {
       const out = {};
-      for (const page of ['dashboard', 'spend', 'due', 'savings', 'reports']) {
+      for (const page of ['dashboard', 'spend', 'due', 'reports']) {
         out[page] = await run(`
           viewedDate = dueViewedDate = dashViewedDate = new Date(2027, 0, 1);
           currentPage = ${JSON.stringify(page)};
@@ -7734,6 +7863,21 @@ async function runSuite(driverBase) {
       t('andTheNoteSaysTheInstallerIsOpen',
         /Android's installer is open/.test(document.getElementById('update-note').textContent), true);
 
+      // A native build older than the plugin cannot install in place. It must
+      // not open the APK as a browser download — that is the file that stays
+      // pending in Downloads.
+      opened = null;
+      seen = null;
+      window.Capacitor = {
+        isNativePlatform: () => true,
+        isPluginAvailable: () => false
+      };
+      if (button) button.click();
+      await new Promise((r) => setTimeout(r, 300));
+      t('withoutThePluginItDoesNotOpenTheApk', opened, 'https://github.com/jaquesbody/sorted/releases/tag/v99.0.0');
+      t('andItSaysToInstallOnceFromReleases',
+        /cannot install updates itself/.test(document.getElementById('update-note').textContent), true);
+
       // The three rows and hints removed at the user's ask stay removed.
       const page = document.querySelector('.page') || document.body;
       t('noReplacedCopyRow', /Replaced copy/.test(page.textContent), false);
@@ -7756,6 +7900,9 @@ async function runSuite(driverBase) {
       && updates.detail.andItGetsTheApkUrl.pass
       && updates.detail.andTheBrowserIsNotOpened.pass
       && updates.detail.andTheNoteSaysTheInstallerIsOpen.pass, updates);
+    check('and a native build without the installer plugin goes to Releases, not a pending download',
+      updates.detail.withoutThePluginItDoesNotOpenTheApk.pass
+      && updates.detail.andItSaysToInstallOnceFromReleases.pass, updates);
     check('and the removed rows and hints stay removed',
       updates.detail.noReplacedCopyRow.pass
       && updates.detail.noAutomaticSyncHint.pass
@@ -7780,7 +7927,8 @@ async function runSuite(driverBase) {
       /FileProvider\.getUriForFile/.test(updaterSource)
       && /Intent\.ACTION_VIEW/.test(updaterSource)
       && /application\/vnd\.android\.package-archive/.test(updaterSource)
-      && /canRequestPackageInstalls/.test(updaterSource), {});
+      && /canRequestPackageInstalls/.test(updaterSource)
+      && /setClipData/.test(updaterSource), {});
 
     console.log('\n# notifications: the plan, the memory, and the native route');
 

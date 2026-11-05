@@ -1708,6 +1708,22 @@ body {
   margin-top: 4px;
 }
 
+/* A section's add button belongs on the heading line, beside the name and the
+   total it adds to. It used to sit in a toolbar above the card, which cost a
+   whole row of scrolling before the first list. */
+.section-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.section-add {
+  padding: 6px 12px;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
 /* See .stat-card-title: the one uppercase micro-label treatment. 700 was
    wrong here for two reasons — a 13px label is not display type, and its
    near-twin on the dashboard carried no weight at all. */
@@ -2489,6 +2505,16 @@ body {
   font-size: var(--fs-md);
   font-weight: 600;
   margin-bottom: 15px;
+}
+
+/* Every Settings card names itself with the same weight. The headings that are
+   .report-title were 600 and the ones that are a row's own label — Currency,
+   Appearance, Sync, Updates — were 400, so the page read as a mix of titles and
+   afterthoughts. Scoped to Settings: the same classes are a row's label
+   elsewhere, where ordinary weight is right. */
+.settings-grid > .report-card > .report-title,
+.settings-grid > .report-card > .setting-row:first-child .setting-label {
+  font-weight: 700;
 }
 
 /* Empty State */
